@@ -1,0 +1,24 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Virtual environment
+venv/
+.venv/
+
+# PyCharm
+.idea/
+
+# Test/cache
+.pytest_cache/
+.coverage
+
+# Output files
+data/output/*
+!data/output/.gitkeep
+
+# OS files
+.DS_Store
+Thumbs.db
