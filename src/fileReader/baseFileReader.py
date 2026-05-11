@@ -114,7 +114,7 @@ class BaseFileReader(ABC, Generic[T]):
         overrides load() to return bytes (or a dict, or a list of rows)
         should update this signature accordingly.
         """
-        ...
+        ... # python elipsis function(abstract method) 
 
 
 class FileReaderFactory:
