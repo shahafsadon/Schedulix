@@ -1,5 +1,5 @@
 import re
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 
 from baseFileReader import BaseFileReader
 from models import ExamPeriod
@@ -32,6 +32,27 @@ def _parse_date(s: str) -> date:
     return datetime.strptime(s.strip(), DATE_FORMAT).date()
 
 
+def _expand_date_range(start_date: date, end_date: date) -> list[date]:
+    """
+    Return every date in a date range, including both edges.
+
+    Excluded dates in the input file may be written as a range. The scheduler
+    needs every blocked day, not only the first and last day, so the reader
+    expands the range while parsing.
+    """
+    if start_date > end_date:
+        raise ValueError("Date range start date cannot be after end date.")
+
+    dates: list[date] = []
+    current_date = start_date
+
+    while current_date <= end_date:
+        dates.append(current_date)
+        current_date += timedelta(days=1)
+
+    return dates
+
+
 class ExamPeriodsFileReader(BaseFileReader[list[ExamPeriod]]):
     """
     Reads the exam periods input file and returns a list of ExamPeriod objects.
@@ -50,9 +71,9 @@ class ExamPeriodsFileReader(BaseFileReader[list[ExamPeriod]]):
         3..N. Excluded dates:   "- DD-MM-YYYY [optional label]"
                              or "- DD-MM-YYYY, DD-MM-YYYY [optional label]" for ranges
 
-    On excluded date ranges: both endpoints are stored as separate entries
-    in `excluded_dates`. If the scheduler needs to block every day in between,
-    it should expand the range itself — the reader just records what the file says.
+    On excluded date ranges: the full range is expanded into separate dates
+    in `excluded_dates`, so later scheduling logic can remove blocked dates
+    with a simple membership check.
     """
 
     def parse(self, content: str) -> list[ExamPeriod]:
@@ -99,7 +120,7 @@ class ExamPeriodsFileReader(BaseFileReader[list[ExamPeriod]]):
         excluded: list[date] = []
         for ln in lines[2:]:
             # _parse_excluded returns a list because a single line can expand
-            # to two dates when it's written as a range (e.g. Purim)
+            # to all blocked dates when it's written as a range (e.g. Purim)
             excluded.extend(self._parse_excluded(ln))
 
         return ExamPeriod(
@@ -138,7 +159,15 @@ class ExamPeriodsFileReader(BaseFileReader[list[ExamPeriod]]):
             raise ValueError(
                 f"Malformed date range — expected 'DD-MM-YYYY, DD-MM-YYYY': '{line}'"
             )
-        return _parse_date(m.group(1)), _parse_date(m.group(2))
+        start_date = _parse_date(m.group(1))
+        end_date = _parse_date(m.group(2))
+
+        if start_date > end_date:
+            raise ValueError(
+                f"Date range start date cannot be after end date: '{line}'"
+            )
+
+        return start_date, end_date
 
     @staticmethod
     def _parse_excluded(line: str) -> list[date]:
@@ -146,7 +175,7 @@ class ExamPeriodsFileReader(BaseFileReader[list[ExamPeriod]]):
         Parse one excluded-date line into a list of dates.
 
         Returns a list (not a single date) because a range line like
-        "- 02-03-2026, 04-03-2026 Purim" produces two dates.
+        "- 02-03-2026, 04-03-2026 Purim" produces every date in that range.
         Single-date lines like "- 31-01-2026 Shabat" produce a list of one.
 
         The optional human-readable label at the end (Shabat, Purim, etc.)
@@ -156,10 +185,11 @@ class ExamPeriodsFileReader(BaseFileReader[list[ExamPeriod]]):
         if not m:
             raise ValueError(f"Malformed excluded-date line: '{line}'")
 
-        dates = [_parse_date(m.group(1))]
+        start_date = _parse_date(m.group(1))
 
         # Group 2 is only present when the line is a date range
         if m.group(2):
-            dates.append(_parse_date(m.group(2)))
+            end_date = _parse_date(m.group(2))
+            return _expand_date_range(start_date, end_date)
 
-        return dates
+        return [start_date]
