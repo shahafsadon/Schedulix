@@ -1,4 +1,4 @@
-from baseFileReader import BaseFileReader
+from fileReader.baseFileReader import BaseFileReader
 from models import Course, ProgramEnrollment
 
 # Records in the courses file are separated by this marker.

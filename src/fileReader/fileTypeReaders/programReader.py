@@ -1,4 +1,4 @@
-from baseFileReader import BaseFileReader
+from fileReader.baseFileReader import BaseFileReader
 
 # The business rule: no exam schedule should cover more than 5 programs at once.
 # Defined as a constant so it's easy to find and change if the rule ever shifts.

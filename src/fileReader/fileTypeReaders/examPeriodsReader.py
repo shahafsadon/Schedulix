@@ -1,7 +1,7 @@
 import re
 from datetime import date, datetime, timedelta
 
-from baseFileReader import BaseFileReader
+from fileReader.baseFileReader import BaseFileReader
 from models import ExamPeriod
 
 # Records in the dates file use the same separator convention as the courses file
