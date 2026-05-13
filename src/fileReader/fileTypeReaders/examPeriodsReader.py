@@ -1,5 +1,5 @@
 import re
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 
 from baseFileReader import BaseFileReader
 from models import ExamPeriod
@@ -18,8 +18,8 @@ _DATE_RANGE_RE = re.compile(
 )
 
 # Matches an excluded-date line. Two forms are supported:
-#   Single date:  "- 31-01-2026 Shabat"        → captures group 1 only
-#   Date range:   "- 02-03-2026, 04-03-2026 Purim" → captures groups 1 and 2
+#   Single date:  "- 31-01-2026 Shabat"            → captures group 1 only
+#   Date range:   "- 02-03-2026, 04-03-2026 Purim"  → captures groups 1 and 2
 # The trailing label (e.g. "Shabat", "Purim") is optional and ignored —
 # it's there for human readability in the file, not for the scheduler.
 _EXCLUDED_RE = re.compile(
@@ -50,9 +50,9 @@ class ExamPeriodsFileReader(BaseFileReader[list[ExamPeriod]]):
         3..N. Excluded dates:   "- DD-MM-YYYY [optional label]"
                              or "- DD-MM-YYYY, DD-MM-YYYY [optional label]" for ranges
 
-    On excluded date ranges: both endpoints are stored as separate entries
-    in `excluded_dates`. If the scheduler needs to block every day in between,
-    it should expand the range itself — the reader just records what the file says.
+    For excluded date ranges, every day between the two endpoints is stored
+    individually (inclusive on both ends), so the scheduler can treat
+    excluded_dates as a flat set of blocked days without any range logic.
     """
 
     def parse(self, content: str) -> list[ExamPeriod]:
@@ -98,8 +98,7 @@ class ExamPeriodsFileReader(BaseFileReader[list[ExamPeriod]]):
         # All remaining lines are excluded dates (could be zero if no days are blocked)
         excluded: list[date] = []
         for ln in lines[2:]:
-            # _parse_excluded returns a list because a single line can expand
-            # to two dates when it's written as a range (e.g. Purim)
+            # _parse_excluded returns a list — a range line expands to multiple dates
             excluded.extend(self._parse_excluded(ln))
 
         return ExamPeriod(
@@ -145,9 +144,13 @@ class ExamPeriodsFileReader(BaseFileReader[list[ExamPeriod]]):
         """
         Parse one excluded-date line into a list of dates.
 
-        Returns a list (not a single date) because a range line like
-        "- 02-03-2026, 04-03-2026 Purim" produces two dates.
-        Single-date lines like "- 31-01-2026 Shabat" produce a list of one.
+        Two forms are supported:
+            Single date:  "- 31-01-2026 Shabat"            → [31-01-2026]
+            Date range:   "- 02-03-2026, 04-03-2026 Purim"  → [02-03-2026, 03-03-2026, 04-03-2026]
+
+        For ranges, every day between the two endpoints (inclusive) is expanded
+        out individually, so the scheduler can work with a flat list of blocked
+        days without needing any range logic of its own.
 
         The optional human-readable label at the end (Shabat, Purim, etc.)
         is matched by the regex but intentionally thrown away.
@@ -156,10 +159,24 @@ class ExamPeriodsFileReader(BaseFileReader[list[ExamPeriod]]):
         if not m:
             raise ValueError(f"Malformed excluded-date line: '{line}'")
 
-        dates = [_parse_date(m.group(1))]
+        start = _parse_date(m.group(1))
 
-        # Group 2 is only present when the line is a date range
-        if m.group(2):
-            dates.append(_parse_date(m.group(2)))
+        # If there's no second date, it's a single blocked day — return it as-is
+        if not m.group(2):
+            return [start]
 
-        return dates
+        # Otherwise expand the range: generate every day from start to end inclusive
+        end = _parse_date(m.group(2))
+        if end < start:
+            raise ValueError(
+                f"Excluded date range is backwards (end before start): '{line}'"
+            )
+
+        # Step forward one day at a time from start until we reach end
+        all_dates = []
+        current = start
+        while current <= end:
+            all_dates.append(current)
+            current += timedelta(days=1)
+
+        return all_dates
