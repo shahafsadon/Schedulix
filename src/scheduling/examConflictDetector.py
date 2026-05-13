@@ -4,17 +4,16 @@ from datetime import date
 from models import Course, ProgramEnrollment
 
 
-ELECTIVE = "Elective"
+ELECTIVE = "elective"
 
 
 @dataclass(frozen=True)
 class ScheduledExam:
     """
-    Represents one course after it was assigned to an exam date.
+    Represents a course that already has an assigned exam date.
 
-    This small model keeps conflict detection readable: instead of passing
-    loose tuples around the code, each scheduled exam has a named course and
-    a named date.
+    This object is used by the conflict detector so each scheduled exam has
+    clear fields instead of being passed around as a tuple.
     """
 
     course: Course
@@ -24,10 +23,10 @@ class ScheduledExam:
 @dataclass(frozen=True)
 class ExamConflict:
     """
-    Describes one critical conflict between two scheduled exams.
+    Stores the details of one critical conflict between two scheduled exams.
 
-    A conflict is critical when both exams are on the same date, belong to the
-    same program and study year, and are not both elective courses.
+    A conflict is critical when the two exams are on the same date, belong to
+    the same study program and year, and are not both elective courses.
     """
 
     first_exam: ScheduledExam
@@ -40,19 +39,18 @@ class ExamConflict:
 
 class ExamConflictDetector:
     """
-    Detects critical exam conflicts for version 1.0.
+    Checks whether a proposed schedule has critical exam conflicts.
 
-    Version 1.0 checks conflicts by date only. It does not check exam hours,
-    repeated courses, rooms, or optimization preferences because those are not
-    part of the current requirements.
+    In version 1.0, conflicts are checked by date only. The detector does not
+    handle hours, rooms, repeated courses, or schedule optimization.
     """
 
     def is_valid_schedule(self, scheduled_exams: list[ScheduledExam]) -> bool:
-        """Return True when the schedule has no critical conflicts."""
+        """Return True if the schedule contains no critical conflicts."""
         return not self.has_conflicts(scheduled_exams)
 
     def has_conflicts(self, scheduled_exams: list[ScheduledExam]) -> bool:
-        """Return True when at least one critical conflict exists."""
+        """Return True if at least one critical conflict is found."""
         return bool(self.find_conflicts(scheduled_exams))
 
     def find_conflicts(
@@ -60,10 +58,10 @@ class ExamConflictDetector:
         scheduled_exams: list[ScheduledExam],
     ) -> list[ExamConflict]:
         """
-        Return all critical conflicts found in the schedule.
+        Find all critical conflicts in the given schedule.
 
-        Each pair of exams is compared once. Exams on different dates cannot
-        conflict in version 1.0, so they are skipped immediately.
+        Each pair of exams is checked once. Exams on different dates are skipped
+        because version 1.0 only treats same-date exams as possible conflicts.
         """
         conflicts: list[ExamConflict] = []
 
@@ -88,10 +86,10 @@ class ExamConflictDetector:
         second_exam: ScheduledExam,
     ) -> ExamConflict | None:
         """
-        Return a conflict if two same-date exams clash by program and year.
+        Check whether two exams on the same date create a critical conflict.
 
-        Two elective courses are allowed to share a date. Every other
-        combination is a critical conflict when program number and year match.
+        Two elective courses are allowed to share a date. Any other combination
+        is a conflict when the courses share the same program number and year.
         """
         for first_program in first_exam.course.programs:
             for second_program in second_exam.course.programs:
@@ -117,7 +115,7 @@ class ExamConflictDetector:
         first_program: ProgramEnrollment,
         second_program: ProgramEnrollment,
     ) -> bool:
-        """Return True when two enrollment rows are for the same program year."""
+        """Check whether two enrollment rows refer to the same program year."""
         return (
             first_program.program_number == second_program.program_number
             and first_program.year == second_program.year
@@ -128,5 +126,8 @@ class ExamConflictDetector:
         first_program: ProgramEnrollment,
         second_program: ProgramEnrollment,
     ) -> bool:
-        """Return True when both courses are elective for the compared program."""
-        return first_program.status == ELECTIVE and second_program.status == ELECTIVE
+        """Check whether both courses are elective for the compared program."""
+        return (
+                first_program.status.strip().lower() == ELECTIVE
+                and second_program.status.strip().lower() == ELECTIVE
+        )
