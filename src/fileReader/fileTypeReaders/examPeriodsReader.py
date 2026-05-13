@@ -1,18 +1,18 @@
 import re
 from datetime import date, datetime, timedelta
 
-from baseFileReader import BaseFileReader
+from fileReader.baseFileReader import BaseFileReader
 from models import ExamPeriod
 
-# Records in the dates file use the same separator convention as the courses file
+# Separator used between exam period records.
 SEPARATOR = "$$$$"
 
-# All dates in the file follow DD-MM-YYYY — we keep this in one place
-# so if the format ever changes, there's exactly one line to update
+# Expected date format in all input files.
 DATE_FORMAT = "%d-%m-%Y"
 
-# Matches the period's date-range line, e.g.: "29-01-2026, 11-03-2026"
-# We anchor with ^ and $ to avoid accidentally matching an excluded-date range.
+# Matches a regular date range line.
+# Example:
+#   29-01-2026, 11-03-2026
 _DATE_RANGE_RE = re.compile(
     r"^(\d{2}-\d{2}-\d{4})\s*,\s*(\d{2}-\d{2}-\d{4})$"
 )
@@ -28,13 +28,30 @@ _EXCLUDED_RE = re.compile(
 
 
 def _parse_date(s: str) -> date:
-    """Convert a 'DD-MM-YYYY' string to a date object."""
+    """Convert a DD-MM-YYYY string into a date object."""
     return datetime.strptime(s.strip(), DATE_FORMAT).date()
+
+
+def _expand_date_range(start_date: date, end_date: date) -> list[date]:
+    """
+    Expand a date range into a list containing all dates in the range.
+    """
+    if start_date > end_date:
+        raise ValueError("Date range start date cannot be after end date.")
+
+    dates: list[date] = []
+    current_date = start_date
+
+    while current_date <= end_date:
+        dates.append(current_date)
+        current_date += timedelta(days=1)
+
+    return dates
 
 
 class ExamPeriodsFileReader(BaseFileReader[list[ExamPeriod]]):
     """
-    Reads the exam periods input file and returns a list of ExamPeriod objects.
+    Reads the exam periods input file and converts it into ExamPeriod objects.
 
     The file uses $$$$ as a record separator. Each record looks like this:
 
@@ -56,31 +73,28 @@ class ExamPeriodsFileReader(BaseFileReader[list[ExamPeriod]]):
     """
 
     def parse(self, content: str) -> list[ExamPeriod]:
-        """Split the file into records and parse each one."""
+        """
+        Split the file into blocks and parse each exam period separately.
+        """
         blocks = content.split(SEPARATOR)
         periods: list[ExamPeriod] = []
 
         for block in blocks:
             block = block.strip()
+
+            # Skip the empty section before the first separator.
             if not block:
-                # Discard the empty fragment before the first $$$$ marker
                 continue
+
             periods.append(self._parse_block(block))
 
         return periods
 
-    # ------------------------------------------------------------------
-    # Internal helpers
-    # ------------------------------------------------------------------
-
     def _parse_block(self, block: str) -> ExamPeriod:
         """
-        Parse a single exam period record (text between two $$$$ markers).
-
-        We keep trailing whitespace on lines (via rstrip, not strip) because
-        we want to preserve any spaces that are part of a date line, but we
-        still need to skip lines that are entirely blank.
+        Parse a single exam period block.
         """
+        # Remove empty lines while keeping the line content itself unchanged.
         lines = [ln.rstrip() for ln in block.splitlines() if ln.strip()]
 
         if len(lines) < 2:
@@ -89,14 +103,15 @@ class ExamPeriodsFileReader(BaseFileReader[list[ExamPeriod]]):
                 f"(header + date range):\n{block}"
             )
 
-        # Line 0 is always the "SEMESTER, Moed" header
+        # First line contains semester and moed.
         semester, moed = self._parse_header(lines[0])
 
-        # Line 1 is always the start/end date range
+        # Second line contains the scheduling range.
         start_date, end_date = self._parse_date_range(lines[1])
 
-        # All remaining lines are excluded dates (could be zero if no days are blocked)
+        # Remaining lines describe blocked dates.
         excluded: list[date] = []
+
         for ln in lines[2:]:
             # _parse_excluded returns a list — a range line expands to multiple dates
             excluded.extend(self._parse_excluded(ln))
@@ -112,37 +127,46 @@ class ExamPeriodsFileReader(BaseFileReader[list[ExamPeriod]]):
     @staticmethod
     def _parse_header(line: str) -> tuple[str, str]:
         """
-        Parse "FALL, Aleph" or "FALL,Bet" into ("FALL", "Aleph") / ("FALL", "Bet").
+        Parse the semester/moed header line.
 
-        We strip each part individually so the format is forgiving of spacing
-        around the comma — both "FALL, Aleph" and "FALL,Aleph" are valid.
+        Example:
+            FALL, Aleph
         """
         parts = [p.strip() for p in line.split(",")]
+
         if len(parts) != 2:
             raise ValueError(
                 f"Malformed period header — expected 'SEMESTER, Moed': '{line}'"
             )
+
         return parts[0], parts[1]
 
     @staticmethod
     def _parse_date_range(line: str) -> tuple[date, date]:
         """
-        Parse "29-01-2026, 11-03-2026" into two date objects.
-
-        Using a regex here (rather than a simple split) lets us validate
-        the exact format and catch typos like missing leading zeros.
+        Parse a scheduling range into start and end dates.
         """
         m = _DATE_RANGE_RE.match(line.strip())
+
         if not m:
             raise ValueError(
                 f"Malformed date range — expected 'DD-MM-YYYY, DD-MM-YYYY': '{line}'"
             )
-        return _parse_date(m.group(1)), _parse_date(m.group(2))
+
+        start_date = _parse_date(m.group(1))
+        end_date = _parse_date(m.group(2))
+
+        if start_date > end_date:
+            raise ValueError(
+                f"Date range start date cannot be after end date: '{line}'"
+            )
+
+        return start_date, end_date
 
     @staticmethod
     def _parse_excluded(line: str) -> list[date]:
         """
-        Parse one excluded-date line into a list of dates.
+        Parse one excluded-date line.
 
         Two forms are supported:
             Single date:  "- 31-01-2026 Shabat"            → [31-01-2026]
@@ -156,6 +180,7 @@ class ExamPeriodsFileReader(BaseFileReader[list[ExamPeriod]]):
         is matched by the regex but intentionally thrown away.
         """
         m = _EXCLUDED_RE.match(line.strip())
+
         if not m:
             raise ValueError(f"Malformed excluded-date line: '{line}'")
 
