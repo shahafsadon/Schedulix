@@ -2,71 +2,50 @@ from dataclasses import dataclass, field
 from datetime import date
 
 
-# ---------------------------------------------------------------------------
-# Data models
-#
-# These dataclasses are the "language" the rest of the system speaks.
-# Every file reader transforms raw text into one of these structures,
-# so that the scheduler never has to think about file formats at all.
-# ---------------------------------------------------------------------------
-
-
 @dataclass
 class ProgramEnrollment:
     """
-    Describes how a single course relates to one specific study program.
+    Represents the way a course appears in one study program.
 
-    A course can belong to multiple programs at different year levels,
-    semesters, and with different obligation statuses — so a Course
-    holds a list of these rather than a single flat set of fields.
-
-    Example (from the courses file):
-        83101,1,FALL,Obligatory
-        → program_number="83101", year=1, semester="FALL", status="Obligatory"
+    The same course can appear in several programs, sometimes in different
+    years, semesters, or requirement types. For that reason, Course keeps a
+    list of ProgramEnrollment objects instead of storing these fields directly.
     """
 
-    program_number: str  # Identifies which study program this enrollment belongs to
-    year: int            # Academic year within the program (e.g. 1st year, 2nd year)
-    semester: str        # "FALL" or "SPRI" (spring) — when the course runs
-    status: str          # "Obligatory" or "Elective" — how mandatory the course is
+    program_number: str  # Study program number, for example "83101"
+    year: int            # Academic year in that program
+    semester: str        # Semester code from the input file, such as "FALL" or "SPRI"
+    status: str          # Course requirement type, such as "Obligatory" or "Elective"
 
 
 @dataclass
 class Course:
     """
-    Represents a single academic course and everything the scheduler needs to know about it.
+    Represents one course after it was parsed from the courses input file.
 
-    The `programs` list captures all the study programs that include this course,
-    which is how the scheduler figures out which courses belong to a given exam period.
-    The `evaluation_type` determines whether the course even needs an exam slot at all
-    (a "Project" course typically doesn't sit a written exam).
+    This model keeps the course details together with the list of programs
+    that include it. The scheduling logic later uses evaluation_type to decide
+    whether the course should receive an exam date.
     """
 
-    name: str                        # Course title, e.g. "Physics 1"
-    course_number: str               # Unique identifier, e.g. "83102"
-    instructor: str                  # The person responsible for the course
-    programs: list[ProgramEnrollment]  # Which programs include this course, and how
-    evaluation_type: str             # "Exam" or "Project" — drives scheduling logic
+    name: str                        # Course name as it appears in the input file
+    course_number: str               # Unique course identifier
+    instructor: str                  # Course instructor name
+    programs: list[ProgramEnrollment]  # Program-specific details for this course
+    evaluation_type: str             # Evaluation method, for example "Exam" or "Project"
 
 
 @dataclass
 class ExamPeriod:
     """
-    Represents one exam window (a moed) within a semester.
+    Represents one exam period for a specific semester and moed.
 
-    Each semester typically has two moedim (Aleph and Bet): Aleph is the
-    first sitting, Bet is the resit for students who missed or failed Aleph.
-    The scheduler uses `excluded_dates` to avoid placing exams on holidays,
-    Shabbat, or any other blocked day within the period.
-
-    Note on excluded_dates ranges: if the source file contains a date range
-    (e.g. "- 02-03-2026, 04-03-2026 Purim"), both endpoints are stored as
-    separate entries. The scheduler is responsible for treating everything
-    between them as blocked if needed.
+    start_date and end_date define the allowed scheduling window. excluded_dates
+    contains dates that must not be used, such as holidays or other blocked days.
     """
 
-    semester: str              # "FALL" or "SPRI" — which semester this period belongs to
-    moed: str                  # "Aleph" (first sitting) or "Bet" (resit)
-    start_date: date           # First day exams can be scheduled in this window
-    end_date: date             # Last day exams can be scheduled in this window
-    excluded_dates: list[date] = field(default_factory=list)  # Days that must stay empty
+    semester: str              # Semester code, for example "FALL" or "SPRI"
+    moed: str                  # Exam moed, for example "Aleph" or "Bet"
+    start_date: date           # First date that can be used for exams
+    end_date: date             # Last date that can be used for exams
+    excluded_dates: list[date] = field(default_factory=list)  # Blocked dates inside the period

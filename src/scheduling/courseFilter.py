@@ -3,9 +3,10 @@ from models import Course, ProgramEnrollment
 
 class CourseFilter:
     """
-    Filters courses before they are sent to the scheduling algorithm.
-    The scheduler only needs courses that belong to the selected programs and
-    have an Exam evaluation type.
+    Selects the courses that should take part in the scheduling process.
+
+    A course is relevant only if it has an Exam evaluation type and belongs to
+    at least one of the selected study programs.
     """
 
     def filter_relevant_courses(
@@ -14,9 +15,11 @@ class CourseFilter:
         selected_programs: list[str],
     ) -> list[Course]:
         """
-        Return only Exam courses that belong to the selected programs.
-        Each returned course keeps only the program enrollment rows that match
-        the selected programs.
+        Return the relevant courses for the selected programs.
+
+        The returned Course objects keep the original course details, but their
+        programs list contains only the enrollments that match the selected
+        programs.
         """
         selected_program_set = set(selected_programs)
         relevant_courses: list[Course] = []
@@ -50,7 +53,7 @@ class CourseFilter:
         programs: list[ProgramEnrollment],
         selected_programs: set[str],
     ) -> list[ProgramEnrollment]:
-        """Return only enrollment rows that match selected programs."""
+        """Keep only program enrollments that belong to the selected programs."""
         return [
             program
             for program in programs
