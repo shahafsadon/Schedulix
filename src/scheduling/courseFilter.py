@@ -22,7 +22,7 @@ class CourseFilter:
         relevant_courses: list[Course] = []
 
         for course in courses:
-            if course.evaluation_type != "Exam":
+            if course.evaluation_type.strip().lower() != "exam":
                 continue
 
             matching_programs = self._matching_programs(

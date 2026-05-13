@@ -4,7 +4,7 @@ from datetime import date
 from models import Course, ProgramEnrollment
 
 
-ELECTIVE = "Elective"
+ELECTIVE = "elective"
 
 
 @dataclass(frozen=True)
@@ -129,4 +129,7 @@ class ExamConflictDetector:
         second_program: ProgramEnrollment,
     ) -> bool:
         """Return True when both courses are elective for the compared program."""
-        return first_program.status == ELECTIVE and second_program.status == ELECTIVE
+        return (
+                first_program.status.strip().lower() == ELECTIVE
+                and second_program.status.strip().lower() == ELECTIVE
+        )
