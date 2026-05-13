@@ -17,10 +17,11 @@ _DATE_RANGE_RE = re.compile(
     r"^(\d{2}-\d{2}-\d{4})\s*,\s*(\d{2}-\d{2}-\d{4})$"
 )
 
-# Matches excluded date lines.
-# Supported formats:
-#   - 31-01-2026 Shabat
-#   - 02-03-2026, 04-03-2026 Purim
+# Matches an excluded-date line. Two forms are supported:
+#   Single date:  "- 31-01-2026 Shabat"            → captures group 1 only
+#   Date range:   "- 02-03-2026, 04-03-2026 Purim"  → captures groups 1 and 2
+# The trailing label (e.g. "Shabat", "Purim") is optional and ignored —
+# it's there for human readability in the file, not for the scheduler.
 _EXCLUDED_RE = re.compile(
     r"^-\s+(\d{2}-\d{2}-\d{4})(?:\s*,\s*(\d{2}-\d{2}-\d{4}))?(?:\s+.+)?$"
 )
@@ -52,10 +53,23 @@ class ExamPeriodsFileReader(BaseFileReader[list[ExamPeriod]]):
     """
     Reads the exam periods input file and converts it into ExamPeriod objects.
 
-    Each block describes:
-    - Semester and moed
-    - Allowed scheduling range
-    - Excluded dates inside the range
+    The file uses $$$$ as a record separator. Each record looks like this:
+
+        $$$$
+        FALL, Aleph
+        29-01-2026, 11-03-2026
+        - 31-01-2026 Shabat
+        - 02-03-2026, 04-03-2026  Purim
+
+    Line structure within a record:
+        1. Semester and moed:   "FALL, Aleph" or "FALL,Bet" (spacing is flexible)
+        2. Date range:          "DD-MM-YYYY, DD-MM-YYYY"
+        3..N. Excluded dates:   "- DD-MM-YYYY [optional label]"
+                             or "- DD-MM-YYYY, DD-MM-YYYY [optional label]" for ranges
+
+    For excluded date ranges, every day between the two endpoints is stored
+    individually (inclusive on both ends), so the scheduler can treat
+    excluded_dates as a flat set of blocked days without any range logic.
     """
 
     def parse(self, content: str) -> list[ExamPeriod]:
@@ -99,6 +113,7 @@ class ExamPeriodsFileReader(BaseFileReader[list[ExamPeriod]]):
         excluded: list[date] = []
 
         for ln in lines[2:]:
+            # _parse_excluded returns a list — a range line expands to multiple dates
             excluded.extend(self._parse_excluded(ln))
 
         return ExamPeriod(
@@ -153,19 +168,40 @@ class ExamPeriodsFileReader(BaseFileReader[list[ExamPeriod]]):
         """
         Parse one excluded-date line.
 
-        A single date returns a list with one value.
-        A date range returns all dates inside the range.
+        Two forms are supported:
+            Single date:  "- 31-01-2026 Shabat"            → [31-01-2026]
+            Date range:   "- 02-03-2026, 04-03-2026 Purim"  → [02-03-2026, 03-03-2026, 04-03-2026]
+
+        For ranges, every day between the two endpoints (inclusive) is expanded
+        out individually, so the scheduler can work with a flat list of blocked
+        days without needing any range logic of its own.
+
+        The optional human-readable label at the end (Shabat, Purim, etc.)
+        is matched by the regex but intentionally thrown away.
         """
         m = _EXCLUDED_RE.match(line.strip())
 
         if not m:
             raise ValueError(f"Malformed excluded-date line: '{line}'")
 
-        start_date = _parse_date(m.group(1))
+        start = _parse_date(m.group(1))
 
-        # Group 2 exists only when the excluded line contains a range.
-        if m.group(2):
-            end_date = _parse_date(m.group(2))
-            return _expand_date_range(start_date, end_date)
+        # If there's no second date, it's a single blocked day — return it as-is
+        if not m.group(2):
+            return [start]
 
-        return [start_date]
+        # Otherwise expand the range: generate every day from start to end inclusive
+        end = _parse_date(m.group(2))
+        if end < start:
+            raise ValueError(
+                f"Excluded date range is backwards (end before start): '{line}'"
+            )
+
+        # Step forward one day at a time from start until we reach end
+        all_dates = []
+        current = start
+        while current <= end:
+            all_dates.append(current)
+            current += timedelta(days=1)
+
+        return all_dates
