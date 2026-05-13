@@ -5,7 +5,10 @@ from models import Course, ProgramEnrollment
 # Using $$$$ (rather than, say, a blank line) makes it unambiguous even
 # when course names or instructor names contain blank lines by accident.
 SEPARATOR = "$$$$"
-
+VALID_YEARS = {1, 2, 3, 4}
+VALID_SEMESTERS = {"FALL", "SPRI", "SUMM"}
+VALID_STATUSES = {"Obligatory", "Elective"}
+VALID_EVALUATION_TYPES = {"Exam", "Project", "Attendance"}
 
 class CoursesFileReader(BaseFileReader[list[Course]]):
     """
@@ -79,7 +82,8 @@ class CoursesFileReader(BaseFileReader[list[Course]]):
 
         # Last line is always the evaluation type
         evaluation_type = lines[-1]
-
+        if evaluation_type not in VALID_EVALUATION_TYPES:
+            raise ValueError(f"Invalid evaluation type: '{evaluation_type}'")
         # Everything between instructor (index 2) and the last line is enrollments.
         # Slicing [3:-1] handles any number of enrollment lines, including one.
         enrollment_lines = lines[3:-1]
@@ -115,6 +119,8 @@ class CoursesFileReader(BaseFileReader[list[Course]]):
             )
 
         program_number, year_str, semester, status = parts
+        if not program_number.isdigit() or len(program_number) != 5:
+            raise ValueError(f"Invalid program number: '{program_number}'")
 
         # year_str should always be a digit, but we give a helpful message
         # if the file has something unexpected (e.g. "one" instead of "1")
