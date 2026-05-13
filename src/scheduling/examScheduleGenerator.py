@@ -40,7 +40,10 @@ class ExamScheduleGenerator:
         Parameters are optional so tests can provide custom helpers if needed,
         while regular application code can use the default project classes.
         """
+        # Use the default date handler unless another one was provided.
         self.date_handler = date_handler or ExamDateHandler()
+
+        # Use the default conflict detector unless another one was provided.
         self.conflict_detector = conflict_detector or ExamConflictDetector()
 
     def generate_for_period(
@@ -55,13 +58,20 @@ class ExamScheduleGenerator:
         period has no valid dates or no matching courses, no schedules are
         returned.
         """
+        # Build the list of dates that can be used in this exam period.
         valid_dates = self.date_handler.get_valid_dates(exam_period)
+
+        # Keep only courses that belong to the semester of this exam period.
         period_courses = self._courses_for_semester(courses, exam_period.semester)
 
+        # If there is nothing to schedule, return an empty list.
         if not valid_dates or not period_courses:
             return []
 
+        # This list will store every valid schedule that the recursion finds.
         schedules: list[ExamSchedule] = []
+
+        # Start building schedules from the first course.
         self._build_schedules(
             courses=period_courses,
             valid_dates=valid_dates,
@@ -83,8 +93,10 @@ class ExamScheduleGenerator:
         The result is a flat list. Each ExamSchedule still stores its semester
         and moed, so the output layer can group the schedules later.
         """
+        # Collect schedules from all exam periods into one list.
         schedules: list[ExamSchedule] = []
 
+        # Generate schedules separately for each period.
         for exam_period in exam_periods:
             schedules.extend(self.generate_for_period(courses, exam_period))
 
@@ -105,6 +117,7 @@ class ExamScheduleGenerator:
         A partial schedule is checked immediately after adding each exam. This
         avoids continuing with combinations that already contain a conflict.
         """
+        # If all courses received dates, save this complete schedule.
         if course_index == len(courses):
             schedules.append(
                 ExamSchedule(
@@ -121,13 +134,16 @@ class ExamScheduleGenerator:
             )
             return
 
+        # Select the next course that needs an exam date.
         course = courses[course_index]
 
+        # Try assigning the course to each valid date in the period.
         for exam_date in valid_dates:
             candidate_schedule = current_schedule + [
                 ScheduledExam(course=course, exam_date=exam_date)
             ]
 
+            # Continue only if the partial schedule is still valid.
             if self.conflict_detector.is_valid_schedule(candidate_schedule):
                 self._build_schedules(
                     courses=courses,
@@ -146,18 +162,22 @@ class ExamScheduleGenerator:
         The returned Course objects include only the matching program rows, so
         conflict checks are based on the same semester being scheduled.
         """
+        # This list will contain course copies for the requested semester only.
         period_courses: list[Course] = []
 
         for course in courses:
+            # Keep only program rows that match the exam period semester.
             matching_programs = [
                 program
                 for program in course.programs
                 if program.semester == semester
             ]
 
+            # If the course is not taught in this semester, do not schedule it.
             if not matching_programs:
                 continue
 
+            # Create a course copy with only the relevant semester programs.
             period_courses.append(
                 Course(
                     name=course.name,
