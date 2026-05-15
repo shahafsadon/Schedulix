@@ -16,8 +16,8 @@ venv/
 .coverage
 
 # Output files
-data/output/*
-!data/output/.gitkeep
+data/outputs/*
+!data/outputs/.gitkeep
 
 # OS files
 .DS_Store
