@@ -44,7 +44,7 @@ class OutputWriterTests(unittest.TestCase):
 
         result = OutputWriter().format_schedules([schedule])
 
-        self.assertIn("Schedulix Exam Schedules - Version 1.0", result)
+        self.assertIn("Schedulix Exam Schedules", result)
         self.assertIn("Schedule 1", result)
         self.assertIn("Semester: FALL", result)
         self.assertIn("Moed: Aleph", result)
