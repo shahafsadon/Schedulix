@@ -55,13 +55,13 @@ class OutputWriter:
         """
         # Start the file with a clear project title.
         lines = [
+            "Schedulix Exam Schedules",
             TITLE_LINE,
         ]
 
         # Add every schedule to the file, numbered from 1.
         for index, schedule in enumerate(schedules, start=1):
             lines.extend(self._format_schedule(index, schedule))
-
         # Join all lines into one text block and end the file with a newline.
         return "\n".join(lines) + "\n"
 
