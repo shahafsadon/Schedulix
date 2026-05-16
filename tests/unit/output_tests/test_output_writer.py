@@ -13,7 +13,7 @@ sys.path.insert(0, str(SRC))
 from models import Course, ProgramEnrollment
 from output.outputWriter import OutputWriter
 from scheduling.examConflictDetector import ScheduledExam
-from scheduling.examScheduleGenerator import ExamSchedule
+from scheduling.examScheduleGenerator import ExamSchedule, ExamSystem
 
 
 def make_exam(course_name: str, course_number: str, exam_date: date) -> ScheduledExam:
@@ -33,12 +33,23 @@ class OutputWriterTests(unittest.TestCase):
 
     def test_formats_schedule_with_semester_moed_and_sorted_exams(self) -> None:
         """The text should follow the required readable output structure."""
-        schedule = ExamSchedule(
-            semester="FALL",
-            moed="Aleph",
-            scheduled_exams=[
-                make_exam("Calculus 1", "83112", date(2026, 2, 1)),
-                make_exam("Physics 1", "83102", date(2026, 1, 29)),
+        schedule = ExamSystem(
+            period_schedules=[
+                ExamSchedule(
+                    semester="FALL",
+                    moed="Aleph",
+                    scheduled_exams=[
+                        make_exam("Calculus 1", "83112", date(2026, 2, 1)),
+                        make_exam("Physics 1", "83102", date(2026, 1, 29)),
+                    ],
+                ),
+                ExamSchedule(
+                    semester="FALL",
+                    moed="Bet",
+                    scheduled_exams=[
+                        make_exam("Calculus 1", "83112", date(2026, 4, 10)),
+                    ],
+                ),
             ],
         )
 
@@ -48,6 +59,7 @@ class OutputWriterTests(unittest.TestCase):
         self.assertIn("Schedule 1", result)
         self.assertIn("Semester: FALL", result)
         self.assertIn("Moed: Aleph", result)
+        self.assertIn("Moed: Bet", result)
         self.assertLess(
             result.index("29-01-2026 | Physics 1 | Test Instructor"),
             result.index("01-02-2026 | Calculus 1 | Test Instructor"),
@@ -55,10 +67,16 @@ class OutputWriterTests(unittest.TestCase):
 
     def test_writes_output_file_to_given_path(self) -> None:
         """The writer should create the output file and its directory."""
-        schedule = ExamSchedule(
-            semester="SPRI",
-            moed="Bet",
-            scheduled_exams=[make_exam("Algorithms 1", "83120", date(2026, 7, 3))],
+        schedule = ExamSystem(
+            period_schedules=[
+                ExamSchedule(
+                    semester="SPRI",
+                    moed="Bet",
+                    scheduled_exams=[
+                        make_exam("Algorithms 1", "83120", date(2026, 7, 3)),
+                    ],
+                ),
+            ],
         )
 
         with tempfile.TemporaryDirectory() as temp_dir:

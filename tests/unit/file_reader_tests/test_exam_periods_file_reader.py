@@ -50,6 +50,26 @@ FALL, Aleph
             ],
         )
 
+    def test_accepts_excluded_dates_without_dash(self) -> None:
+        """The appendix format does not require a leading dash."""
+        content = """$$$$
+FALL, Aleph
+01-03-2026, 05-03-2026
+02-03-2026 Maintenance
+03-03-2026, 04-03-2026 Purim
+"""
+
+        periods = ExamPeriodsFileReader().parse(content)
+
+        self.assertEqual(
+            periods[0].excluded_dates,
+            [
+                date(2026, 3, 2),
+                date(2026, 3, 3),
+                date(2026, 3, 4),
+            ],
+        )
+
     def test_rejects_invalid_date_range(self) -> None:
         """Start date cannot be after end date."""
         content = """$$$$
@@ -65,7 +85,27 @@ FALL, Aleph
         content = """$$$$
 FALL, Aleph
 01-03-2026, 05-03-2026
-02-03-2026 Purim
+Blocked date
+"""
+
+        with self.assertRaises(ValueError):
+            ExamPeriodsFileReader().parse(content)
+
+    def test_rejects_invalid_semester(self) -> None:
+        """Semester must be FALL, SPRI, or SUMM."""
+        content = """$$$$
+WINTER, Aleph
+01-03-2026, 05-03-2026
+"""
+
+        with self.assertRaises(ValueError):
+            ExamPeriodsFileReader().parse(content)
+
+    def test_rejects_invalid_moed(self) -> None:
+        """Moed must be Aleph, Bet, or Gimel."""
+        content = """$$$$
+FALL, Dalet
+01-03-2026, 05-03-2026
 """
 
         with self.assertRaises(ValueError):

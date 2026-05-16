@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 from datetime import date
+from itertools import product
 
 from models import Course, ExamPeriod
 from scheduling.examConflictDetector import ExamConflictDetector, ScheduledExam
@@ -18,6 +19,18 @@ class ExamSchedule:
     semester: str
     moed: str
     scheduled_exams: list[ScheduledExam]
+
+
+@dataclass(frozen=True)
+class ExamSystem:
+    """
+    Represents one complete exam-system option across exam periods.
+
+    Each ExamSchedule inside period_schedules belongs to a specific semester and
+    moed. Together they form one full option for all selected programs.
+    """
+
+    period_schedules: list[ExamSchedule]
 
 
 class ExamScheduleGenerator:
@@ -101,6 +114,52 @@ class ExamScheduleGenerator:
             schedules.extend(self.generate_for_period(courses, exam_period))
 
         return schedules
+
+    def generate_exam_systems(
+        self,
+        courses: list[Course],
+        exam_periods: list[ExamPeriod],
+    ) -> list[ExamSystem]:
+        """
+        Generate complete exam-system options across all relevant periods.
+
+        Periods with no matching courses are skipped because they do not add
+        exams to the selected programs. If a relevant period has courses but no
+        valid schedule, no complete exam system can be generated.
+        """
+        period_options: list[list[ExamSchedule]] = []
+
+        for exam_period in exam_periods:
+            period_courses = self._courses_for_semester(courses, exam_period.semester)
+
+            if not period_courses:
+                continue
+
+            schedules = self.generate_for_period(courses, exam_period)
+
+            if not schedules:
+                return []
+
+            period_options.append(schedules)
+
+        if not period_options:
+            return []
+
+        exam_systems: list[ExamSystem] = []
+
+        for period_schedule_combination in product(*period_options):
+            all_scheduled_exams = [
+                scheduled_exam
+                for period_schedule in period_schedule_combination
+                for scheduled_exam in period_schedule.scheduled_exams
+            ]
+
+            if self.conflict_detector.is_valid_schedule(all_scheduled_exams):
+                exam_systems.append(
+                    ExamSystem(period_schedules=list(period_schedule_combination))
+                )
+
+        return exam_systems
 
     def _build_schedules(
         self,

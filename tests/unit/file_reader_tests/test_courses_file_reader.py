@@ -50,6 +50,19 @@ Homework
         with self.assertRaises(ValueError):
             CoursesFileReader().parse(content)
 
+    def test_rejects_invalid_course_number(self) -> None:
+        """Course numbers must contain exactly five digits."""
+        content = """$$$$
+Bad Course
+8319A
+Dr. Test
+83101,1,FALL,Obligatory
+Exam
+"""
+
+        with self.assertRaises(ValueError):
+            CoursesFileReader().parse(content)
+
     def test_rejects_invalid_program_number(self) -> None:
         """Program numbers must contain exactly five digits."""
         content = """$$$$

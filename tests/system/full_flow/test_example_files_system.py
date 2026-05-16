@@ -154,17 +154,20 @@ def test_full_system_generated_schedules_have_no_conflicts(tmp_path):
         selected_programs,
     )
 
-    schedules = SchedulixApp().schedule_generator.generate_for_periods(
+    schedules = SchedulixApp().schedule_generator.generate_exam_systems(
         relevant_courses,
         exam_periods,
     )
 
     assert len(schedules) == result.schedule_count
 
-    assert all(
-        ExamConflictDetector().is_valid_schedule(schedule.scheduled_exams)
-        for schedule in schedules
-    )
+    for schedule in schedules:
+        scheduled_exams = [
+            exam
+            for period_schedule in schedule.period_schedules
+            for exam in period_schedule.scheduled_exams
+        ]
+        assert ExamConflictDetector().is_valid_schedule(scheduled_exams)
 
 
 def test_full_system_run_finishes_within_required_time_limit(tmp_path):

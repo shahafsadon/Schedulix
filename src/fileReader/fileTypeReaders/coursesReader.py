@@ -59,6 +59,9 @@ class CoursesFileReader(BaseFileReader[list[Course]]):
         course_number = lines[1]
         instructor = lines[2]
 
+        if not course_number.isdigit() or len(course_number) != 5:
+            raise ValueError(f"Invalid course number: '{course_number}'")
+
         # Last line defines how the course is evaluated.
         evaluation_type = lines[-1]
 

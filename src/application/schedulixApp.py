@@ -7,10 +7,15 @@ from scheduling.courseFilter import CourseFilter
 from scheduling.examScheduleGenerator import ExamScheduleGenerator
 
 
+# Project root is resolved from this file so PyCharm and terminal runs behave
+# the same even when their working directories are different.
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
 # Default input files for the simple Version 1.0 flow.
-DEFAULT_COURSES_PATH = Path("data") / "examples" / "CourseExample.txt"
-DEFAULT_EXAM_PERIODS_PATH = Path("data") / "examples" / "DatesExample.txt"
-DEFAULT_PROGRAMS_PATH = Path("data") / "examples" / "ProgramsExample.txt"
+DEFAULT_COURSES_PATH = PROJECT_ROOT / "data" / "examples" / "CourseExample.txt"
+DEFAULT_EXAM_PERIODS_PATH = PROJECT_ROOT / "data" / "examples" / "DatesExample.txt"
+DEFAULT_PROGRAMS_PATH = PROJECT_ROOT / "data" / "examples" / "ProgramsExample.txt"
+DEFAULT_APP_OUTPUT_PATH = PROJECT_ROOT / DEFAULT_OUTPUT_PATH
 
 
 @dataclass(frozen=True)
@@ -62,7 +67,7 @@ class SchedulixApp:
         courses_path: str | Path = DEFAULT_COURSES_PATH,
         exam_periods_path: str | Path = DEFAULT_EXAM_PERIODS_PATH,
         programs_path: str | Path = DEFAULT_PROGRAMS_PATH,
-        output_path: str | Path = DEFAULT_OUTPUT_PATH,
+        output_path: str | Path = DEFAULT_APP_OUTPUT_PATH,
     ) -> ApplicationResult:
         """
         Run the full flow from input files to output file.
@@ -82,8 +87,8 @@ class SchedulixApp:
             courses,
             selected_programs,
         )
-        # Generate valid schedules for the relevant courses.
-        schedules = self.schedule_generator.generate_for_periods(
+        # Generate complete exam-system options for the relevant courses.
+        schedules = self.schedule_generator.generate_exam_systems(
             relevant_courses,
             exam_periods,
         )

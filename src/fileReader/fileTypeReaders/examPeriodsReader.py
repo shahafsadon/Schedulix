@@ -10,6 +10,10 @@ SEPARATOR = "$$$$"
 # Expected date format in all input files.
 DATE_FORMAT = "%d-%m-%Y"
 
+# Allowed values according to the requirements document.
+VALID_SEMESTERS = {"FALL", "SPRI", "SUMM"}
+VALID_MOEDIM = {"Aleph", "Bet", "Gimel"}
+
 # Matches a regular date range line.
 # Example:
 #   29-01-2026, 11-03-2026
@@ -23,7 +27,7 @@ _DATE_RANGE_RE = re.compile(
 # The trailing label (e.g. "Shabat", "Purim") is optional and ignored —
 # it's there for human readability in the file, not for the scheduler.
 _EXCLUDED_RE = re.compile(
-    r"^-\s+(\d{2}-\d{2}-\d{4})(?:\s*,\s*(\d{2}-\d{2}-\d{4}))?(?:\s+.+)?$"
+    r"^(?:-\s*)?(\d{2}-\d{2}-\d{4})(?:\s*,\s*(\d{2}-\d{2}-\d{4}))?(?:\s+.+)?$"
 )
 
 
@@ -139,7 +143,15 @@ class ExamPeriodsFileReader(BaseFileReader[list[ExamPeriod]]):
                 f"Malformed period header — expected 'SEMESTER, Moed': '{line}'"
             )
 
-        return parts[0], parts[1]
+        semester, moed = parts
+
+        if semester not in VALID_SEMESTERS:
+            raise ValueError(f"Invalid semester: '{semester}'")
+
+        if moed not in VALID_MOEDIM:
+            raise ValueError(f"Invalid moed: '{moed}'")
+
+        return semester, moed
 
     @staticmethod
     def _parse_date_range(line: str) -> tuple[date, date]:
