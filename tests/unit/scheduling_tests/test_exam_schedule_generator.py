@@ -150,6 +150,42 @@ class ExamScheduleGeneratorTests(unittest.TestCase):
         self.assertEqual(len(schedules), 1)
         self.assertEqual(schedules[0].scheduled_exams[0].course.name, "Physics 1")
 
+    def test_generates_complete_exam_systems_across_relevant_periods(self) -> None:
+        """One full system should combine one valid option from each period."""
+        course = make_course("Physics 1", "83102", "83101", 1, "FALL", "Obligatory")
+        periods = [
+            ExamPeriod(
+                semester="FALL",
+                moed="Aleph",
+                start_date=date(2026, 1, 1),
+                end_date=date(2026, 1, 2),
+                excluded_dates=[],
+            ),
+            ExamPeriod(
+                semester="FALL",
+                moed="Bet",
+                start_date=date(2026, 2, 1),
+                end_date=date(2026, 2, 2),
+                excluded_dates=[],
+            ),
+            ExamPeriod(
+                semester="SPRI",
+                moed="Aleph",
+                start_date=date(2026, 7, 1),
+                end_date=date(2026, 7, 2),
+                excluded_dates=[],
+            ),
+        ]
+
+        systems = ExamScheduleGenerator().generate_exam_systems([course], periods)
+
+        self.assertEqual(len(systems), 4)
+        for system in systems:
+            self.assertEqual(
+                [(schedule.semester, schedule.moed) for schedule in system.period_schedules],
+                [("FALL", "Aleph"), ("FALL", "Bet")],
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

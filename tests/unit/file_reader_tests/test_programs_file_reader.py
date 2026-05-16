@@ -32,6 +32,16 @@ class ProgramsFileReaderTests(unittest.TestCase):
                 "83101,83102,83103,83104,83105,83106"
             )
 
+    def test_rejects_program_number_that_is_not_five_digits(self) -> None:
+        """Program numbers must match the five-digit identifier format."""
+        with self.assertRaises(ValueError):
+            ProgramsFileReader().parse("83101, 8310A")
+
+    def test_rejects_unsupported_program_number(self) -> None:
+        """Only programs listed in the requirements document are supported."""
+        with self.assertRaises(ValueError):
+            ProgramsFileReader().parse("83101, 99999")
+
 
 if __name__ == "__main__":
     unittest.main()

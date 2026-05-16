@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from scheduling.examScheduleGenerator import ExamSchedule
+from scheduling.examScheduleGenerator import ExamSchedule, ExamSystem
 
 
 # Default location required by the Jira task.
@@ -11,6 +11,10 @@ DATE_FORMAT = "%d-%m-%Y"
 
 # A simple separator keeps each schedule easy to read in a text file.
 TITLE_LINE = "========================================"
+
+# Stable ordering for the sections required by the specification.
+SEMESTER_ORDER = {"FALL": 0, "SPRI": 1, "SUMM": 2}
+MOED_ORDER = {"Aleph": 0, "Bet": 1, "Gimel": 2}
 
 
 class OutputWriter:
@@ -24,7 +28,7 @@ class OutputWriter:
 
     def write(
         self,
-        schedules: list[ExamSchedule],
+        schedules: list[ExamSystem],
         output_path: str | Path = DEFAULT_OUTPUT_PATH,
     ) -> Path:
         """
@@ -45,13 +49,12 @@ class OutputWriter:
         # Return the path so callers or tests can know where the file was saved.
         return path
 
-    def format_schedules(self, schedules: list[ExamSchedule]) -> str:
+    def format_schedules(self, schedules: list[ExamSystem]) -> str:
         """
         Convert schedules into the final text format.
 
-        Each schedule has a title, then one semester section and one moed
-        section. This matches the current ExamSchedule model, where each object
-        represents one schedule option for one exam period.
+        Each Schedule block represents one complete exam-system option. Inside
+        it, exams are separated by semester and moed and sorted by date.
         """
         # Start the file with a clear project title.
         lines = [
@@ -65,28 +68,48 @@ class OutputWriter:
         # Join all lines into one text block and end the file with a newline.
         return "\n".join(lines) + "\n"
 
-    def _format_schedule(self, index: int, schedule: ExamSchedule) -> list[str]:
-        """Format one schedule option."""
-        # Each schedule starts with its number, semester, and moed.
+    def _format_schedule(self, index: int, schedule: ExamSystem) -> list[str]:
+        """Format one complete exam-system option."""
+        # Each schedule starts with its number.
         lines = [
             "",
             f"Schedule {index}",
             TITLE_LINE,
-            f"Semester: {schedule.semester}",
-            f"Moed: {schedule.moed}",
         ]
 
-        # Sort exams by date first, then by course number for stable output.
-        for exam in sorted(
-            schedule.scheduled_exams,
-            key=lambda item: (item.exam_date, item.course.course_number),
+        current_semester: str | None = None
+
+        for period_schedule in sorted(
+            schedule.period_schedules,
+            key=self._period_sort_key,
         ):
-            # One exam is written in one readable line.
-            lines.append(
-                f"{exam.exam_date.strftime(DATE_FORMAT)} | "
-                f"{exam.course.name} | "
-                f"{exam.course.instructor}"
-            )
+            if period_schedule.semester != current_semester:
+                lines.append(f"Semester: {period_schedule.semester}")
+                current_semester = period_schedule.semester
+
+            lines.append(f"Moed: {period_schedule.moed}")
+
+            # Sort exams by date first, then by course number for stable output.
+            for exam in sorted(
+                period_schedule.scheduled_exams,
+                key=lambda item: (item.exam_date, item.course.course_number),
+            ):
+                # One exam is written in one readable line.
+                lines.append(
+                    f"{exam.exam_date.strftime(DATE_FORMAT)} | "
+                    f"{exam.course.name} | "
+                    f"{exam.course.instructor}"
+                )
 
         # Return the formatted lines so the caller can add them to the full file.
         return lines
+
+    @staticmethod
+    def _period_sort_key(schedule: ExamSchedule) -> tuple[int, int, str, str]:
+        """Sort period sections by semester and moed in requirement order."""
+        return (
+            SEMESTER_ORDER.get(schedule.semester, len(SEMESTER_ORDER)),
+            MOED_ORDER.get(schedule.moed, len(MOED_ORDER)),
+            schedule.semester,
+            schedule.moed,
+        )
