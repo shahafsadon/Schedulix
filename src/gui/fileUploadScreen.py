@@ -1,12 +1,19 @@
 from pathlib import Path
-import tkinter as tk
-from tkinter import filedialog, ttk
+from tkinter import filedialog
+
+try:
+    import customtkinter as ctk
+except ModuleNotFoundError as error:
+    raise ModuleNotFoundError(
+        "customtkinter is required for the Version 2.0 GUI. "
+        "Install it with: .venv\\Scripts\\python.exe -m pip install -r requirements.txt"
+    ) from error
 
 from fileReader.baseFileReader import FileReaderType
 from gui.uploadService import FileUploadService, UploadResult
 
 
-class FileUploadScreen(ttk.Frame):
+class FileUploadScreen(ctk.CTkFrame):
     """
     File upload screen for the Version 2.0 GUI workflow.
 
@@ -16,31 +23,31 @@ class FileUploadScreen(ttk.Frame):
 
     def __init__(
         self,
-        master: tk.Misc,
+        master,
         upload_service: FileUploadService | None = None,
     ) -> None:
-        super().__init__(master, padding=16)
+        super().__init__(master, corner_radius=0)
         # The screen talks to this service instead of calling file readers
         # directly. This keeps GUI code focused on display and user actions.
         self.upload_service = upload_service or FileUploadService()
 
         # Keep labels and selected paths by file type so each upload row can be
         # updated independently after the user chooses a file.
-        self.status_labels: dict[FileReaderType, ttk.Label] = {}
+        self.status_labels: dict[FileReaderType, ctk.CTkLabel] = {}
         self.selected_paths: dict[FileReaderType, Path] = {}
 
         self._build()
 
     def _build(self) -> None:
         # Let the status column expand when the window is resized.
-        self.columnconfigure(1, weight=1)
+        self.grid_columnconfigure(1, weight=1)
 
-        title = ttk.Label(
+        title = ctk.CTkLabel(
             self,
             text="Load Input Files",
             font=("Segoe UI", 16, "bold"),
         )
-        title.grid(row=0, column=0, columnspan=3, sticky="w", pady=(0, 12))
+        title.grid(row=0, column=0, columnspan=3, sticky="w", padx=16, pady=(16, 12))
 
         rows = [
             (FileReaderType.COURSES, "Courses file"),
@@ -50,33 +57,44 @@ class FileUploadScreen(ttk.Frame):
 
         # Build one upload row for every required Version 2.0 input file.
         for row_index, (file_type, label_text) in enumerate(rows, start=1):
-            ttk.Label(self, text=label_text).grid(
+            ctk.CTkLabel(self, text=label_text).grid(
                 row=row_index,
                 column=0,
                 sticky="w",
-                padx=(0, 12),
+                padx=(16, 12),
                 pady=6,
             )
 
-            status = ttk.Label(self, text="No file loaded", foreground="#666666")
+            status = ctk.CTkLabel(
+                self,
+                text="No file loaded",
+                text_color="#666666",
+            )
             status.grid(row=row_index, column=1, sticky="ew", pady=6)
             self.status_labels[file_type] = status
 
-            ttk.Button(
+            ctk.CTkButton(
                 self,
                 text="Browse",
                 # Bind the current file type so every button uploads to the
                 # correct reader instead of all buttons using the last row.
                 command=lambda current_type=file_type: self._browse(current_type),
-            ).grid(row=row_index, column=2, sticky="e", pady=6)
+            ).grid(row=row_index, column=2, sticky="e", padx=(12, 16), pady=6)
 
         # This label summarizes whether all required files are ready.
-        self.ready_label = ttk.Label(
+        self.ready_label = ctk.CTkLabel(
             self,
             text="Load all required files to continue.",
-            foreground="#666666",
+            text_color="#666666",
         )
-        self.ready_label.grid(row=4, column=0, columnspan=3, sticky="w", pady=(16, 0))
+        self.ready_label.grid(
+            row=4,
+            column=0,
+            columnspan=3,
+            sticky="w",
+            padx=16,
+            pady=(16, 16),
+        )
 
     def _browse(self, file_type: FileReaderType) -> None:
         # Open the system file picker and let the user select a local text file.
@@ -102,21 +120,21 @@ class FileUploadScreen(ttk.Frame):
             self.selected_paths[result.file_type] = result.path
             label.configure(
                 text=f"{result.path.name} - {result.item_count} item(s)",
-                foreground="#147A39",
+                text_color="#147A39",
             )
         else:
             # Invalid files stay visible as red feedback so the user knows what
             # needs to be fixed before continuing.
-            label.configure(text=result.message, foreground="#B00020")
+            label.configure(text=result.message, text_color="#B00020")
 
         # Refresh the global readiness message after every upload attempt.
         if self.upload_service.is_ready_for_scheduling():
             self.ready_label.configure(
                 text="All files loaded successfully.",
-                foreground="#147A39",
+                text_color="#147A39",
             )
         else:
             self.ready_label.configure(
                 text="Load all required files to continue.",
-                foreground="#666666",
+                text_color="#666666",
             )

@@ -52,7 +52,7 @@ Schedulix/
 |   |   `-- outputWriter.py          # Formats and writes readable schedule output
 |   |-- gui/
 |   |   |-- mainGui.py               # Opens the Version 2.0 file upload window
-|   |   |-- fileUploadScreen.py      # Tkinter screen for choosing input files
+|   |   |-- fileUploadScreen.py      # customTkinter screen for choosing input files
 |   |   `-- uploadService.py         # Validates uploaded files with existing readers
 |   `-- scheduling/
 |       |-- courseFilter.py          # Keeps only selected-program exam courses
@@ -91,17 +91,33 @@ If `python` is not recognized on your computer, run it from PyCharm instead.
 
 ### Run The Version 2.0 Upload Window
 
+Install the GUI dependency once from the project root:
+
+```powershell
+cd C:\Users\user\Desktop\Schedulix
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+```
+
 The SCRUM-117 upload workflow can be opened from the project root:
 
 ```powershell
 cd C:\Users\user\Desktop\Schedulix
 $env:PYTHONPATH="src"
-python -m gui.mainGui
+.\.venv\Scripts\python.exe -m gui.mainGui
 ```
 
 The window lets the user choose courses, programs, and exam-period files. Each
 file is validated with the existing file readers, and the screen shows success
 or error feedback for each upload.
+
+The upload window uses `customtkinter`, as planned in the Version 2.0 software
+design document. If a teammate does not have a `.venv` folder yet, create it
+first and then install the dependencies:
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+```
 
 ## What The Run Prints
 
