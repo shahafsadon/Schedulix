@@ -50,6 +50,10 @@ Schedulix/
 |   |       `-- programReader.py     # Parses selected program files
 |   |-- output/
 |   |   `-- outputWriter.py          # Formats and writes readable schedule output
+|   |-- gui/
+|   |   |-- mainGui.py               # Opens the Version 2.0 file upload window
+|   |   |-- fileUploadScreen.py      # Tkinter screen for choosing input files
+|   |   `-- uploadService.py         # Validates uploaded files with existing readers
 |   `-- scheduling/
 |       |-- courseFilter.py          # Keeps only selected-program exam courses
 |       |-- examDateHandler.py       # Builds valid exam dates and removes blocked dates
@@ -84,6 +88,20 @@ python src\main.py
 ```
 
 If `python` is not recognized on your computer, run it from PyCharm instead.
+
+### Run The Version 2.0 Upload Window
+
+The SCRUM-117 upload workflow can be opened from the project root:
+
+```powershell
+cd C:\Users\user\Desktop\Schedulix
+$env:PYTHONPATH="src"
+python -m gui.mainGui
+```
+
+The window lets the user choose courses, programs, and exam-period files. Each
+file is validated with the existing file readers, and the screen shows success
+or error feedback for each upload.
 
 ## What The Run Prints
 
