@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 from pathlib import Path
 
+from application.stateManager import StateManager
 from fileReader.baseFileReader import FileReaderFactory, FileReaderType
 from output.outputWriter import DEFAULT_OUTPUT_PATH, OutputWriter
 from scheduling.courseFilter import CourseFilter
@@ -16,6 +17,7 @@ DEFAULT_COURSES_PATH = PROJECT_ROOT / "data" / "examples" / "CourseExample.txt"
 DEFAULT_EXAM_PERIODS_PATH = PROJECT_ROOT / "data" / "examples" / "DatesExample.txt"
 DEFAULT_PROGRAMS_PATH = PROJECT_ROOT / "data" / "examples" / "ProgramsExample.txt"
 DEFAULT_APP_OUTPUT_PATH = PROJECT_ROOT / DEFAULT_OUTPUT_PATH
+DEFAULT_STATE_DB_PATH = PROJECT_ROOT / "data" / "internal_data.pkl"
 
 
 @dataclass(frozen=True)
@@ -48,6 +50,7 @@ class SchedulixApp:
         course_filter: CourseFilter | None = None,
         schedule_generator: ExamScheduleGenerator | None = None,
         output_writer: OutputWriter | None = None,
+        state_manager: StateManager | None = None,
     ) -> None:
         """
         Create the app with the services it needs.
@@ -61,6 +64,8 @@ class SchedulixApp:
         self.schedule_generator = schedule_generator or ExamScheduleGenerator()
         # Use the real output writer unless another one was provided.
         self.output_writer = output_writer or OutputWriter()
+        # Initialize or use provided state manager
+        self.state_manager = state_manager or StateManager(DEFAULT_STATE_DB_PATH)
 
     def run(
         self,
@@ -75,12 +80,17 @@ class SchedulixApp:
         # Read the selected program numbers.
         programs_reader = FileReaderFactory.get_reader(FileReaderType.PROGRAMS)
         selected_programs = programs_reader.read(programs_path)
+        self.state_manager.set_selected_programs(selected_programs)
+
         # Read all courses from the courses file.
         courses_reader = FileReaderFactory.get_reader(FileReaderType.COURSES)
         courses = courses_reader.read(courses_path)
+        self.state_manager.set_courses(courses)
+
         # Read all exam periods and excluded dates.
         periods_reader = FileReaderFactory.get_reader(FileReaderType.EXAM_PERIODS)
         exam_periods = periods_reader.read(exam_periods_path)
+        self.state_manager.set_exam_periods(exam_periods)
 
         # Keep only courses that belong to selected programs and use Exam.
         relevant_courses = self.course_filter.filter_relevant_courses(
@@ -92,6 +102,7 @@ class SchedulixApp:
             relevant_courses,
             exam_periods,
         )
+        self.state_manager.set_generated_schedules(schedules)
 
         # Write the generated schedules to the output file.
         created_output_path = self.output_writer.write(schedules, output_path)
@@ -105,3 +116,4 @@ class SchedulixApp:
             schedule_count=len(schedules),
             output_path=created_output_path,
         )
+
