@@ -1,0 +1,80 @@
+import sys
+import unittest
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parents[3]
+SRC = ROOT / "src"
+
+sys.path.insert(0, str(SRC))
+
+from models import Course, ProgramEnrollment
+from gui.programSelectionPresenter import ProgramSelectionPresenter
+
+
+def make_course(course_number: str, program_numbers: list[str]) -> Course:
+    """Build a small Course attached to one or more programs."""
+    return Course(
+        name=f"Course {course_number}",
+        course_number=course_number,
+        instructor="Test Instructor",
+        programs=[
+            ProgramEnrollment(program_number, 1, "FALL", "Obligatory")
+            for program_number in program_numbers
+        ],
+        evaluation_type="Exam",
+    )
+
+
+class ProgramSelectionPresenterTests(unittest.TestCase):
+    """Tests for the program-selection logic (no GUI involved)."""
+
+    def test_available_programs_are_unique_and_sorted(self) -> None:
+        courses = [
+            make_course("83102", ["83101", "83108"]),
+            make_course("83112", ["83101"]),
+        ]
+        presenter = ProgramSelectionPresenter(courses)
+        self.assertEqual(presenter.available_programs, ["83101", "83108"])
+
+    def test_toggle_selects_then_deselects(self) -> None:
+        presenter = ProgramSelectionPresenter([make_course("83102", ["83101"])])
+        first = presenter.toggle("83101")
+        self.assertTrue(first.accepted)
+        self.assertTrue(presenter.is_selected("83101"))
+        second = presenter.toggle("83101")
+        self.assertTrue(second.accepted)
+        self.assertFalse(presenter.is_selected("83101"))
+
+    def test_cannot_select_more_than_max(self) -> None:
+        courses = [make_course("100", [f"8310{i}" for i in range(6)])]
+        presenter = ProgramSelectionPresenter(courses, max_programs=5)
+        available = presenter.available_programs
+        for program in available[:5]:
+            self.assertTrue(presenter.toggle(program).accepted)
+        rejected = presenter.toggle(available[5])
+        self.assertFalse(rejected.accepted)
+        self.assertEqual(presenter.selection_count(), 5)
+
+    def test_toggle_rejects_unknown_program(self) -> None:
+        presenter = ProgramSelectionPresenter([make_course("83102", ["83101"])])
+        result = presenter.toggle("99999")
+        self.assertFalse(result.accepted)
+        self.assertFalse(presenter.is_selected("99999"))
+
+    def test_can_proceed_requires_between_one_and_max(self) -> None:
+        presenter = ProgramSelectionPresenter([make_course("83102", ["83101"])])
+        self.assertFalse(presenter.can_proceed())
+        presenter.toggle("83101")
+        self.assertTrue(presenter.can_proceed())
+
+    def test_selected_programs_returns_sorted_list(self) -> None:
+        courses = [make_course("100", ["83108", "83101", "83104"])]
+        presenter = ProgramSelectionPresenter(courses)
+        presenter.toggle("83108")
+        presenter.toggle("83101")
+        self.assertEqual(presenter.selected_programs, ["83101", "83108"])
+
+
+if __name__ == "__main__":
+    unittest.main()
