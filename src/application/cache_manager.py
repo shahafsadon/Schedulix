@@ -237,3 +237,115 @@ class CacheManager:
         pkl_path = self.__class__._PKL_PATH
         if pkl_path.exists():
             pkl_path.unlink()
+
+    # ------------------------------------------------------------------
+    # Incremental additions (add_*)
+    # ------------------------------------------------------------------
+    # These methods append new items to an existing list rather than
+    # replacing it.  The write-through contract is the same as set_*:
+    # the pkl file is overwritten immediately after every call.
+
+    def add_courses(self, courses: list[Course]) -> None:
+        """
+        Append new courses to the existing list and persist to disk.
+
+        Use this for incremental uploads where the user adds more courses
+        without discarding the ones already loaded.  To replace everything
+        at once, use :meth:`set_courses` instead.
+
+        Parameters
+        ----------
+        courses:
+            The additional ``Course`` objects to append.
+        """
+        self._state.courses.extend(courses)
+        self._persist()
+
+    def add_exam_periods(self, exam_periods: list[ExamPeriod]) -> None:
+        """
+        Append new exam periods to the existing list and persist to disk.
+
+        Parameters
+        ----------
+        exam_periods:
+            The additional ``ExamPeriod`` objects to append.
+        """
+        self._state.exam_periods.extend(exam_periods)
+        self._persist()
+
+    def add_selected_programs(self, programs: list[str]) -> None:
+        """
+        Append new program numbers to the selected list and persist to disk.
+
+        Duplicate program numbers are silently ignored so the list always
+        contains each program number at most once.
+
+        Parameters
+        ----------
+        programs:
+            Program numbers to add, e.g. ``["83101", "83108"]``.
+        """
+        existing = set(self._state.selected_programs)
+        for program in programs:
+            if program not in existing:
+                self._state.selected_programs.append(program)
+                existing.add(program)
+        self._persist()
+
+    def add_generated_schedules(self, schedules: list[ExamSystem]) -> None:
+        """
+        Append new exam systems to the generated-schedules list and persist.
+
+        Parameters
+        ----------
+        schedules:
+            The additional ``ExamSystem`` objects to append.
+        """
+        self._state.generated_schedules.extend(schedules)
+        self._persist()
+
+    # ------------------------------------------------------------------
+    # Per-field cache invalidation (invalidate_*)
+    # ------------------------------------------------------------------
+    # These methods zero out a single field in RAM and immediately write
+    # the updated (partial) state to disk.  Other fields are left intact.
+    # This is a surgical alternative to clear(), which wipes everything
+    # and deletes the file.  Use invalidate_* when the user re-uploads
+    # only one dataset without wanting to discard the rest.
+
+    def invalidate_courses(self) -> None:
+        """
+        Clear only the courses field and persist the updated state to disk.
+
+        All other fields (exam periods, selected programs, generated
+        schedules) are left untouched.
+        """
+        self._state.courses = []
+        self._persist()
+
+    def invalidate_exam_periods(self) -> None:
+        """
+        Clear only the exam-periods field and persist the updated state.
+
+        All other fields are left untouched.
+        """
+        self._state.exam_periods = []
+        self._persist()
+
+    def invalidate_selected_programs(self) -> None:
+        """
+        Clear only the selected-programs field and persist the updated state.
+
+        All other fields are left untouched.
+        """
+        self._state.selected_programs = []
+        self._persist()
+
+    def invalidate_generated_schedules(self) -> None:
+        """
+        Clear only the generated-schedules field and persist the updated state.
+
+        All other fields are left untouched.
+        """
+        self._state.generated_schedules = []
+        self._persist()
