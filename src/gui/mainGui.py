@@ -10,6 +10,7 @@ except ModuleNotFoundError as error:
 from application.cache_manager import CacheManager
 from gui.fileUploadScreen import FileUploadScreen
 from gui.uploadService import FileUploadService
+from gui.uploadedDataExportService import UploadedDataExportService
 from gui.uploadedDataPresenter import UploadedDataPresenter
 
 
@@ -32,12 +33,17 @@ def main() -> None:
         cache_manager=cache,
         uploaded_data=upload_service.get_uploaded_data(),
     )
+    export_service = UploadedDataExportService(
+        cache_manager=cache,
+        uploaded_data=upload_service.get_uploaded_data(),
+    )
 
     # Show the first workflow screen: loading and validating input files.
     screen = FileUploadScreen(
         root,
         upload_service=upload_service,
         data_presenter=data_presenter,
+        export_service=export_service,
     )
     screen.pack(fill="both", expand=True)
 

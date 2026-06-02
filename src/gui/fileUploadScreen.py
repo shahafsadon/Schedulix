@@ -11,6 +11,7 @@ except ModuleNotFoundError as error:
 
 from fileReader.baseFileReader import FileReaderType
 from gui.uploadService import FileUploadService, UploadMode, UploadResult
+from gui.uploadedDataExportService import UploadedDataExportService, ExportResult
 from gui.uploadedDataPresenter import UploadedDataPresenter, UploadedDataSnapshot
 
 
@@ -20,7 +21,7 @@ class FileUploadScreen(ctk.CTkFrame):
 
     The screen lets the user choose the three required input files, either
     replace or append each dataset, validates files through the existing
-    readers, and displays upload feedback.
+    readers, exports parsed datasets, and displays upload/export feedback.
     """
 
     def __init__(
@@ -28,12 +29,17 @@ class FileUploadScreen(ctk.CTkFrame):
         master,
         upload_service: FileUploadService | None = None,
         data_presenter: UploadedDataPresenter | None = None,
+        export_service: UploadedDataExportService | None = None,
     ) -> None:
         super().__init__(master, corner_radius=0)
         # The screen talks to this service instead of calling file readers
         # directly. This keeps GUI code focused on display and user actions.
         self.upload_service = upload_service or FileUploadService()
         self.data_presenter = data_presenter or UploadedDataPresenter(
+            cache_manager=self.upload_service.cache_manager,
+            uploaded_data=self.upload_service.get_uploaded_data(),
+        )
+        self.export_service = export_service or UploadedDataExportService(
             cache_manager=self.upload_service.cache_manager,
             uploaded_data=self.upload_service.get_uploaded_data(),
         )
@@ -48,14 +54,14 @@ class FileUploadScreen(ctk.CTkFrame):
     def _build(self) -> None:
         # Let the status/preview columns expand when the window is resized.
         self.grid_columnconfigure(1, weight=1)
-        self.grid_rowconfigure(6, weight=1)
+        self.grid_rowconfigure(7, weight=1)
 
         title = ctk.CTkLabel(
             self,
             text="Load Input Files",
             font=("Segoe UI", 16, "bold"),
         )
-        title.grid(row=0, column=0, columnspan=4, sticky="w", padx=16, pady=(16, 12))
+        title.grid(row=0, column=0, columnspan=5, sticky="w", padx=16, pady=(16, 12))
 
         rows = [
             (FileReaderType.COURSES, "Courses file"),
@@ -103,6 +109,14 @@ class FileUploadScreen(ctk.CTkFrame):
                 ),
             ).grid(row=row_index, column=3, sticky="e", padx=(0, 16), pady=6)
 
+            ctk.CTkButton(
+                self,
+                text="Export",
+                fg_color="transparent",
+                border_width=1,
+                command=lambda current_type=file_type: self._export(current_type),
+            ).grid(row=row_index, column=4, sticky="e", padx=(0, 16), pady=6)
+
         # This label summarizes whether all required files are ready.
         self.ready_label = ctk.CTkLabel(
             self,
@@ -112,10 +126,24 @@ class FileUploadScreen(ctk.CTkFrame):
         self.ready_label.grid(
             row=4,
             column=0,
-            columnspan=4,
+            columnspan=5,
             sticky="w",
             padx=16,
             pady=(16, 8),
+        )
+
+        self.export_status_label = ctk.CTkLabel(
+            self,
+            text="Export status will appear here.",
+            text_color="#666666",
+        )
+        self.export_status_label.grid(
+            row=5,
+            column=0,
+            columnspan=5,
+            sticky="w",
+            padx=16,
+            pady=(0, 8),
         )
 
         self._build_preview()
@@ -125,7 +153,7 @@ class FileUploadScreen(ctk.CTkFrame):
     def _build_preview(self) -> None:
         """Build the parsed-data preview area and refresh action."""
         header = ctk.CTkFrame(self, fg_color="transparent")
-        header.grid(row=5, column=0, columnspan=4, sticky="ew", padx=16, pady=(8, 4))
+        header.grid(row=6, column=0, columnspan=5, sticky="ew", padx=16, pady=(8, 4))
         header.grid_columnconfigure(0, weight=1)
 
         ctk.CTkLabel(
@@ -150,9 +178,9 @@ class FileUploadScreen(ctk.CTkFrame):
             wrap="word",
         )
         self.preview_textbox.grid(
-            row=6,
+            row=7,
             column=0,
-            columnspan=4,
+            columnspan=5,
             sticky="nsew",
             padx=16,
             pady=(0, 16),
@@ -198,6 +226,37 @@ class FileUploadScreen(ctk.CTkFrame):
         self._refresh_ready_label()
         self._refresh_preview()
 
+    def _export(self, file_type: FileReaderType) -> None:
+        """Choose a destination path and export the requested uploaded dataset."""
+        filepath = filedialog.asksaveasfilename(
+            title="Export uploaded dataset",
+            defaultextension=".txt",
+            initialfile=self._default_export_filename(file_type),
+            filetypes=(("Text files", "*.txt"), ("All files", "*.*")),
+        )
+
+        if not filepath:
+            return
+
+        result = self.export_service.export(file_type, filepath)
+        self._display_export_result(result)
+
+    def _display_export_result(self, result: ExportResult) -> None:
+        """Show export success or failure feedback in the upload screen."""
+        if result.success:
+            self.export_status_label.configure(
+                text=(
+                    f"Exported {result.item_count} item(s) to "
+                    f"{result.path.name}."
+                ),
+                text_color="#147A39",
+            )
+        else:
+            self.export_status_label.configure(
+                text=result.message,
+                text_color="#B00020",
+            )
+
     def _refresh_ready_label(self) -> None:
         """Refresh the global upload-readiness message."""
         if self.upload_service.is_ready_for_scheduling():
@@ -220,6 +279,16 @@ class FileUploadScreen(ctk.CTkFrame):
         self.preview_textbox.delete("1.0", "end")
         self.preview_textbox.insert("end", preview)
         self.preview_textbox.configure(state="disabled")
+
+    @staticmethod
+    def _default_export_filename(file_type: FileReaderType) -> str:
+        """Return the suggested file name for each export action."""
+        names = {
+            FileReaderType.COURSES: "SchedulixCoursesExport.txt",
+            FileReaderType.PROGRAMS: "SchedulixProgramsExport.txt",
+            FileReaderType.EXAM_PERIODS: "SchedulixExamPeriodsExport.txt",
+        }
+        return names.get(file_type, "SchedulixExport.txt")
 
     @staticmethod
     def _format_snapshot(snapshot: UploadedDataSnapshot) -> str:
