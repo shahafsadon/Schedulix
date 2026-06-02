@@ -10,11 +10,13 @@ requesting a full schedule regeneration) is wrapped inside a ``Command``
 object.  This fully decouples the passive Views from the underlying domain
 logic:
 
-* The **receiver** that commands mutate is ``ExamPeriod``.  ``ExamDateHandler``
-  is stateless and is used as a *tool* to recompute the valid-date list.
+* The **receiver** that commands mutate is ``ExamPeriod`` — the only mutable
+  domain object involved.  ``ExamDateHandler`` is stateless and is used as a
+  *tool* to recompute the valid-date list after each mutation.
 * Commands are instantiated by the Presenter (the Invoker) with all their
   dependencies injected via constructor arguments — no Singleton references.
-* ``undo()`` is supported on every command that mutates state.
+* ``undo()`` is supported on every command that mutates state, enabling the
+  Presenter to offer a one-step revert.
 
 No Version 1.0 source files are modified by this module.
 """
@@ -22,7 +24,7 @@ No Version 1.0 source files are modified by this module.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date
 from typing import Any
 
@@ -63,12 +65,21 @@ class Command(ABC):
 
     Every concrete command must implement ``execute()``.  Commands that mutate
     state should also implement ``undo()`` so the Presenter can offer a
-    one-step revert; the default implementation returns a failure result.
+    one-step revert; the default implementation returns a failure result with
+    an informative message.
     """
 
     @abstractmethod
     def execute(self) -> CommandResult:
-        """Perform the action this command represents."""
+        """
+        Perform the action this command represents.
+
+        Returns
+        -------
+        CommandResult
+            A result object describing success/failure and carrying optional
+            payload data (e.g. the refreshed valid-date list).
+        """
         ...
 
     def undo(self) -> CommandResult:
@@ -76,7 +87,7 @@ class Command(ABC):
         Reverse the effect of the most recent ``execute()`` call.
 
         The default implementation returns a failure result.  Subclasses that
-        mutate state should override this method.
+        mutate state should override this method to restore the previous state.
         """
         return CommandResult(
             success=False,
@@ -92,17 +103,41 @@ class ExcludeDateCommand(Command):
     """
     Mark one date as blocked (excluded) within an exam period.
 
+    Adding the date to ``exam_period.excluded_dates`` prevents the
+    ``ExamDateHandler`` from returning it as a valid exam date.  The result's
+    ``data`` field contains the refreshed valid-date list so the View can
+    redraw the calendar without making a separate query.
+
     Supports ``undo()``: removes the date from ``excluded_dates`` again.
+
+    Parameters
+    ----------
+    exam_period:
+        The ``ExamPeriod`` whose blocked-date list will be updated.
+    date_handler:
+        An ``ExamDateHandler`` instance used to recompute valid dates.
+    target_date:
+        The calendar date to block.
     """
 
     def __init__(self, exam_period, date_handler, target_date: date) -> None:
         self._exam_period = exam_period
         self._date_handler = date_handler
         self._target_date = target_date
+        # Track whether execute() actually added the date so undo() is safe.
         self._did_add: bool = False
 
     def execute(self) -> CommandResult:
-        """Append ``target_date`` to ``exam_period.excluded_dates`` if absent."""
+        """
+        Append ``target_date`` to ``exam_period.excluded_dates`` if absent.
+
+        Returns
+        -------
+        CommandResult
+            ``success=True`` with updated valid-date list in ``data``.
+            If the date is already excluded, ``success=True`` is still
+            returned (idempotent) and no duplicate is added.
+        """
         if self._target_date not in self._exam_period.excluded_dates:
             self._exam_period.excluded_dates.append(self._target_date)
             self._did_add = True
@@ -115,7 +150,12 @@ class ExcludeDateCommand(Command):
         )
 
     def undo(self) -> CommandResult:
-        """Remove ``target_date`` from ``exam_period.excluded_dates``."""
+        """
+        Remove ``target_date`` from ``exam_period.excluded_dates``.
+
+        Only performs the removal if ``execute()`` actually added the date,
+        ensuring undo is a clean inverse with no side-effects.
+        """
         if self._did_add and self._target_date in self._exam_period.excluded_dates:
             self._exam_period.excluded_dates.remove(self._target_date)
             self._did_add = False
@@ -132,7 +172,19 @@ class ActivateDateCommand(Command):
     """
     Re-activate a previously blocked date within an exam period.
 
+    Removes the date from ``exam_period.excluded_dates`` so the
+    ``ExamDateHandler`` will include it in future valid-date queries.
+
     Supports ``undo()``: adds the date back to ``excluded_dates``.
+
+    Parameters
+    ----------
+    exam_period:
+        The ``ExamPeriod`` whose blocked-date list will be updated.
+    date_handler:
+        An ``ExamDateHandler`` instance used to recompute valid dates.
+    target_date:
+        The calendar date to unblock.
     """
 
     def __init__(self, exam_period, date_handler, target_date: date) -> None:
@@ -142,7 +194,16 @@ class ActivateDateCommand(Command):
         self._did_remove: bool = False
 
     def execute(self) -> CommandResult:
-        """Remove ``target_date`` from ``exam_period.excluded_dates`` if present."""
+        """
+        Remove ``target_date`` from ``exam_period.excluded_dates`` if present.
+
+        Returns
+        -------
+        CommandResult
+            ``success=True`` with updated valid-date list in ``data``.
+            If the date was not excluded, the call is a no-op and still
+            returns ``success=True``.
+        """
         if self._target_date in self._exam_period.excluded_dates:
             self._exam_period.excluded_dates.remove(self._target_date)
             self._did_remove = True
@@ -155,7 +216,11 @@ class ActivateDateCommand(Command):
         )
 
     def undo(self) -> CommandResult:
-        """Re-exclude ``target_date`` in ``exam_period.excluded_dates``."""
+        """
+        Re-exclude ``target_date`` in ``exam_period.excluded_dates``.
+
+        Only performs the addition if ``execute()`` actually removed the date.
+        """
         if self._did_remove and self._target_date not in self._exam_period.excluded_dates:
             self._exam_period.excluded_dates.append(self._target_date)
             self._did_remove = False
@@ -172,18 +237,40 @@ class ToggleDateExceptionCommand(Command):
     """
     Toggle the excluded/active state of a calendar date.
 
-    Delegates to ``ExcludeDateCommand`` or ``ActivateDateCommand`` depending
-    on the current state.  ``undo()`` reverses the toggle.
+    Inspects the current state of ``exam_period.excluded_dates`` and
+    delegates to ``ExcludeDateCommand`` (if active) or
+    ``ActivateDateCommand`` (if excluded).  ``undo()`` reverses the
+    toggle by calling the delegate's ``undo()``.
+
+    This is the primary command used by the Date Management Presenter in
+    response to a calendar-cell click.
+
+    Parameters
+    ----------
+    exam_period:
+        The ``ExamPeriod`` whose blocked-date list will be toggled.
+    date_handler:
+        An ``ExamDateHandler`` instance used to recompute valid dates.
+    target_date:
+        The calendar date to toggle.
     """
 
     def __init__(self, exam_period, date_handler, target_date: date) -> None:
         self._exam_period = exam_period
         self._date_handler = date_handler
         self._target_date = target_date
+        # Resolved at execute-time so the correct delegate handles undo too.
         self._delegate: Command | None = None
 
     def execute(self) -> CommandResult:
-        """Exclude if active; activate if excluded."""
+        """
+        Exclude the date if it is currently active; activate it if excluded.
+
+        Returns
+        -------
+        CommandResult
+            Result from the underlying delegate command.
+        """
         if self._target_date in self._exam_period.excluded_dates:
             self._delegate = ActivateDateCommand(
                 self._exam_period, self._date_handler, self._target_date
@@ -195,7 +282,11 @@ class ToggleDateExceptionCommand(Command):
         return self._delegate.execute()
 
     def undo(self) -> CommandResult:
-        """Reverse the most recent toggle."""
+        """
+        Reverse the most recent toggle by delegating to the sub-command's undo.
+
+        Returns a failure result if ``execute()`` was never called.
+        """
         if self._delegate is None:
             return CommandResult(
                 success=False,
@@ -212,7 +303,24 @@ class RegenerateSchedulesCommand(Command):
     """
     Recompute exam schedules and persist them to the application cache.
 
-    ``undo()`` is not supported — regeneration is a pure computation.
+    Calls ``ExamScheduleGenerator.generate_exam_systems()`` with the
+    current courses and exam periods, then writes the result to
+    ``CacheManager.set_generated_schedules()``.
+
+    ``undo()`` is not supported: regeneration is a read-only computation that
+    does not lose information (the inputs remain unchanged), so reversing it
+    is equivalent to running it again with the previous inputs.
+
+    Parameters
+    ----------
+    schedule_generator:
+        An ``ExamScheduleGenerator`` instance used to run the computation.
+    cache_manager:
+        The application ``CacheManager`` that will receive the new schedules.
+    courses:
+        The course list to schedule.
+    exam_periods:
+        The exam periods to schedule over.
     """
 
     def __init__(
@@ -228,7 +336,16 @@ class RegenerateSchedulesCommand(Command):
         self._exam_periods = exam_periods
 
     def execute(self) -> CommandResult:
-        """Run the schedule generator and persist the result."""
+        """
+        Run the schedule generator and persist the result.
+
+        Returns
+        -------
+        CommandResult
+            ``success=True`` with the new ``list[ExamSystem]`` in ``data``.
+            On unexpected errors a ``success=False`` result is returned with
+            the error description in ``message``.
+        """
         try:
             schedules = self._generator.generate_exam_systems(
                 self._courses, self._exam_periods
