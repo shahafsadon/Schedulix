@@ -33,7 +33,7 @@ class CourseDetail:
     course_number: str
     name: str
     instructor: str
-    status: str            # "Obligatory" or "Elective"
+    status: str            # "Obligatory" or "Elective" for this enrollment row
     evaluation_type: str   # "Exam", "Project", or "Attendance"
 
 
@@ -55,7 +55,7 @@ class ProgramDetails:
     """
 
     program_number: str
-    course_count: int
+    course_count: int   # Total enrollment rows found for this program
     groups: list[SemesterGroup]
 
 
@@ -63,6 +63,12 @@ class ProgramDetailsPresenter:
     """Builds per-program detail views from the loaded courses."""
 
     def __init__(self, courses: list[Course]) -> None:
+        """Store the loaded courses to compute program details on demand.
+
+        Args:
+            courses: every course parsed from the courses file. Details for a
+                given program are derived lazily each time get_details is called.
+        """
         # Keep the loaded courses; details are computed on demand per program.
         self._courses = courses
 
@@ -73,16 +79,22 @@ class ProgramDetailsPresenter:
         the requested program, and groups the resulting courses by (year,
         semester). The same course is listed once per matching enrollment row.
         """
-        # Collect one CourseDetail per enrollment row that matches the program.
-        # Keyed by (year, semester) so courses fall into the right slot.
+        # Accumulator: maps a (year, semester) slot to the courses in that slot.
+        # Using the slot as the key is what produces the grouped structure.
         grouped: dict[tuple[int, str], list[CourseDetail]] = {}
+        # Counts every matching enrollment row (not distinct courses), since a
+        # course spanning two slots legitimately appears twice.
         total = 0
 
         for course in self._courses:
+            # A course may belong to several programs; inspect each enrollment.
             for enrollment in course.programs:
+                # Skip enrollments that belong to a different program.
                 if enrollment.program_number != program_number:
                     continue
 
+                # Combine course-level fields (name, instructor, evaluation)
+                # with the enrollment-level field (status) for this slot.
                 detail = CourseDetail(
                     course_number=course.course_number,
                     name=course.name,
@@ -90,14 +102,17 @@ class ProgramDetailsPresenter:
                     status=enrollment.status,
                     evaluation_type=course.evaluation_type,
                 )
+                # setdefault creates the slot's list on first hit, then appends.
                 grouped.setdefault((enrollment.year, enrollment.semester), []).append(
                     detail
                 )
                 total += 1
 
-        # Turn the dict into an ordered list of SemesterGroup objects.
+        # Convert the accumulator dict into an ordered list of SemesterGroups.
         groups: list[SemesterGroup] = []
+        # Iterate slots in display order (year, then semester) for stable output.
         for (year, semester) in sorted(grouped, key=self._group_sort_key):
+            # Within a slot, sort courses by number so the order is deterministic.
             courses = sorted(
                 grouped[(year, semester)],
                 key=lambda detail: detail.course_number,
@@ -114,6 +129,11 @@ class ProgramDetailsPresenter:
 
     @staticmethod
     def _group_sort_key(key: tuple[int, str]) -> tuple[int, int, str]:
-        """Sort groups by year, then by semester in requirement order."""
+        """Sort groups by year, then by semester in requirement order.
+
+        The trailing semester string is a tie-breaker so that an unknown
+        semester (mapped to the same fallback rank) still sorts deterministically.
+        """
         year, semester = key
+        # Unknown semesters fall back to a rank past the known ones, never crash.
         return (year, SEMESTER_ORDER.get(semester, len(SEMESTER_ORDER)), semester)
