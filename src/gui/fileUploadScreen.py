@@ -11,6 +11,7 @@ except ModuleNotFoundError as error:
 
 from fileReader.baseFileReader import FileReaderType
 from gui.uploadService import FileUploadService, UploadMode, UploadResult
+from gui.uploadedDataPresenter import UploadedDataPresenter, UploadedDataSnapshot
 
 
 class FileUploadScreen(ctk.CTkFrame):
@@ -26,11 +27,16 @@ class FileUploadScreen(ctk.CTkFrame):
         self,
         master,
         upload_service: FileUploadService | None = None,
+        data_presenter: UploadedDataPresenter | None = None,
     ) -> None:
         super().__init__(master, corner_radius=0)
         # The screen talks to this service instead of calling file readers
         # directly. This keeps GUI code focused on display and user actions.
         self.upload_service = upload_service or FileUploadService()
+        self.data_presenter = data_presenter or UploadedDataPresenter(
+            cache_manager=self.upload_service.cache_manager,
+            uploaded_data=self.upload_service.get_uploaded_data(),
+        )
 
         # Keep labels and selected paths by file type so each upload row can be
         # updated independently after the user chooses a file.
@@ -40,8 +46,9 @@ class FileUploadScreen(ctk.CTkFrame):
         self._build()
 
     def _build(self) -> None:
-        # Let the status column expand when the window is resized.
+        # Let the status/preview columns expand when the window is resized.
         self.grid_columnconfigure(1, weight=1)
+        self.grid_rowconfigure(6, weight=1)
 
         title = ctk.CTkLabel(
             self,
@@ -108,7 +115,47 @@ class FileUploadScreen(ctk.CTkFrame):
             columnspan=4,
             sticky="w",
             padx=16,
-            pady=(16, 16),
+            pady=(16, 8),
+        )
+
+        self._build_preview()
+        self._refresh_ready_label()
+        self._refresh_preview()
+
+    def _build_preview(self) -> None:
+        """Build the parsed-data preview area and refresh action."""
+        header = ctk.CTkFrame(self, fg_color="transparent")
+        header.grid(row=5, column=0, columnspan=4, sticky="ew", padx=16, pady=(8, 4))
+        header.grid_columnconfigure(0, weight=1)
+
+        ctk.CTkLabel(
+            header,
+            text="Uploaded Data Preview",
+            font=("Segoe UI", 14, "bold"),
+        ).grid(row=0, column=0, sticky="w")
+
+        ctk.CTkButton(
+            header,
+            text="Refresh",
+            width=90,
+            fg_color="transparent",
+            border_width=1,
+            command=self._refresh_preview,
+        ).grid(row=0, column=1, sticky="e")
+
+        self.preview_textbox = ctk.CTkTextbox(
+            self,
+            height=280,
+            font=("Consolas", 11),
+            wrap="word",
+        )
+        self.preview_textbox.grid(
+            row=6,
+            column=0,
+            columnspan=4,
+            sticky="nsew",
+            padx=16,
+            pady=(0, 16),
         )
 
     def _browse(self, file_type: FileReaderType, mode: UploadMode) -> None:
@@ -145,7 +192,14 @@ class FileUploadScreen(ctk.CTkFrame):
             # needs to be fixed before continuing.
             label.configure(text=result.message, text_color="#B00020")
 
-        # Refresh the global readiness message after every upload attempt.
+        # Refresh the global readiness message and parsed-data preview after
+        # every upload attempt. Failed uploads leave the previous preview intact
+        # because FileUploadService preserves valid cached state.
+        self._refresh_ready_label()
+        self._refresh_preview()
+
+    def _refresh_ready_label(self) -> None:
+        """Refresh the global upload-readiness message."""
         if self.upload_service.is_ready_for_scheduling():
             self.ready_label.configure(
                 text="All files loaded successfully.",
@@ -156,3 +210,68 @@ class FileUploadScreen(ctk.CTkFrame):
                 text="Load all required files to continue.",
                 text_color="#666666",
             )
+
+    def _refresh_preview(self) -> None:
+        """Reload parsed upload data and redraw the preview text."""
+        snapshot = self.data_presenter.refresh()
+        preview = self._format_snapshot(snapshot)
+
+        self.preview_textbox.configure(state="normal")
+        self.preview_textbox.delete("1.0", "end")
+        self.preview_textbox.insert("end", preview)
+        self.preview_textbox.configure(state="disabled")
+
+    @staticmethod
+    def _format_snapshot(snapshot: UploadedDataSnapshot) -> str:
+        """Convert the display snapshot into compact multiline preview text."""
+        metadata = snapshot.metadata
+        lines: list[str] = [
+            "Metadata",
+            f"- Courses loaded: {metadata.course_count}",
+            f"- Selected programs loaded: {metadata.program_count}",
+            f"- Exam periods loaded: {metadata.exam_period_count}",
+            f"- Exam courses: {metadata.exam_course_count}",
+            f"- Program enrollments: {metadata.total_enrollment_count}",
+            f"- Excluded exam dates: {metadata.total_excluded_date_count}",
+            f"- Ready for scheduling: {'Yes' if metadata.is_complete else 'No'}",
+        ]
+
+        if metadata.evaluation_counts:
+            evaluation_summary = ", ".join(
+                f"{name}: {count}"
+                for name, count in sorted(metadata.evaluation_counts.items())
+            )
+            lines.append(f"- Evaluation types: {evaluation_summary}")
+
+        lines.extend(["", "Courses"])
+        if not snapshot.courses:
+            lines.append("- No courses loaded.")
+        else:
+            for course in snapshot.courses:
+                programs = ", ".join(course.program_numbers) or "No programs"
+                lines.append(
+                    f"- {course.course_number} | {course.name} | "
+                    f"{course.instructor} | {course.evaluation_type} | "
+                    f"{course.enrollment_count} enrollment(s) | {programs}"
+                )
+
+        lines.extend(["", "Programs"])
+        if not snapshot.programs:
+            lines.append("- No programs loaded.")
+        else:
+            for program in snapshot.programs:
+                lines.append(f"- {program}")
+
+        lines.extend(["", "Exam Periods"])
+        if not snapshot.exam_periods:
+            lines.append("- No exam periods loaded.")
+        else:
+            for exam_period in snapshot.exam_periods:
+                lines.append(
+                    f"- {exam_period.semester} {exam_period.moed} | "
+                    f"{exam_period.start_date} to {exam_period.end_date} | "
+                    f"{exam_period.day_count} day(s) | "
+                    f"{exam_period.excluded_count} excluded"
+                )
+
+        return "\n".join(lines)
