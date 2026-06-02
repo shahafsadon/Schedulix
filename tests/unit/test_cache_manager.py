@@ -323,6 +323,233 @@ class TestCacheManagerClear(_CacheManagerTestBase):
         self.assertEqual(second.get_courses(), [])
 
 
+class TestCacheManagerIncrementalUpdates(_CacheManagerTestBase):
+    """Verify add_* methods append items without replacing existing data."""
+
+    def test_add_courses_extends_existing_list(self) -> None:
+        """add_courses appends to existing courses instead of replacing them."""
+        cache = CacheManager()
+        cache.set_courses([_make_course("Physics 1", "83102")])
+
+        cache.add_courses([_make_course("Calculus 1", "83112")])
+
+        result = cache.get_courses()
+        self.assertEqual(len(result), 2)
+        self.assertEqual(result[0].name, "Physics 1")
+        self.assertEqual(result[1].name, "Calculus 1")
+
+    def test_add_exam_periods_extends_existing_list(self) -> None:
+        """add_exam_periods appends to existing periods instead of replacing."""
+        cache = CacheManager()
+        cache.set_exam_periods([_make_exam_period("FALL", "Aleph")])
+
+        cache.add_exam_periods([_make_exam_period("SPRI", "Bet")])
+
+        result = cache.get_exam_periods()
+        self.assertEqual(len(result), 2)
+        self.assertEqual(result[0].semester, "FALL")
+        self.assertEqual(result[1].semester, "SPRI")
+
+    def test_add_selected_programs_extends_existing_list(self) -> None:
+        """add_selected_programs appends new programs to existing ones."""
+        cache = CacheManager()
+        cache.set_selected_programs(["83101"])
+
+        cache.add_selected_programs(["83108"])
+
+        self.assertEqual(cache.get_selected_programs(), ["83101", "83108"])
+
+    def test_add_generated_schedules_extends_existing_list(self) -> None:
+        """add_generated_schedules appends to existing schedules."""
+        cache = CacheManager()
+        cache.set_generated_schedules([_make_exam_system()])
+
+        cache.add_generated_schedules([_make_exam_system()])
+
+        self.assertEqual(len(cache.get_generated_schedules()), 2)
+
+    def test_add_courses_to_empty_cache(self) -> None:
+        """add_courses works correctly when the courses list starts empty."""
+        cache = CacheManager()
+
+        cache.add_courses([_make_course("New Course", "55555")])
+
+        result = cache.get_courses()
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0].name, "New Course")
+
+    def test_add_courses_persists_to_pkl(self) -> None:
+        """add_courses must create/update the pkl file on disk."""
+        cache = CacheManager()
+        self.assertFalse(CacheManager._PKL_PATH.exists())
+
+        cache.add_courses([_make_course()])
+
+        self.assertTrue(CacheManager._PKL_PATH.exists())
+
+    def test_add_courses_round_trip(self) -> None:
+        """Incrementally added courses survive a full pickle round-trip."""
+        first = CacheManager()
+        first.set_courses([_make_course("Course A", "11111")])
+        first.add_courses([_make_course("Course B", "22222")])
+
+        second = CacheManager()
+
+        result = second.get_courses()
+        self.assertEqual(len(result), 2)
+        self.assertEqual(result[0].name, "Course A")
+        self.assertEqual(result[1].name, "Course B")
+
+    def test_add_selected_programs_deduplicates(self) -> None:
+        """Adding a program number that already exists must not create a duplicate."""
+        cache = CacheManager()
+        cache.set_selected_programs(["83101"])
+
+        cache.add_selected_programs(["83101", "83108"])
+
+        self.assertEqual(cache.get_selected_programs(), ["83101", "83108"])
+
+    def test_add_then_set_replaces_all_added_items(self) -> None:
+        """Calling set_courses after add_courses discards all previously added items."""
+        cache = CacheManager()
+        cache.add_courses([_make_course("Old A", "11111")])
+        cache.add_courses([_make_course("Old B", "22222")])
+
+        cache.set_courses([_make_course("Fresh", "99999")])
+
+        result = cache.get_courses()
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0].name, "Fresh")
+
+    def test_set_then_add_appends_to_override(self) -> None:
+        """add_courses after set_courses appends to the overridden list."""
+        cache = CacheManager()
+        cache.set_courses([_make_course("Base", "11111")])
+
+        cache.add_courses([_make_course("Extra", "22222")])
+
+        result = cache.get_courses()
+        self.assertEqual(len(result), 2)
+        self.assertEqual(result[0].name, "Base")
+        self.assertEqual(result[1].name, "Extra")
+
+
+class TestCacheManagerPerFieldInvalidation(_CacheManagerTestBase):
+    """Verify invalidate_* methods clear one field while leaving others intact."""
+
+    def _fill_all_fields(self, cache: CacheManager) -> None:
+        """Helper: populate all four fields with one item each."""
+        cache.set_courses([_make_course()])
+        cache.set_exam_periods([_make_exam_period()])
+        cache.set_selected_programs(["83101"])
+        cache.set_generated_schedules([_make_exam_system()])
+
+    def test_invalidate_courses_clears_only_courses(self) -> None:
+        """invalidate_courses empties courses but leaves other fields intact."""
+        cache = CacheManager()
+        self._fill_all_fields(cache)
+
+        cache.invalidate_courses()
+
+        self.assertEqual(cache.get_courses(), [])
+        self.assertEqual(len(cache.get_exam_periods()), 1)
+        self.assertEqual(cache.get_selected_programs(), ["83101"])
+        self.assertEqual(len(cache.get_generated_schedules()), 1)
+
+    def test_invalidate_exam_periods_clears_only_exam_periods(self) -> None:
+        """invalidate_exam_periods empties periods but leaves other fields intact."""
+        cache = CacheManager()
+        self._fill_all_fields(cache)
+
+        cache.invalidate_exam_periods()
+
+        self.assertEqual(len(cache.get_courses()), 1)
+        self.assertEqual(cache.get_exam_periods(), [])
+        self.assertEqual(cache.get_selected_programs(), ["83101"])
+        self.assertEqual(len(cache.get_generated_schedules()), 1)
+
+    def test_invalidate_selected_programs_clears_only_programs(self) -> None:
+        """invalidate_selected_programs empties programs but leaves other fields."""
+        cache = CacheManager()
+        self._fill_all_fields(cache)
+
+        cache.invalidate_selected_programs()
+
+        self.assertEqual(len(cache.get_courses()), 1)
+        self.assertEqual(len(cache.get_exam_periods()), 1)
+        self.assertEqual(cache.get_selected_programs(), [])
+        self.assertEqual(len(cache.get_generated_schedules()), 1)
+
+    def test_invalidate_generated_schedules_clears_only_schedules(self) -> None:
+        """invalidate_generated_schedules empties schedules but leaves other fields."""
+        cache = CacheManager()
+        self._fill_all_fields(cache)
+
+        cache.invalidate_generated_schedules()
+
+        self.assertEqual(len(cache.get_courses()), 1)
+        self.assertEqual(len(cache.get_exam_periods()), 1)
+        self.assertEqual(cache.get_selected_programs(), ["83101"])
+        self.assertEqual(cache.get_generated_schedules(), [])
+
+    def test_invalidate_courses_persists_change_to_disk(self) -> None:
+        """invalidate_courses must update the pkl file, not delete it."""
+        cache = CacheManager()
+        self._fill_all_fields(cache)
+        self.assertTrue(CacheManager._PKL_PATH.exists())
+
+        cache.invalidate_courses()
+
+        # File must still exist (partial state is persisted, not deleted).
+        self.assertTrue(CacheManager._PKL_PATH.exists())
+
+    def test_invalidate_then_reload_sees_empty_field(self) -> None:
+        """A new instance created after invalidation sees the cleared field as empty."""
+        first = CacheManager()
+        self._fill_all_fields(first)
+        first.invalidate_courses()
+
+        second = CacheManager()
+
+        self.assertEqual(second.get_courses(), [])
+
+    def test_invalidate_then_reload_keeps_other_fields(self) -> None:
+        """A new instance created after invalidation still has the untouched fields."""
+        first = CacheManager()
+        self._fill_all_fields(first)
+        first.invalidate_courses()
+
+        second = CacheManager()
+
+        self.assertEqual(len(second.get_exam_periods()), 1)
+        self.assertEqual(second.get_selected_programs(), ["83101"])
+        self.assertEqual(len(second.get_generated_schedules()), 1)
+
+    def test_invalidate_all_fields_individually_leaves_empty_pkl(self) -> None:
+        """
+        Four sequential invalidate_* calls leave the pkl file present but empty.
+
+        This is the key difference from clear(): the file survives (with an
+        all-empty payload) instead of being deleted.
+        """
+        cache = CacheManager()
+        self._fill_all_fields(cache)
+
+        cache.invalidate_courses()
+        cache.invalidate_exam_periods()
+        cache.invalidate_selected_programs()
+        cache.invalidate_generated_schedules()
+
+        # File must still exist — unlike clear() which deletes it.
+        self.assertTrue(CacheManager._PKL_PATH.exists())
+
+        # All fields must be empty.
+        self.assertEqual(cache.get_courses(), [])
+        self.assertEqual(cache.get_exam_periods(), [])
+        self.assertEqual(cache.get_selected_programs(), [])
+        self.assertEqual(cache.get_generated_schedules(), [])
+
+
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
