@@ -25,6 +25,7 @@ from typing import TYPE_CHECKING
 
 from application.commands import (
     CommandResult,
+    EditPeriodCommand,
     RegenerateSchedulesCommand,
     ToggleDateExceptionCommand,
 )
@@ -147,6 +148,40 @@ class DateManagementPresenter:
         result = command.execute()
         # Regeneration does not support undo; clear last command.
         self._last_command = None
+        return result
+
+    def on_edit_period(self, new_start_date: date, new_end_date: date) -> CommandResult:
+        """
+        Edit the scheduling window (start/end dates) of the active exam period.
+
+        Builds an ``EditPeriodCommand``, executes it, and stores it for
+        potential undo when the edit succeeds.  The returned
+        ``CommandResult.data`` contains the updated ``list[date]`` of valid
+        dates so the View can redraw the calendar immediately.
+
+        Parameters
+        ----------
+        new_start_date:
+            The requested new start date for the period.
+        new_end_date:
+            The requested new end date for the period.
+
+        Returns
+        -------
+        CommandResult
+            ``success=False`` (period unchanged) if the new range is inverted.
+        """
+        command = EditPeriodCommand(
+            self._exam_period,
+            self._date_handler,
+            new_start_date,
+            new_end_date,
+        )
+        result = command.execute()
+        # Only store the command when the edit was applied, so undo is always
+        # meaningful (a rejected inverted-range edit has no state to reverse).
+        if result.success:
+            self._last_command = command
         return result
 
     def undo_last(self) -> CommandResult:
