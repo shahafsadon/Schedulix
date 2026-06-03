@@ -362,3 +362,133 @@ class RegenerateSchedulesCommand(Command):
                 success=False,
                 message=f"Schedule regeneration failed: {exc}",
             )
+# ---------------------------------------------------------------------------
+# Semester-period editing command
+# ---------------------------------------------------------------------------
+
+class EditPeriodCommand(Command):
+    """
+    Edit the start and/or end date of an exam period.
+
+    The Date Management screen (SCRUM-124) lets the user adjust the scheduling
+    window of an ``ExamPeriod`` directly in the GUI.  This command wraps that
+    mutation so it stays consistent with the rest of the calendar actions: it
+    is created by the Presenter (the Invoker), it returns a ``CommandResult``
+    carrying the refreshed valid-date list, and it supports one-step ``undo``.
+
+    Validation
+    ----------
+    The command rejects an inverted range (start after end) by returning a
+    ``success=False`` result, mirroring the guard already enforced by
+    ``ExamDateHandler.generate_dates``.  This keeps the failure inside the
+    command/result envelope instead of letting a ``ValueError`` escape into
+    the View.
+
+    Excluded dates
+    --------------
+    Excluded dates are intentionally left untouched when the window changes.
+    ``ExamDateHandler`` already ignores any excluded date that falls outside
+    the active range, so an exclusion that lands outside the new window is
+    harmless and simply becomes inactive — no silent purging is performed.
+
+    Undo
+    ----
+    ``undo()`` restores the exact ``start_date``/``end_date`` captured before
+    ``execute()`` ran, allowing the Presenter to offer a one-step revert just
+    like the date-toggle commands.
+
+    Parameters
+    ----------
+    exam_period:
+        The ``ExamPeriod`` whose scheduling window will be edited.
+    date_handler:
+        An ``ExamDateHandler`` instance used to recompute valid dates after
+        the edit so the View can redraw the calendar.
+    new_start_date:
+        The requested new ``start_date`` for the period.
+    new_end_date:
+        The requested new ``end_date`` for the period.
+    """
+
+    def __init__(
+        self,
+        exam_period,
+        date_handler,
+        new_start_date: date,
+        new_end_date: date,
+    ) -> None:
+        self._exam_period = exam_period
+        self._date_handler = date_handler
+        self._new_start_date = new_start_date
+        self._new_end_date = new_end_date
+        # Snapshots captured at execute-time so undo() can restore them.
+        self._previous_start_date: date | None = None
+        self._previous_end_date: date | None = None
+        # Tracks whether execute() actually applied the change, so a failed or
+        # un-run command never tries to undo a mutation that never happened.
+        self._did_edit: bool = False
+
+    def execute(self) -> CommandResult:
+        """
+        Apply the new start/end dates to the exam period.
+
+        Returns
+        -------
+        CommandResult
+            ``success=True`` with the updated ``list[date]`` of valid dates in
+            ``data``.  Returns ``success=False`` (and leaves the period
+            unchanged) if ``new_start_date`` is after ``new_end_date``.
+        """
+        # Reject an inverted window up front; the period is left untouched.
+        if self._new_start_date > self._new_end_date:
+            return CommandResult(
+                success=False,
+                message="Period start date cannot be after end date.",
+            )
+
+        # Capture the current window before overwriting it, so undo() can
+        # restore the exact previous values.
+        self._previous_start_date = self._exam_period.start_date
+        self._previous_end_date = self._exam_period.end_date
+
+        self._exam_period.start_date = self._new_start_date
+        self._exam_period.end_date = self._new_end_date
+        self._did_edit = True
+
+        valid_dates = self._date_handler.get_valid_dates(self._exam_period)
+        return CommandResult(
+            success=True,
+            message=(
+                f"Exam period updated to "
+                f"{self._new_start_date}–{self._new_end_date}."
+            ),
+            data=valid_dates,
+        )
+
+    def undo(self) -> CommandResult:
+        """
+        Restore the start/end dates captured before ``execute()`` ran.
+
+        Returns
+        -------
+        CommandResult
+            ``success=True`` with the refreshed valid-date list in ``data``.
+            Returns ``success=False`` if the command was never executed (or
+            its execution failed), so there is nothing to revert.
+        """
+        if not self._did_edit:
+            return CommandResult(
+                success=False,
+                message="EditPeriodCommand: nothing to undo (edit was not applied).",
+            )
+
+        self._exam_period.start_date = self._previous_start_date
+        self._exam_period.end_date = self._previous_end_date
+        self._did_edit = False
+
+        valid_dates = self._date_handler.get_valid_dates(self._exam_period)
+        return CommandResult(
+            success=True,
+            message="Exam period edit reversed.",
+            data=valid_dates,
+        )
