@@ -14,6 +14,7 @@ from pathlib import Path
 from time import monotonic, sleep
 from types import ModuleType
 from unittest.mock import MagicMock, patch
+from gui.uploadedDataPresenter import UploadedDataSnapshot, UploadedDataMetadata
 
 from application.async_runner import AsyncScheduleRunner, LoadingState
 from fileReader.baseFileReader import FileReaderType
@@ -204,7 +205,6 @@ def test_invalid_upload_shows_red_feedback_without_marking_screen_ready(
     # data_presenter and preview_textbox were added in SCRUM-119; stub them so
     # _display_result can call _refresh_preview without a real Tk display.
     screen.data_presenter = MagicMock()
-    from gui.uploadedDataPresenter import UploadedDataSnapshot, UploadedDataMetadata
     _empty_meta = UploadedDataMetadata(0, 0, 0, 0, 0, 0, {}, False)
     screen.data_presenter.refresh.return_value = UploadedDataSnapshot([], [], [], _empty_meta)
     screen.preview_textbox = MagicMock()

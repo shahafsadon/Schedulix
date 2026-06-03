@@ -20,6 +20,7 @@ from gui.programSelectionPresenter import ProgramSelectionPresenter
 from gui.schedulingPresenter import SchedulingPresenter
 from gui.uploadService import FileUploadService
 from output.outputWriter import OutputWriter
+from gui.uploadedDataPresenter import UploadedDataSnapshot, UploadedDataMetadata
 
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -116,7 +117,6 @@ def test_upload_screen_feedback_becomes_ready_only_after_all_files_are_loaded(
     # data_presenter and preview_textbox were added in SCRUM-119; stub them so
     # _display_result can call _refresh_preview without a real Tk display.
     screen.data_presenter = MagicMock()
-    from gui.uploadedDataPresenter import UploadedDataSnapshot, UploadedDataMetadata
     _empty_meta = UploadedDataMetadata(0, 0, 0, 0, 0, 0, {}, False)
     screen.data_presenter.refresh.return_value = UploadedDataSnapshot([], [], [], _empty_meta)
     screen.preview_textbox = MagicMock()
