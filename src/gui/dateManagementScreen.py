@@ -223,8 +223,8 @@ class DateManagementScreen(ctk.CTkFrame):
         # Draw every month spanned by the active window. The presenter exposes
         # the valid dates, but we draw full months (start..end) so the user sees
         # the days they can toggle in their normal calendar context.
-        start = self.presenter._exam_period.start_date
-        end = self.presenter._exam_period.end_date
+        start = self.presenter.current_period().start_date
+        end = self.presenter.current_period().end_date
         for (year, month) in self._months_between(start, end):
             self._build_month(year, month, start, end)
 
@@ -398,7 +398,7 @@ class DateManagementScreen(ctk.CTkFrame):
 
     def _sync_entries_from_period(self) -> None:
         """Fill the start/end entry fields with the period's current window."""
-        period = self.presenter._exam_period
+        period = self.presenter.current_period()
         self._start_entry.delete(0, "end")
         self._start_entry.insert(0, period.start_date.strftime(_DATE_FORMAT))
         self._end_entry.delete(0, "end")
