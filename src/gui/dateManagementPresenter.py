@@ -6,8 +6,9 @@ Presenter (Invoker) for the Date Management screen (SCRUM-114).
 Following the passive MVP pattern, this presenter:
 * Holds references to the current ``ExamPeriod``, an ``ExamDateHandler``,
   an optional ``ExamScheduleGenerator``, and a ``CacheManager``.
-* Exposes ``on_date_clicked(d)`` and ``on_regenerate()`` as the public
-  interface for the passive View to call on user interaction.
+* Exposes ``on_date_clicked(d)``, ``on_regenerate()``, and
+  ``on_regenerate_async(...)`` as the public interface for the passive View to
+  call on user interaction.
 * Instantiates the appropriate ``Command`` objects, executes them, and
   keeps the most recently executed command for one-step undo support.
 
@@ -21,7 +22,7 @@ No Version 1.0 source files are modified by this module.
 from __future__ import annotations
 
 from datetime import date
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Callable
 
 from application.commands import (
     CommandResult,
@@ -33,6 +34,7 @@ if TYPE_CHECKING:
     # Import only for type-checking so that the module stays importable in
     # environments where scheduling or application packages are not on sys.path.
     from application.cache_manager import CacheManager
+    from application.async_runner import AsyncScheduleRunner
     from scheduling.examDateHandler import ExamDateHandler
     from scheduling.examScheduleGenerator import ExamScheduleGenerator
     from models import Course, ExamPeriod
@@ -45,7 +47,8 @@ class DateManagementPresenter:
     The presenter is the single point of contact between the passive View and
     the Command objects.  The View calls ``on_date_clicked`` and
     ``on_regenerate``; the presenter instantiates and executes the matching
-    command, then returns a ``CommandResult`` for the View to render.
+    command, then returns a ``CommandResult`` or dispatch status for the View
+    to render.
 
     Parameters
     ----------
@@ -148,6 +151,53 @@ class DateManagementPresenter:
         # Regeneration does not support undo; clear last command.
         self._last_command = None
         return result
+
+    def on_regenerate_async(
+        self,
+        runner: "AsyncScheduleRunner",
+        on_started: Callable[[], None] | None = None,
+        on_complete: Callable[[Any], None] | None = None,
+        on_error: Callable[[Exception], None] | None = None,
+    ) -> bool:
+        """
+        Recompute exam schedules on a background runner.
+
+        The heavy generation work is wrapped in a task closure and delegated to
+        ``AsyncScheduleRunner`` so the GUI event loop can remain responsive.
+        The task reuses ``RegenerateSchedulesCommand``, keeping cache writes and
+        error handling consistent with the synchronous ``on_regenerate`` path.
+
+        Returns
+        -------
+        bool
+            ``True`` when the runner accepted the task, ``False`` when no
+            generator exists or when the runner debounced a duplicate request.
+        """
+        if self._generator is None:
+            error = RuntimeError("No schedule generator available; cannot regenerate.")
+            if on_error is not None:
+                on_error(error)
+            return False
+
+        def task() -> Any:
+            command = RegenerateSchedulesCommand(
+                self._generator,
+                self._cache,
+                self._courses,
+                self._exam_periods,
+            )
+            result = command.execute()
+            self._last_command = None
+            if not result.success:
+                raise RuntimeError(result.message)
+            return result.data
+
+        return runner.run(
+            task=task,
+            on_started=on_started,
+            on_complete=on_complete,
+            on_error=on_error,
+        )
 
     def undo_last(self) -> CommandResult:
         """

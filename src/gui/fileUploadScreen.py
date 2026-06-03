@@ -10,15 +10,16 @@ except ModuleNotFoundError as error:
     ) from error
 
 from fileReader.baseFileReader import FileReaderType
-from gui.uploadService import FileUploadService, UploadResult
+from gui.uploadService import FileUploadService, UploadMode, UploadResult
 
 
 class FileUploadScreen(ctk.CTkFrame):
     """
     File upload screen for the Version 2.0 GUI workflow.
 
-    The screen lets the user choose the three required input files, validates
-    them through the existing readers, and displays upload feedback.
+    The screen lets the user choose the three required input files, either
+    replace or append each dataset, validates files through the existing
+    readers, and displays upload feedback.
     """
 
     def __init__(
@@ -47,7 +48,7 @@ class FileUploadScreen(ctk.CTkFrame):
             text="Load Input Files",
             font=("Segoe UI", 16, "bold"),
         )
-        title.grid(row=0, column=0, columnspan=3, sticky="w", padx=16, pady=(16, 12))
+        title.grid(row=0, column=0, columnspan=4, sticky="w", padx=16, pady=(16, 12))
 
         rows = [
             (FileReaderType.COURSES, "Courses file"),
@@ -75,11 +76,25 @@ class FileUploadScreen(ctk.CTkFrame):
 
             ctk.CTkButton(
                 self,
-                text="Browse",
+                text="Replace",
                 # Bind the current file type so every button uploads to the
                 # correct reader instead of all buttons using the last row.
-                command=lambda current_type=file_type: self._browse(current_type),
+                command=lambda current_type=file_type: self._browse(
+                    current_type,
+                    UploadMode.REPLACE,
+                ),
             ).grid(row=row_index, column=2, sticky="e", padx=(12, 16), pady=6)
+
+            ctk.CTkButton(
+                self,
+                text="Append",
+                fg_color="transparent",
+                border_width=1,
+                command=lambda current_type=file_type: self._browse(
+                    current_type,
+                    UploadMode.APPEND,
+                ),
+            ).grid(row=row_index, column=3, sticky="e", padx=(0, 16), pady=6)
 
         # This label summarizes whether all required files are ready.
         self.ready_label = ctk.CTkLabel(
@@ -90,16 +105,16 @@ class FileUploadScreen(ctk.CTkFrame):
         self.ready_label.grid(
             row=4,
             column=0,
-            columnspan=3,
+            columnspan=4,
             sticky="w",
             padx=16,
             pady=(16, 16),
         )
 
-    def _browse(self, file_type: FileReaderType) -> None:
+    def _browse(self, file_type: FileReaderType, mode: UploadMode) -> None:
         # Open the system file picker and let the user select a local text file.
         filepath = filedialog.askopenfilename(
-            title="Choose input file",
+            title=f"Choose input file to {mode.value}",
             filetypes=(("Text files", "*.txt"), ("All files", "*.*")),
         )
 
@@ -108,7 +123,7 @@ class FileUploadScreen(ctk.CTkFrame):
             return
 
         # Delegate validation and parsing to the service, then show the result.
-        result = self.upload_service.upload(file_type, filepath)
+        result = self.upload_service.upload(file_type, filepath, mode)
         self._display_result(result)
 
     def _display_result(self, result: UploadResult) -> None:
@@ -119,7 +134,10 @@ class FileUploadScreen(ctk.CTkFrame):
             # Store the path for future screens and show a green success message.
             self.selected_paths[result.file_type] = result.path
             label.configure(
-                text=f"{result.path.name} - {result.item_count} item(s)",
+                text=(
+                    f"{result.mode.display_name}: {result.path.name} - "
+                    f"{result.item_count} item(s), {result.cached_count} total"
+                ),
                 text_color="#147A39",
             )
         else:

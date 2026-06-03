@@ -7,7 +7,9 @@ except ModuleNotFoundError as error:
         ".venv\\Scripts\\python.exe -m pip install -r requirements.txt"
     ) from error
 
+from application.cache_manager import CacheManager
 from gui.fileUploadScreen import FileUploadScreen
+from gui.uploadService import FileUploadService
 
 
 def main() -> None:
@@ -19,10 +21,15 @@ def main() -> None:
     # Create the root desktop window for the Version 2.0 GUI.
     root = ctk.CTk()
     root.title("Schedulix - File Upload")
-    root.geometry("760x320")
+    root.geometry("840x340")
+
+    # One shared cache instance is injected into the upload service so file
+    # replacements/appends update the same state later wizard screens consume.
+    cache = CacheManager()
+    upload_service = FileUploadService(cache_manager=cache)
 
     # Show the first workflow screen: loading and validating input files.
-    screen = FileUploadScreen(root)
+    screen = FileUploadScreen(root, upload_service=upload_service)
     screen.pack(fill="both", expand=True)
 
     # Start Tkinter's event loop so button clicks and file dialogs work.
