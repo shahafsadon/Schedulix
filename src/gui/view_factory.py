@@ -40,6 +40,10 @@ class ViewType(Enum):
     # Third wizard step: manage exam dates (exclude/activate days, edit window).
     DATE_MANAGEMENT = auto()
 
+    # Fourth wizard step: navigate and visualize generated exam schedules.
+    SCHEDULE_NAVIGATION = auto()
+
+
 
 class ViewFactory:
     """
@@ -120,6 +124,7 @@ class ViewFactory:
             ViewType.FILE_UPLOAD:    ("gui.fileUploadScreen",   "FileUploadScreen"),
             ViewType.PROGRAM_CONFIG: ("gui.programConfigScreen", "ProgramConfigScreen"),
             ViewType.DATE_MANAGEMENT: ("gui.dateManagementScreen", "DateManagementScreen"),
+            ViewType.SCHEDULE_NAVIGATION: ("gui.scheduleNavigationScreen", "ScheduleNavigationScreen"),
         }
 
         entry = _registry.get(view_type)
