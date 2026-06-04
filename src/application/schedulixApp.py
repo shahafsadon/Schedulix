@@ -1,31 +1,61 @@
 from dataclasses import dataclass
 from pathlib import Path
 
-from fileReader.baseFileReader import FileReaderFactory, FileReaderType
-from output.outputWriter import DEFAULT_OUTPUT_PATH, OutputWriter
-from scheduling.courseFilter import CourseFilter
-from scheduling.examScheduleGenerator import ExamScheduleGenerator
+from fileReader.baseFileReader import (
+    FileReaderFactory,
+    FileReaderType,
+)
+from output.outputWriter import (
+    DEFAULT_OUTPUT_PATH,
+    OutputWriter,
+)
+from scheduling.courseFilter import (
+    CourseFilter,
+)
+from scheduling.examScheduleGenerator import (
+    ExamScheduleGenerator,
+)
 
 
 # Project root is resolved from this file so PyCharm and terminal runs behave
 # the same even when their working directories are different.
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
+PROJECT_ROOT = (
+    Path(__file__)
+    .resolve()
+    .parents[2]
+)
 
 # Default input files for the simple Version 1.0 flow.
-DEFAULT_COURSES_PATH = PROJECT_ROOT / "data" / "examples" / "CourseExample.txt"
-DEFAULT_EXAM_PERIODS_PATH = PROJECT_ROOT / "data" / "examples" / "DatesExample.txt"
-DEFAULT_PROGRAMS_PATH = PROJECT_ROOT / "data" / "examples" / "ProgramsExample.txt"
-DEFAULT_APP_OUTPUT_PATH = PROJECT_ROOT / DEFAULT_OUTPUT_PATH
+DEFAULT_COURSES_PATH = (
+    PROJECT_ROOT
+    / "data"
+    / "examples"
+    / "CourseExample.txt"
+)
+
+DEFAULT_EXAM_PERIODS_PATH = (
+    PROJECT_ROOT
+    / "data"
+    / "examples"
+    / "DatesExample.txt"
+)
+
+DEFAULT_PROGRAMS_PATH = (
+    PROJECT_ROOT
+    / "data"
+    / "examples"
+    / "ProgramsExample.txt"
+)
+
+DEFAULT_APP_OUTPUT_PATH = (
+    PROJECT_ROOT
+    / DEFAULT_OUTPUT_PATH
+)
 
 
 @dataclass(frozen=True)
 class ApplicationResult:
-    """
-    Stores a short summary of one application run.
-
-    This helps main.py print clear information after the output file is written.
-    It also helps tests check that the full flow really worked.
-    """
+    """Stores a short summary of one completed application run."""
 
     selected_program_count: int
     total_course_count: int
@@ -36,12 +66,7 @@ class ApplicationResult:
 
 
 class SchedulixApp:
-    """
-    Runs the full application flow.
-
-    The class connects the project parts in order:
-    read input files, filter courses, generate schedules, and write output.
-    """
+    """Runs the complete file-based Version 1.0 application flow."""
 
     def __init__(
         self,
@@ -49,18 +74,20 @@ class SchedulixApp:
         schedule_generator: ExamScheduleGenerator | None = None,
         output_writer: OutputWriter | None = None,
     ) -> None:
-        """
-        Create the app with the services it needs.
+        self.course_filter = (
+            course_filter
+            or CourseFilter()
+        )
 
-        The parameters are optional so tests can replace services if needed.
-        In the regular run, the default project services are used.
-        """
-        # Use the real course filter unless another one was provided.
-        self.course_filter = course_filter or CourseFilter()
-        # Use the real schedule generator unless another one was provided.
-        self.schedule_generator = schedule_generator or ExamScheduleGenerator()
-        # Use the real output writer unless another one was provided.
-        self.output_writer = output_writer or OutputWriter()
+        self.schedule_generator = (
+            schedule_generator
+            or ExamScheduleGenerator()
+        )
+
+        self.output_writer = (
+            output_writer
+            or OutputWriter()
+        )
 
     def run(
         self,
@@ -70,38 +97,86 @@ class SchedulixApp:
         output_path: str | Path = DEFAULT_APP_OUTPUT_PATH,
     ) -> ApplicationResult:
         """
-        Run the full flow from input files to output file.
+        Read input files, generate schedules lazily, and stream the output.
         """
-        # Read the selected program numbers.
-        programs_reader = FileReaderFactory.get_reader(FileReaderType.PROGRAMS)
-        selected_programs = programs_reader.read(programs_path)
-        # Read all courses from the courses file.
-        courses_reader = FileReaderFactory.get_reader(FileReaderType.COURSES)
-        courses = courses_reader.read(courses_path)
-        # Read all exam periods and excluded dates.
-        periods_reader = FileReaderFactory.get_reader(FileReaderType.EXAM_PERIODS)
-        exam_periods = periods_reader.read(exam_periods_path)
-
-        # Keep only courses that belong to selected programs and use Exam.
-        relevant_courses = self.course_filter.filter_relevant_courses(
-            courses,
-            selected_programs,
-        )
-        # Generate complete exam-system options for the relevant courses.
-        schedules = self.schedule_generator.generate_exam_systems(
-            relevant_courses,
-            exam_periods,
+        programs_reader = (
+            FileReaderFactory.get_reader(
+                FileReaderType.PROGRAMS
+            )
         )
 
-        # Write the generated schedules to the output file.
-        created_output_path = self.output_writer.write(schedules, output_path)
+        selected_programs = (
+            programs_reader.read(
+                programs_path
+            )
+        )
 
-        # Return a small summary of the completed run.
+        courses_reader = (
+            FileReaderFactory.get_reader(
+                FileReaderType.COURSES
+            )
+        )
+
+        courses = (
+            courses_reader.read(
+                courses_path
+            )
+        )
+
+        periods_reader = (
+            FileReaderFactory.get_reader(
+                FileReaderType.EXAM_PERIODS
+            )
+        )
+
+        exam_periods = (
+            periods_reader.read(
+                exam_periods_path
+            )
+        )
+
+        relevant_courses = (
+            self.course_filter.filter_relevant_courses(
+                courses,
+                selected_programs,
+            )
+        )
+
+        # Do not call generate_exam_systems() here.
+        #
+        # That compatibility method deliberately returns a list and would
+        # retain the complete Cartesian product. The iterator allows the
+        # writer to consume one system at a time and write it directly to disk.
+        schedules = (
+            self.schedule_generator.iter_exam_systems(
+                relevant_courses,
+                exam_periods,
+            )
+        )
+
+        (
+            created_output_path,
+            schedule_count,
+        ) = (
+            self.output_writer.write_with_count(
+                schedules,
+                output_path,
+            )
+        )
+
         return ApplicationResult(
-            selected_program_count=len(selected_programs),
-            total_course_count=len(courses),
-            relevant_course_count=len(relevant_courses),
-            exam_period_count=len(exam_periods),
-            schedule_count=len(schedules),
+            selected_program_count=len(
+                selected_programs
+            ),
+            total_course_count=len(
+                courses
+            ),
+            relevant_course_count=len(
+                relevant_courses
+            ),
+            exam_period_count=len(
+                exam_periods
+            ),
+            schedule_count=schedule_count,
             output_path=created_output_path,
         )

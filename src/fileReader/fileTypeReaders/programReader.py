@@ -1,9 +1,8 @@
 from fileReader.baseFileReader import BaseFileReader
 
-# Maximum number of selected programs supported in version 1.0.
+
 MAX_PROGRAMS = 5
 
-# Study programs supported by the requirements document.
 VALID_PROGRAMS = {
     "83101",
     "83102",
@@ -19,30 +18,45 @@ VALID_PROGRAMS = {
 
 
 class ProgramsFileReader(BaseFileReader[list[str]]):
-    """
-    Reads the selected programs input file.
+    """Reads the comma-separated selected-programs file."""
 
-    The file contains program numbers separated by commas.
-    """
+    def parse(
+        self,
+        content: str,
+    ) -> list[str]:
+        programs = [
+            part.strip()
+            for part in content.split(",")
+            if part.strip()
+        ]
 
-    def parse(self, content: str) -> list[str]:
-        """
-        Parse the selected program numbers from the file content.
-        """
-        # Split by comma, remove surrounding spaces, and ignore empty values.
-        programs = [p.strip() for p in content.split(",") if p.strip()]
-
-        if len(programs) > MAX_PROGRAMS:
+        if not programs:
             raise ValueError(
-                f"Program file contains {len(programs)} programs; "
-                f"maximum allowed is {MAX_PROGRAMS}."
+                "Programs file must select at least one program."
             )
+
+        unique_programs: list[str] = []
+        seen: set[str] = set()
 
         for program in programs:
             if not program.isdigit() or len(program) != 5:
-                raise ValueError(f"Invalid program number: '{program}'")
+                raise ValueError(
+                    f"Invalid program number: '{program}'"
+                )
 
             if program not in VALID_PROGRAMS:
-                raise ValueError(f"Unsupported program number: '{program}'")
+                raise ValueError(
+                    f"Unsupported program number: '{program}'"
+                )
 
-        return programs
+            if program not in seen:
+                unique_programs.append(program)
+                seen.add(program)
+
+        if len(unique_programs) > MAX_PROGRAMS:
+            raise ValueError(
+                f"Program file contains {len(unique_programs)} "
+                f"distinct programs; maximum allowed is {MAX_PROGRAMS}."
+            )
+
+        return unique_programs
