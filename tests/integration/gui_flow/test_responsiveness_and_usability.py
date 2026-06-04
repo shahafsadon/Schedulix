@@ -201,6 +201,13 @@ def test_invalid_upload_shows_red_feedback_without_marking_screen_ready(
     screen = object.__new__(FileUploadScreen)
     screen.upload_service = FileUploadService()
     screen.selected_paths = {}
+    # data_presenter and preview_textbox were added in SCRUM-119; stub them so
+    # _display_result can call _refresh_preview without a real Tk display.
+    screen.data_presenter = MagicMock()
+    from gui.uploadedDataPresenter import UploadedDataSnapshot, UploadedDataMetadata
+    _empty_meta = UploadedDataMetadata(0, 0, 0, 0, 0, 0, {}, False)
+    screen.data_presenter.refresh.return_value = UploadedDataSnapshot([], [], [], _empty_meta)
+    screen.preview_textbox = MagicMock()
 
     screen.status_labels = {
         FileReaderType.COURSES: _FakeWidget(),

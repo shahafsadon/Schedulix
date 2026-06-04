@@ -6,9 +6,9 @@ Presenter (Invoker) for the Date Management screen (SCRUM-114).
 Following the passive MVP pattern, this presenter:
 * Holds references to the current ``ExamPeriod``, an ``ExamDateHandler``,
   an optional ``ExamScheduleGenerator``, and a ``CacheManager``.
-* Exposes ``on_date_clicked(d)``, ``on_regenerate()``, and
-  ``on_regenerate_async(...)`` as the public interface for the passive View to
-  call on user interaction.
+* Exposes ``on_date_clicked(d)``, ``on_regenerate()``,
+  ``on_regenerate_async(...)``, and ``on_edit_period(...)`` as the public
+  interface for the passive View to call on user interaction.
 * Instantiates the appropriate ``Command`` objects, executes them, and
   keeps the most recently executed command for one-step undo support.
 
@@ -26,6 +26,7 @@ from typing import TYPE_CHECKING, Any, Callable
 
 from application.commands import (
     CommandResult,
+    EditPeriodCommand,
     RegenerateSchedulesCommand,
     ToggleDateExceptionCommand,
 )
@@ -45,10 +46,10 @@ class DateManagementPresenter:
     Invoker for date-management commands; drives the Date Management View.
 
     The presenter is the single point of contact between the passive View and
-    the Command objects.  The View calls ``on_date_clicked`` and
-    ``on_regenerate``; the presenter instantiates and executes the matching
-    command, then returns a ``CommandResult`` or dispatch status for the View
-    to render.
+    the Command objects.  The View calls ``on_date_clicked``,
+    ``on_regenerate``, ``on_regenerate_async``, and ``on_edit_period``; the
+    presenter instantiates and executes the matching command, then returns a
+    ``CommandResult`` or dispatch status for the View to render.
 
     Parameters
     ----------
@@ -199,9 +200,43 @@ class DateManagementPresenter:
             on_error=on_error,
         )
 
+    def on_edit_period(self, new_start_date: date, new_end_date: date) -> CommandResult:
+        """
+        Edit the scheduling window (start/end dates) of the active exam period.
+
+        Builds an ``EditPeriodCommand``, executes it, and stores it for
+        potential undo when the edit succeeds.  The returned
+        ``CommandResult.data`` contains the updated ``list[date]`` of valid
+        dates so the View can redraw the calendar immediately.
+
+        Parameters
+        ----------
+        new_start_date:
+            The requested new start date for the period.
+        new_end_date:
+            The requested new end date for the period.
+
+        Returns
+        -------
+        CommandResult
+            ``success=False`` (period unchanged) if the new range is inverted.
+        """
+        command = EditPeriodCommand(
+            self._exam_period,
+            self._date_handler,
+            new_start_date,
+            new_end_date,
+        )
+        result = command.execute()
+        # Only store the command when the edit was applied, so undo is always
+        # meaningful (a rejected inverted-range edit has no state to reverse).
+        if result.success:
+            self._last_command = command
+        return result
+
     def undo_last(self) -> CommandResult:
         """
-        Reverse the most recently executed date-toggle command.
+        Reverse the most recently executed date-toggle or period-edit command.
 
         Returns
         -------
@@ -222,6 +257,20 @@ class DateManagementPresenter:
     # ------------------------------------------------------------------
     # Read-only queries for the View
     # ------------------------------------------------------------------
+
+    def current_period(self):
+        """
+        Return the active ``ExamPeriod`` instance being edited.
+
+        Exposed as a public getter so Views can read period attributes
+        (``start_date``, ``end_date``) without accessing a private attribute.
+
+        Returns
+        -------
+        ExamPeriod
+            The exam period currently managed by this presenter.
+        """
+        return self._exam_period
 
     def get_valid_dates(self) -> list[date]:
         """Return the current list of valid exam dates for the active period."""

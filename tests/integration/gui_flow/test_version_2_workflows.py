@@ -11,7 +11,7 @@ import importlib
 import sys
 from pathlib import Path
 from types import ModuleType
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from application.cache_manager import CacheManager
 from fileReader.baseFileReader import FileReaderType
@@ -113,6 +113,13 @@ def test_upload_screen_feedback_becomes_ready_only_after_all_files_are_loaded(
     screen = object.__new__(FileUploadScreen)
     screen.upload_service = FileUploadService()
     screen.selected_paths = {}
+    # data_presenter and preview_textbox were added in SCRUM-119; stub them so
+    # _display_result can call _refresh_preview without a real Tk display.
+    screen.data_presenter = MagicMock()
+    from gui.uploadedDataPresenter import UploadedDataSnapshot, UploadedDataMetadata
+    _empty_meta = UploadedDataMetadata(0, 0, 0, 0, 0, 0, {}, False)
+    screen.data_presenter.refresh.return_value = UploadedDataSnapshot([], [], [], _empty_meta)
+    screen.preview_textbox = MagicMock()
     screen.status_labels = {
         FileReaderType.COURSES: _FakeLabel(),
         FileReaderType.PROGRAMS: _FakeLabel(),

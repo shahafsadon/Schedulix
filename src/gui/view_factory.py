@@ -37,6 +37,9 @@ class ViewType(Enum):
     # Second wizard step: select study programs and inspect their course lists.
     PROGRAM_CONFIG = auto()
 
+    # Third wizard step: manage exam dates (exclude/activate days, edit window).
+    DATE_MANAGEMENT = auto()
+
 
 class ViewFactory:
     """
@@ -116,6 +119,7 @@ class ViewFactory:
         _registry: dict[ViewType, tuple[str, str]] = {
             ViewType.FILE_UPLOAD:    ("gui.fileUploadScreen",   "FileUploadScreen"),
             ViewType.PROGRAM_CONFIG: ("gui.programConfigScreen", "ProgramConfigScreen"),
+            ViewType.DATE_MANAGEMENT: ("gui.dateManagementScreen", "DateManagementScreen"),
         }
 
         entry = _registry.get(view_type)
