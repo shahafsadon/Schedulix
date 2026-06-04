@@ -20,6 +20,7 @@ neither generates nor filters anything. Export (Save) is SCRUM-127's scope.
 from __future__ import annotations
 
 import calendar
+from tkinter import filedialog
 from typing import Callable
 
 try:
@@ -30,6 +31,7 @@ except ModuleNotFoundError as error:
         "Install it with: .venv\\Scripts\\python.exe -m pip install -r requirements.txt"
     ) from error
 
+from gui.exportPresenter import ExportPresenter
 from gui.scheduleNavigationPresenter import ExamRow, ScheduleNavigationPresenter
 
 
@@ -52,6 +54,7 @@ class ScheduleNavigationScreen(ctk.CTkFrame):
         self,
         master,
         presenter: ScheduleNavigationPresenter,
+        export_presenter: ExportPresenter | None = None,
         on_back: Callable[[], None] | None = None,
     ) -> None:
         """Create the navigation screen.
@@ -59,10 +62,13 @@ class ScheduleNavigationScreen(ctk.CTkFrame):
         Args:
             master: the parent customTkinter container.
             presenter: owns the current-system index and builds the view model.
+            export_presenter: drives the Save action; when None, the Save button
+                is hidden (useful for standalone preview without the wizard).
             on_back: optional callback to return to the previous wizard step.
         """
         super().__init__(master, corner_radius=0)
         self.presenter = presenter
+        self._export_presenter = export_presenter
         self._on_back = on_back
 
         # Exam-day cells only, keyed by ISO date "YYYY-MM-DD". Regular days are
@@ -121,10 +127,52 @@ class ScheduleNavigationScreen(ctk.CTkFrame):
         )
         self._next_button.grid(row=0, column=3)
 
+        # Save button is only shown when an export presenter was injected, so
+        # the screen stays usable as a pure preview without the export wiring.
+        self._save_button = None
+        if self._export_presenter is not None:
+            self._save_button = ctk.CTkButton(
+                nav, text="Save System", width=120, command=self._handle_save
+            )
+            self._save_button.grid(row=0, column=4, padx=(8, 0))
+
+        # Status line under the nav row: shows the last export message.
+        self._status_label = ctk.CTkLabel(nav, text="", text_color="#666666")
+        self._status_label.grid(row=1, column=0, columnspan=5, sticky="w", pady=(6, 0))
+
     def _handle_next(self) -> None:
         """Advance to the next system and repaint the exam days."""
         self.presenter.next()
         self._refresh()
+
+    def _handle_save(self) -> None:
+        """Ask the user for a destination file then export the current system.
+
+        Opening the Save-As dialog is a customtkinter/tkinter concern, so it
+        belongs in the View. The chosen path (or None on cancel) is forwarded
+        to the presenter, which performs the actual export and returns a
+        display-ready result.
+        """
+        # asksaveasfilename returns "" when the user cancels; normalize to None
+        # so the presenter has a single "cancelled" signal to react to.
+        chosen = filedialog.asksaveasfilename(
+            parent=self.winfo_toplevel(),
+            title="Save Exam Schedule",
+            defaultextension=".txt",
+            initialfile="exam_schedules.txt",
+            filetypes=[("Text files", "*.txt"), ("All files", "*.*")],
+        )
+        result = self._export_presenter.export_current(chosen or None)
+
+        # Surface the outcome to the user. Color hint: green for success,
+        # grey for cancel, red for failure.
+        if result.success:
+            color = "#2e7d32"   # green
+        elif "cancelled" in result.message.lower():
+            color = "#666666"   # grey (cancellation is not an error)
+        else:
+            color = "#B00020"   # red
+        self._status_label.configure(text=result.message, text_color=color)
 
     def _handle_previous(self) -> None:
         """Go to the previous system and repaint the exam days."""
@@ -138,6 +186,8 @@ class ScheduleNavigationScreen(ctk.CTkFrame):
             self._counter_label.configure(text="No schedules to display.")
             self._prev_button.configure(state="disabled")
             self._next_button.configure(state="disabled")
+            if self._save_button is not None:
+                self._save_button.configure(state="disabled")
             return
 
         # Build the (relevant-months) grid once. The month list is computed
@@ -157,6 +207,9 @@ class ScheduleNavigationScreen(ctk.CTkFrame):
         self._next_button.configure(
             state="normal" if self.presenter.can_go_next() else "disabled"
         )
+        if self._save_button is not None:
+            # Save is always available when at least one schedule exists.
+            self._save_button.configure(state="normal")
 
     def _build_relevant_months_grid(self) -> None:
         """Draw only the months that contain an exam in any system."""

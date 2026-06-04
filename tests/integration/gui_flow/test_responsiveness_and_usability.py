@@ -16,7 +16,6 @@ from types import ModuleType
 from unittest.mock import MagicMock, patch
 from gui.uploadedDataPresenter import UploadedDataSnapshot, UploadedDataMetadata
 
-
 from application.async_runner import AsyncScheduleRunner, LoadingState
 from fileReader.baseFileReader import FileReaderType
 from gui.dateManagementPresenter import DateManagementPresenter

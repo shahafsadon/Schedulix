@@ -21,6 +21,7 @@ from gui.programSelectionPresenter import ProgramSelectionPresenter
 from gui.schedulingPresenter import SchedulingPresenter
 from gui.uploadService import FileUploadService
 from output.outputWriter import OutputWriter
+from gui.uploadedDataPresenter import UploadedDataSnapshot, UploadedDataMetadata
 
 
 ROOT = Path(__file__).resolve().parents[3]
