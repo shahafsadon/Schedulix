@@ -12,6 +12,7 @@ import sys
 from pathlib import Path
 from types import ModuleType
 from unittest.mock import MagicMock, patch
+from gui.uploadedDataPresenter import UploadedDataSnapshot, UploadedDataMetadata
 
 from application.cache_manager import CacheManager
 from fileReader.baseFileReader import FileReaderType
