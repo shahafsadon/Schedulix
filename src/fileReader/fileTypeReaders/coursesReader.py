@@ -1,82 +1,125 @@
 from fileReader.baseFileReader import BaseFileReader
 from models import Course, ProgramEnrollment
 
-# Marker used to separate course records inside the input file.
+
 SEPARATOR = "$$$$"
 
-# Allowed values according to the project input specification.
-VALID_YEARS = {1, 2, 3, 4}
-VALID_SEMESTERS = {"FALL", "SPRI", "SUMM"}
-VALID_STATUSES = {"Obligatory", "Elective"}
-VALID_EVALUATION_TYPES = {"Exam", "Project", "Attendance"}
+VALID_YEARS = {
+    1,
+    2,
+    3,
+    4,
+}
+
+VALID_SEMESTERS = {
+    "FALL",
+    "SPRI",
+    "SUMM",
+}
+
+VALID_STATUSES = {
+    "Obligatory",
+    "Elective",
+}
+
+VALID_EVALUATION_TYPES = {
+    "Exam",
+    "Project",
+    "Attendance",
+}
 
 
 class CoursesFileReader(BaseFileReader[list[Course]]):
-    """
-    Reads the courses input file and converts it into Course objects.
+    """Parses course records from the required format."""
 
-    Each course block contains:
-    - General course information
-    - One or more program enrollment rows
-    - Evaluation type
-    """
+    def parse(
+        self,
+        content: str,
+    ) -> list[Course]:
+        if not content.strip():
+            raise ValueError(
+                "Courses file is empty."
+            )
 
-    def parse(self, content: str) -> list[Course]:
-        """
-        Split the file into course blocks and parse each block separately.
-        """
-        blocks = content.split(SEPARATOR)
+        if not content.lstrip().startswith(SEPARATOR):
+            raise ValueError(
+                "Courses file must start each record with '$$$$'."
+            )
+
         courses: list[Course] = []
+        seen_course_numbers: set[str] = set()
 
-        for block in blocks:
-            block = block.strip()
-
-            # Skip the empty section before the first separator.
-            if not block:
+        for block in content.split(SEPARATOR):
+            if not block.strip():
                 continue
 
-            courses.append(self._parse_block(block))
+            course = self._parse_block(block)
+
+            if course.course_number in seen_course_numbers:
+                raise ValueError(
+                    f"Duplicate course number: '{course.course_number}'"
+                )
+
+            seen_course_numbers.add(
+                course.course_number
+            )
+
+            courses.append(course)
+
+        if not courses:
+            raise ValueError(
+                "Courses file does not contain any course records."
+            )
 
         return courses
 
-    def _parse_block(self, block: str) -> Course:
-        """
-        Parse a single course block into a Course object.
-        """
-        # Remove empty lines and surrounding whitespace.
-        lines = [ln.strip() for ln in block.splitlines() if ln.strip()]
+    def _parse_block(
+        self,
+        block: str,
+    ) -> Course:
+        lines = [
+            line.strip()
+            for line in block.splitlines()
+            if line.strip()
+        ]
 
-        # A valid block must contain at least:
-        # name, number, instructor, one enrollment row, and evaluation type.
-        if len(lines) < 4:
+        if len(lines) < 5:
             raise ValueError(
-                f"Malformed course block — expected at least 4 lines, "
-                f"got {len(lines)}:\n{block}"
+                "Malformed course block - expected name, number, "
+                "instructor, at least one enrollment, and evaluation "
+                f"type:\n{block}"
             )
 
-        # Fixed fields at the top of the block.
         name = lines[0]
         course_number = lines[1]
         instructor = lines[2]
-
-        if not course_number.isdigit() or len(course_number) != 5:
-            raise ValueError(f"Invalid course number: '{course_number}'")
-
-        # Last line defines how the course is evaluated.
         evaluation_type = lines[-1]
 
-        if evaluation_type not in VALID_EVALUATION_TYPES:
-            raise ValueError(f"Invalid evaluation type: '{evaluation_type}'")
-
-        # All middle rows describe program enrollments.
-        enrollment_lines = lines[3:-1]
-
-        if not enrollment_lines:
+        if not course_number.isdigit() or len(course_number) != 5:
             raise ValueError(
-                f"Course '{name}' ({course_number}) has no program enrollment lines."
+                f"Invalid course number: '{course_number}'"
             )
 
-        programs = [self._parse_enrollment(ln) for ln in enrollment_lines]
+        if evaluation_type not in VALID_EVALUATION_TYPES:
+            raise ValueError(
+                f"Invalid evaluation type: '{evaluation_type}'"
+            )
+
+        programs = [
+            self._parse_enrollment(line)
+            for line in lines[3:-1]
+        ]
+
+        keys = [
+            self._enrollment_key(program)
+            for program in programs
+        ]
+
+        if len(keys) != len(set(keys)):
+            raise ValueError(
+                f"Course '{course_number}' contains "
+                "a duplicate enrollment row."
+            )
 
         return Course(
             name=name,
@@ -87,48 +130,66 @@ class CoursesFileReader(BaseFileReader[list[Course]]):
         )
 
     @staticmethod
-    def _parse_enrollment(line: str) -> ProgramEnrollment:
-        """
-        Parse one enrollment row into a ProgramEnrollment object.
-
-        Expected format:
-            <program_number>,<year>,<semester>,<status>
-        """
-        parts = [p.strip() for p in line.split(",")]
+    def _parse_enrollment(
+        line: str,
+    ) -> ProgramEnrollment:
+        parts = [
+            part.strip()
+            for part in line.split(",")
+        ]
 
         if len(parts) != 4:
             raise ValueError(
-                f"Malformed enrollment line — expected 4 comma-separated fields, "
-                f"got {len(parts)}: '{line}'"
+                "Malformed enrollment line - expected 4 "
+                f"comma-separated fields, got {len(parts)}: '{line}'"
             )
 
-        program_number, year_str, semester, status = parts
+        program_number = parts[0]
+        year_text = parts[1]
+        semester = parts[2]
+        status = parts[3]
 
-        # Program numbers are expected to contain exactly five digits.
         if not program_number.isdigit() or len(program_number) != 5:
-            raise ValueError(f"Invalid program number: '{program_number}'")
-
-        # Convert the academic year into an integer value.
-        try:
-            year = int(year_str)
-        except ValueError:
             raise ValueError(
-                f"Non-integer year in enrollment line: '{year_str}' (full line: '{line}')"
+                f"Invalid program number: '{program_number}'"
             )
 
-        # Validate remaining enrollment fields.
+        try:
+            year = int(year_text)
+        except ValueError as error:
+            raise ValueError(
+                f"Non-integer year: '{year_text}'"
+            ) from error
+
         if year not in VALID_YEARS:
-            raise ValueError(f"Invalid year: {year}")
+            raise ValueError(
+                f"Invalid year: {year}"
+            )
 
         if semester not in VALID_SEMESTERS:
-            raise ValueError(f"Invalid semester: '{semester}'")
+            raise ValueError(
+                f"Invalid semester: '{semester}'"
+            )
 
         if status not in VALID_STATUSES:
-            raise ValueError(f"Invalid status: '{status}'")
+            raise ValueError(
+                f"Invalid status: '{status}'"
+            )
 
         return ProgramEnrollment(
             program_number=program_number,
             year=year,
             semester=semester,
             status=status,
+        )
+
+    @staticmethod
+    def _enrollment_key(
+        program: ProgramEnrollment,
+    ) -> tuple[str, int, str, str]:
+        return (
+            program.program_number,
+            program.year,
+            program.semester,
+            program.status,
         )

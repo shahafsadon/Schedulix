@@ -1,115 +1,423 @@
+from __future__ import annotations
+
+from collections.abc import Iterable, Iterator
 from pathlib import Path
 
-from scheduling.examScheduleGenerator import ExamSchedule, ExamSystem
+from scheduling.examScheduleGenerator import (
+    ExamSchedule,
+    ExamSystem,
+)
 
 
-# Default location required by the Jira task.
-DEFAULT_OUTPUT_PATH = Path("data") / "outputs" / "exam_schedules.txt"
+DEFAULT_OUTPUT_PATH = (
+    Path("data")
+    / "outputs"
+    / "exam_schedules.txt"
+)
 
-# All output dates must use the format defined in the output format document.
 DATE_FORMAT = "%d-%m-%Y"
 
-# A simple separator keeps each schedule easy to read in a text file.
-TITLE_LINE = "========================================"
+TITLE_LINE = (
+    "========================================"
+)
 
-# Stable ordering for the sections required by the specification.
-SEMESTER_ORDER = {"FALL": 0, "SPRI": 1, "SUMM": 2}
-MOED_ORDER = {"Aleph": 0, "Bet": 1, "Gimel": 2}
+SEMESTER_ORDER = {
+    "FALL": 0,
+    "SPRI": 1,
+    "SUMM": 2,
+}
+
+MOED_ORDER = {
+    "Aleph": 0,
+    "Bet": 1,
+    "Gimel": 2,
+}
 
 
 class OutputWriter:
-    """
-    Writes generated exam schedules into a readable text file.
-
-    The writer does not create schedules and does not validate conflicts. Its
-    only responsibility is formatting valid schedules that were already created
-    by the scheduling layer.
-    """
+    """Formats and streams generated exam systems to a UTF-8 text file."""
 
     def write(
         self,
-        schedules: list[ExamSystem],
+        schedules: Iterable[ExamSystem],
         output_path: str | Path = DEFAULT_OUTPUT_PATH,
     ) -> Path:
-        """
-        Write all schedules to a text file and return the created file path.
+        """Compatibility wrapper that writes schedules and returns the path."""
+        path, _ = self.write_with_count(
+            schedules,
+            output_path,
+        )
 
-        The output directory is created if it does not exist. Exams inside each
-        schedule are sorted by date, then by course number
-        """
-        # Convert string paths into Path objects so both input styles work.
-        path = Path(output_path)
-
-        # Create the output directory if it does not exist yet.
-        path.parent.mkdir(parents=True, exist_ok=True)
-
-        # Build the text content and write it as a UTF-8 file.
-        path.write_text(self.format_schedules(schedules), encoding="utf-8")
-
-        # Return the path so callers or tests can know where the file was saved.
         return path
 
-    def format_schedules(self, schedules: list[ExamSystem]) -> str:
+    def write_with_count(
+        self,
+        schedules: Iterable[ExamSystem],
+        output_path: str | Path = DEFAULT_OUTPUT_PATH,
+    ) -> tuple[
+        Path,
+        int,
+    ]:
         """
-        Convert schedules into the final text format.
+        Stream systems directly to disk and return (path, written_count).
 
-        Each Schedule block represents one complete exam-system option. Inside
-        it, exams are separated by semester and moed and sorted by date.
+        The formatter caches repeated period blocks. In a Cartesian product,
+        the same period option appears in many complete systems, so repeatedly
+        sorting and formatting it is wasted work.
+
+        Output is flushed in chunks to avoid both one enormous string and
+        hundreds of thousands of tiny Python-level writes.
         """
-        # Start the file with a clear project title.
-        lines = [
-            "Schedulix Exam Schedules",
-            TITLE_LINE,
+        path = Path(
+            output_path
+        )
+
+        path.parent.mkdir(
+            parents=True,
+            exist_ok=True,
+        )
+
+        period_cache: dict[
+            int,
+            str,
+        ] = {}
+
+        order_cache: dict[
+            tuple[
+                tuple[
+                    str,
+                    str,
+                ],
+                ...,
+            ],
+            tuple[
+                int,
+                ...,
+            ],
+        ] = {}
+
+        schedule_count = 0
+
+        pending: list[
+            str
+        ] = [
+            "Schedulix Exam Schedules\n",
+            f"{TITLE_LINE}\n",
         ]
 
-        # Add every schedule to the file, numbered from 1.
-        for index, schedule in enumerate(schedules, start=1):
-            lines.extend(self._format_schedule(index, schedule))
-        # Join all lines into one text block and end the file with a newline.
-        return "\n".join(lines) + "\n"
+        pending_size = sum(
+            map(
+                len,
+                pending,
+            )
+        )
 
-    def _format_schedule(self, index: int, schedule: ExamSystem) -> list[str]:
-        """Format one complete exam-system option."""
-        # Each schedule starts with its number.
-        lines = [
-            "",
-            f"Schedule {index}",
-            TITLE_LINE,
-        ]
+        flush_threshold = (
+            1024
+            * 1024
+        )
 
-        current_semester: str | None = None
-
-        for period_schedule in sorted(
-            schedule.period_schedules,
-            key=self._period_sort_key,
-        ):
-            if period_schedule.semester != current_semester:
-                lines.append(f"Semester: {period_schedule.semester}")
-                current_semester = period_schedule.semester
-
-            lines.append(f"Moed: {period_schedule.moed}")
-
-            # Sort exams by date first, then by course number for stable output.
-            for exam in sorted(
-                period_schedule.scheduled_exams,
-                key=lambda item: (item.exam_date, item.course.course_number),
+        with path.open(
+            "w",
+            encoding="utf-8",
+            newline="\n",
+        ) as output_file:
+            for (
+                schedule_count,
+                schedule,
+            ) in enumerate(
+                schedules,
+                start=1,
             ):
-                # One exam is written in one readable line.
-                lines.append(
+                schedule_parts = [
+                    (
+                        f"\nSchedule {schedule_count}\n"
+                        f"{TITLE_LINE}\n"
+                    )
+                ]
+
+                current_semester: str | None = None
+
+                for period_schedule in self._ordered_period_schedules(
+                    schedule.period_schedules,
+                    order_cache,
+                ):
+                    if (
+                        period_schedule.semester
+                        != current_semester
+                    ):
+                        schedule_parts.append(
+                            (
+                                "Semester: "
+                                f"{period_schedule.semester}\n"
+                            )
+                        )
+
+                        current_semester = (
+                            period_schedule.semester
+                        )
+
+                    schedule_parts.append(
+                        self._format_period(
+                            period_schedule,
+                            period_cache,
+                        )
+                    )
+
+                schedule_text = "".join(
+                    schedule_parts
+                )
+
+                pending.append(
+                    schedule_text
+                )
+
+                pending_size += len(
+                    schedule_text
+                )
+
+                if (
+                    pending_size
+                    >= flush_threshold
+                ):
+                    output_file.write(
+                        "".join(
+                            pending
+                        )
+                    )
+
+                    pending.clear()
+
+                    pending_size = 0
+
+            if pending:
+                output_file.write(
+                    "".join(
+                        pending
+                    )
+                )
+
+        return (
+            path,
+            schedule_count,
+        )
+
+    def format_schedules(
+        self,
+        schedules: Iterable[ExamSystem],
+    ) -> str:
+        """
+        Return formatted text for tests and genuinely small outputs.
+
+        Large application output should use write_with_count().
+        """
+        return "".join(
+            self.iter_chunks(
+                schedules
+            )
+        )
+
+    def iter_chunks(
+        self,
+        schedules: Iterable[ExamSystem],
+    ) -> Iterator[str]:
+        """Yield formatted output chunks lazily."""
+        yield "Schedulix Exam Schedules\n"
+
+        yield f"{TITLE_LINE}\n"
+
+        period_cache: dict[
+            int,
+            str,
+        ] = {}
+
+        order_cache: dict[
+            tuple[
+                tuple[
+                    str,
+                    str,
+                ],
+                ...,
+            ],
+            tuple[
+                int,
+                ...,
+            ],
+        ] = {}
+
+        for (
+            index,
+            schedule,
+        ) in enumerate(
+            schedules,
+            start=1,
+        ):
+            yield (
+                f"\nSchedule {index}\n"
+                f"{TITLE_LINE}\n"
+            )
+
+            current_semester: str | None = None
+
+            for period_schedule in self._ordered_period_schedules(
+                schedule.period_schedules,
+                order_cache,
+            ):
+                if (
+                    period_schedule.semester
+                    != current_semester
+                ):
+                    yield (
+                        "Semester: "
+                        f"{period_schedule.semester}\n"
+                    )
+
+                    current_semester = (
+                        period_schedule.semester
+                    )
+
+                yield self._format_period(
+                    period_schedule,
+                    period_cache,
+                )
+
+    @staticmethod
+    def _format_period(
+        schedule: ExamSchedule,
+        cache: dict[
+            int,
+            str,
+        ],
+    ) -> str:
+        """Format one reusable period option and cache it by object identity."""
+        cache_key = id(
+            schedule
+        )
+
+        cached = cache.get(
+            cache_key
+        )
+
+        if cached is not None:
+            return cached
+
+        lines = [
+            f"Moed: {schedule.moed}"
+        ]
+
+        for exam in sorted(
+            schedule.scheduled_exams,
+            key=lambda item: (
+                item.exam_date,
+                item.course.course_number,
+            ),
+        ):
+            lines.append(
+                (
                     f"{exam.exam_date.strftime(DATE_FORMAT)} | "
                     f"{exam.course.name} | "
                     f"{exam.course.instructor}"
                 )
+            )
 
-        # Return the formatted lines so the caller can add them to the full file.
-        return lines
+        formatted = (
+            "\n".join(
+                lines
+            )
+            + "\n"
+        )
+
+        cache[
+            cache_key
+        ] = formatted
+
+        return formatted
+
+    @classmethod
+    def _ordered_period_schedules(
+        cls,
+        schedules: list[
+            ExamSchedule
+        ],
+        cache: dict[
+            tuple[
+                tuple[
+                    str,
+                    str,
+                ],
+                ...,
+            ],
+            tuple[
+                int,
+                ...,
+            ],
+        ],
+    ) -> Iterator[ExamSchedule]:
+        """
+        Reuse the same section order for systems with the same period shape.
+        """
+        signature = tuple(
+            (
+                item.semester,
+                item.moed,
+            )
+            for item in schedules
+        )
+
+        order = cache.get(
+            signature
+        )
+
+        if order is None:
+            order = tuple(
+                sorted(
+                    range(
+                        len(
+                            schedules
+                        )
+                    ),
+                    key=lambda index: (
+                        cls._period_sort_key(
+                            schedules[
+                                index
+                            ]
+                        )
+                    ),
+                )
+            )
+
+            cache[
+                signature
+            ] = order
+
+        for index in order:
+            yield schedules[
+                index
+            ]
 
     @staticmethod
-    def _period_sort_key(schedule: ExamSchedule) -> tuple[int, int, str, str]:
-        """Sort period sections by semester and moed in requirement order."""
+    def _period_sort_key(
+        schedule: ExamSchedule,
+    ) -> tuple[
+        int,
+        int,
+        str,
+        str,
+    ]:
+        """Sort output sections by semester and moed."""
         return (
-            SEMESTER_ORDER.get(schedule.semester, len(SEMESTER_ORDER)),
-            MOED_ORDER.get(schedule.moed, len(MOED_ORDER)),
+            SEMESTER_ORDER.get(
+                schedule.semester,
+                len(
+                    SEMESTER_ORDER
+                ),
+            ),
+            MOED_ORDER.get(
+                schedule.moed,
+                len(
+                    MOED_ORDER
+                ),
+            ),
             schedule.semester,
             schedule.moed,
         )
