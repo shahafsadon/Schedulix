@@ -16,7 +16,6 @@ from gui.screens.fileUploadScreen import FileUploadScreen
 from gui.presenters.programDetailsPresenter import ProgramDetailsPresenter
 from gui.screens.programConfigScreen import ProgramConfigScreen
 from gui.presenters.programSelectionPresenter import ProgramSelectionPresenter
-from gui.screens.scheduleGenerationScreen import ScheduleGenerationScreen
 from gui.presenters.scheduleNavigationPresenter import ScheduleNavigationPresenter
 from gui.screens.scheduleNavigationScreen import ScheduleNavigationScreen
 from gui.presenters.schedulingPresenter import SchedulingPresenter
@@ -132,26 +131,15 @@ class SchedulixWorkflow(ctk.CTkFrame):
                 self,
                 presenter=presenters[0],
                 period_presenters=presenters,
+                scheduling_presenter=SchedulingPresenter(self.cache),
                 on_back=self.show_program_config,
-                on_next=self.show_schedule_generation,
+                on_generation_success=self.show_output_navigation,
             )
         )
 
     def _persist_exam_periods(self) -> None:
         """Persist the currently mutated exam-period objects to disk cache."""
         self.cache.set_exam_periods(self.cache.get_exam_periods())
-
-    def show_schedule_generation(self) -> None:
-        """Show the screen that generates schedules from cached data."""
-        self._set_window_title("Schedulix - Generate Schedules")
-        self._set_screen(
-            ScheduleGenerationScreen(
-                self,
-                presenter=SchedulingPresenter(self.cache),
-                on_back=self.show_date_management,
-                on_next=self.show_output_navigation,
-            )
-        )
 
     def show_output_navigation(self) -> None:
         """Show generated schedules with previous/next and export support."""
@@ -164,7 +152,7 @@ class SchedulixWorkflow(ctk.CTkFrame):
                     self,
                     title="No Generated Schedules",
                     message="Generate schedules before opening the output screen.",
-                    on_back=self.show_schedule_generation,
+                    on_back=self.show_date_management,
                 )
             )
             return
@@ -177,7 +165,7 @@ class SchedulixWorkflow(ctk.CTkFrame):
                 self,
                 presenter=navigation_presenter,
                 export_presenter=export_presenter,
-                on_back=self.show_schedule_generation,
+                on_back=self.show_date_management,
             )
         )
 

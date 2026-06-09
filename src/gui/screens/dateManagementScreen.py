@@ -13,7 +13,9 @@ except ModuleNotFoundError as error:
         "Install it with: .venv\\Scripts\\python.exe -m pip install -r requirements.txt"
     ) from error
 
+from application.async_runner import AsyncScheduleRunner
 from gui.presenters.dateManagementPresenter import DateManagementPresenter
+from gui.presenters.schedulingPresenter import GenerationResult, SchedulingPresenter
 
 
 _DATE_FORMAT = "%d-%m-%Y"
@@ -53,18 +55,26 @@ class DateManagementScreen(ctk.CTkFrame):
         master,
         presenter: DateManagementPresenter,
         period_presenters: list[DateManagementPresenter] | None = None,
-        on_next: Callable[[], None] | None = None,
+        scheduling_presenter: SchedulingPresenter | None = None,
+        runner: AsyncScheduleRunner | None = None,
+        on_generation_success: Callable[[], None] | None = None,
         on_back: Callable[[], None] | None = None,
     ) -> None:
         super().__init__(master, corner_radius=0, fg_color=_PAGE_BG)
         self._presenters = period_presenters or [presenter]
         self._current_period_index = 0
         self.presenter = self._presenters[self._current_period_index]
-        self._on_next = on_next
+        self._scheduling_presenter = scheduling_presenter
+        self._runner = runner or AsyncScheduleRunner()
+        self._on_generation_success = on_generation_success
         self._on_back = on_back
+        self._generation_in_progress = False
 
         self._period_selector = None
         self._undo_button = None
+        self._apply_button = None
+        self._back_button = None
+        self._generate_button = None
         self._day_cells: dict[str, ctk.CTkButton] = {}
         self._metric_labels: dict[str, ctk.CTkLabel] = {}
 
@@ -207,14 +217,15 @@ class DateManagementScreen(ctk.CTkFrame):
         self._end_entry = ctk.CTkEntry(controls, width=132)
         self._end_entry.grid(row=1, column=2, sticky="w", padx=(8, 12), pady=(0, 14))
 
-        ctk.CTkButton(
+        self._apply_button = ctk.CTkButton(
             controls,
             text="Apply Period",
             width=118,
             fg_color=_PRIMARY,
             hover_color=_PRIMARY_HOVER,
             command=self._handle_apply_period,
-        ).grid(row=1, column=3, sticky="w", padx=(0, 8), pady=(0, 14))
+        )
+        self._apply_button.grid(row=1, column=3, sticky="w", padx=(0, 8), pady=(0, 14))
 
         self._undo_button = ctk.CTkButton(
             controls,
@@ -279,7 +290,7 @@ class DateManagementScreen(ctk.CTkFrame):
         self._status_label.grid(row=0, column=0, sticky="w")
 
         if self._on_back is not None:
-            ctk.CTkButton(
+            self._back_button = ctk.CTkButton(
                 footer,
                 text="Back",
                 width=90,
@@ -288,16 +299,19 @@ class DateManagementScreen(ctk.CTkFrame):
                 border_color=_BORDER,
                 text_color=(_PRIMARY, "#93C5FD"),
                 command=self._on_back,
-            ).grid(row=0, column=1, padx=(8, 8))
+            )
+            self._back_button.grid(row=0, column=1, padx=(8, 8))
 
-        ctk.CTkButton(
+        self._generate_button = ctk.CTkButton(
             footer,
-            text="Next",
-            width=100,
+            text="Generate Exam Schedules",
+            width=190,
+            height=38,
             fg_color=_PRIMARY,
             hover_color=_PRIMARY_HOVER,
-            command=self._handle_next,
-        ).grid(row=0, column=2)
+            command=self._handle_generate,
+        )
+        self._generate_button.grid(row=0, column=2)
 
     def _rebuild_calendar(self) -> None:
         """Clear and redraw the month cards for the selected period."""
@@ -444,9 +458,84 @@ class DateManagementScreen(ctk.CTkFrame):
             self._refresh_undo_state()
         self._show_message(result.message, ok=result.success)
 
-    def _handle_next(self) -> None:
-        if self._on_next is not None:
-            self._on_next()
+    def _handle_generate(self) -> None:
+        """Generate schedules directly from the final date-review step."""
+        if self._scheduling_presenter is None:
+            self._show_message("Schedule generator is not available.", ok=False)
+            return
+
+        accepted = self._runner.run(
+            task=self._scheduling_presenter.generate,
+            on_started=self._show_generation_started,
+            on_complete=lambda result: self.after(
+                0,
+                lambda: self._show_generation_result(result),
+            ),
+            on_error=lambda error: self.after(
+                0,
+                lambda: self._show_generation_error(error),
+            ),
+        )
+
+        if not accepted:
+            self._show_message("Schedule generation is already running.", ok=False)
+
+    def _show_generation_started(self) -> None:
+        """Show loading state and lock all editing controls."""
+        self._generation_in_progress = True
+        self._set_editing_enabled(False)
+        self._show_message(
+            "Generating schedule systems. This may take a moment.",
+            ok=True,
+        )
+
+    def _show_generation_result(self, result: GenerationResult) -> None:
+        """Handle the scheduler result without leaving the date screen on failure."""
+        if result.success and result.schedule_count > 0:
+            self._show_message(
+                f"{result.schedule_count:,} schedule systems generated successfully.",
+                ok=True,
+            )
+            if self._on_generation_success is not None:
+                self.after(900, self._on_generation_success)
+            return
+
+        self._generation_in_progress = False
+        self._set_editing_enabled(True)
+        self._show_message(result.message, ok=False)
+
+    def _show_generation_error(self, error: Exception) -> None:
+        """Render unexpected async failures and restore the date controls."""
+        self._generation_in_progress = False
+        self._set_editing_enabled(True)
+        self._show_message(
+            f"Schedule generation failed unexpectedly: {type(error).__name__}.",
+            ok=False,
+        )
+
+    def _set_editing_enabled(self, enabled: bool) -> None:
+        """Enable or disable all date editing and navigation controls."""
+        state = "normal" if enabled else "disabled"
+        for widget in (
+            self._period_selector,
+            self._start_entry,
+            self._end_entry,
+            self._apply_button,
+            self._back_button,
+            self._generate_button,
+        ):
+            if widget is not None:
+                widget.configure(state=state)
+
+        if self._generate_button is not None:
+            self._generate_button.configure(
+                text="Generate Exam Schedules" if enabled else "Generating..."
+            )
+
+        for cell in self._day_cells.values():
+            cell.configure(state=state)
+
+        self._refresh_undo_state()
 
     def _handle_period_selected(self, selected_label: str) -> None:
         labels = self._period_option_labels()
@@ -517,6 +606,8 @@ class DateManagementScreen(ctk.CTkFrame):
             return
 
         can_undo = self.presenter.can_undo()
+        if self._generation_in_progress:
+            can_undo = False
         self._undo_button.configure(
             state="normal" if can_undo else "disabled",
             text_color=(_PRIMARY, "#93C5FD") if can_undo else _MUTED,

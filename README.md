@@ -85,7 +85,6 @@ Schedulix/
 |   |   |   |-- fileUploadScreen.py
 |   |   |   |-- programConfigScreen.py
 |   |   |   |-- dateManagementScreen.py
-|   |   |   |-- scheduleGenerationScreen.py
 |   |   |   `-- scheduleNavigationScreen.py
 |   |   |-- presenters/              # Testable MVP presenter logic
 |   |   |   |-- dateManagementPresenter.py
