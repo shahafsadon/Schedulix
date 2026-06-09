@@ -62,7 +62,7 @@ class FileUploadScreen(ctk.CTkFrame):
         #the card layout expand when the window is resized.
         self.configure(fg_color=("#F3F6FB", "#0B1220"))
         self.grid_columnconfigure(0, weight=1)
-        self.grid_rowconfigure(2, weight=4)
+        self.grid_rowconfigure(2, weight=1)
 
         #main colors used by the screen.
         primary_color = "#2563EB"
@@ -331,6 +331,7 @@ class FileUploadScreen(ctk.CTkFrame):
             self._continue_button.grid(row=0, column=1, sticky="e")
 
         self._build_preview()
+        self._refresh_upload_row_statuses()
         self._refresh_ready_label()
         self._refresh_preview()
 
@@ -346,7 +347,7 @@ class FileUploadScreen(ctk.CTkFrame):
         )
         preview_card.grid(row=2, column=0, sticky="nsew", padx=24, pady=(0, 16))
         preview_card.grid_columnconfigure(0, weight=1)
-        preview_card.grid_rowconfigure(2, weight=4, minsize=330)
+        preview_card.grid_rowconfigure(2, weight=1, minsize=240)
 
         #header row for the preview card.
         header = ctk.CTkFrame(preview_card, fg_color="transparent")
@@ -555,6 +556,31 @@ class FileUploadScreen(ctk.CTkFrame):
 
         if self._on_next is not None:
             self._on_next()
+
+    def _refresh_upload_row_statuses(self) -> None:
+        """Mirror already cached data in the three upload status rows."""
+        uploaded_data = self.upload_service.get_uploaded_data()
+        cached_counts = {
+            FileReaderType.COURSES: len(uploaded_data.courses or []),
+            FileReaderType.PROGRAMS: len(uploaded_data.programs or []),
+            FileReaderType.EXAM_PERIODS: len(uploaded_data.exam_periods or []),
+        }
+
+        for file_type, count in cached_counts.items():
+            label = self.status_labels.get(file_type)
+            if label is None:
+                continue
+
+            if count:
+                label.configure(
+                    text=f"Loaded from saved data - {count} item(s)",
+                    text_color="#147A39",
+                )
+            else:
+                label.configure(
+                    text="No file loaded",
+                    text_color=("#5F6368", "#A8A8A8"),
+                )
 
     def _refresh_preview(self) -> None:
         """Reload parsed upload data and redraw the preview text."""
