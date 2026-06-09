@@ -2,6 +2,7 @@
 from pathlib import Path
 #filedialog opens the regular Windows file picker.
 from tkinter import filedialog
+from typing import Callable
 #customtkinter is the GUI library used by this screen.
 try:
     import customtkinter as ctk
@@ -12,9 +13,9 @@ except ModuleNotFoundError as error:
     ) from error
 
 from fileReader.baseFileReader import FileReaderType
-from gui.uploadService import FileUploadService, UploadMode, UploadResult
-from gui.uploadedDataExportService import UploadedDataExportService, ExportResult
-from gui.uploadedDataPresenter import UploadedDataPresenter, UploadedDataSnapshot
+from gui.services.uploadService import FileUploadService, UploadMode, UploadResult
+from gui.services.uploadedDataExportService import UploadedDataExportService, ExportResult
+from gui.presenters.uploadedDataPresenter import UploadedDataPresenter, UploadedDataSnapshot
 
 
 #this class builds the file upload screen in the GUI.
@@ -33,6 +34,7 @@ class FileUploadScreen(ctk.CTkFrame):
         upload_service: FileUploadService | None = None,
         data_presenter: UploadedDataPresenter | None = None,
         export_service: UploadedDataExportService | None = None,
+        on_next: Callable[[], None] | None = None,
     ) -> None:
         super().__init__(master, corner_radius=0)
         #the screen talks to this service instead of calling file readers directly
@@ -46,11 +48,13 @@ class FileUploadScreen(ctk.CTkFrame):
             cache_manager=self.upload_service.cache_manager,
             uploaded_data=self.upload_service.get_uploaded_data(),
         )
+        self._on_next = on_next
 
         #keep labels and paths by file type so each upload row updated independently and the export func know which data to use.
         self.status_labels: dict[FileReaderType, ctk.CTkLabel] = {}
         self.preview_metric_labels: dict[str, ctk.CTkLabel] = {}
         self.selected_paths: dict[FileReaderType, Path] = {}
+        self._continue_button: ctk.CTkButton | None = None
 
         self._build()
 
@@ -58,7 +62,7 @@ class FileUploadScreen(ctk.CTkFrame):
         #the card layout expand when the window is resized.
         self.configure(fg_color=("#F3F6FB", "#0B1220"))
         self.grid_columnconfigure(0, weight=1)
-        self.grid_rowconfigure(2, weight=4)
+        self.grid_rowconfigure(2, weight=1)
 
         #main colors used by the screen.
         primary_color = "#2563EB"
@@ -311,7 +315,23 @@ class FileUploadScreen(ctk.CTkFrame):
             pady=(0, 12),
         )
 
+        if self._on_next is not None:
+            footer = ctk.CTkFrame(upload_card, fg_color="transparent")
+            footer.grid(row=8, column=0, columnspan=5, sticky="ew", padx=20, pady=(0, 16))
+            footer.grid_columnconfigure(0, weight=1)
+
+            self._continue_button = ctk.CTkButton(
+                footer,
+                text="Continue",
+                width=120,
+                fg_color=primary_color,
+                hover_color=primary_hover,
+                command=self._handle_next,
+            )
+            self._continue_button.grid(row=0, column=1, sticky="e")
+
         self._build_preview()
+        self._refresh_upload_row_statuses()
         self._refresh_ready_label()
         self._refresh_preview()
 
@@ -327,7 +347,7 @@ class FileUploadScreen(ctk.CTkFrame):
         )
         preview_card.grid(row=2, column=0, sticky="nsew", padx=24, pady=(0, 16))
         preview_card.grid_columnconfigure(0, weight=1)
-        preview_card.grid_rowconfigure(2, weight=4, minsize=330)
+        preview_card.grid_rowconfigure(2, weight=1, minsize=240)
 
         #header row for the preview card.
         header = ctk.CTkFrame(preview_card, fg_color="transparent")
@@ -506,7 +526,9 @@ class FileUploadScreen(ctk.CTkFrame):
 
     def _refresh_ready_label(self) -> None:
         """Refresh the global upload-readiness message."""
-        if self.upload_service.is_ready_for_scheduling():
+        ready = self.upload_service.is_ready_for_scheduling()
+
+        if ready:
             self.ready_label.configure(
                 text="All files loaded successfully.",
                 text_color="#147A39",
@@ -516,6 +538,49 @@ class FileUploadScreen(ctk.CTkFrame):
                 text="Load all required files to continue.",
                 text_color="#666666",
             )
+
+        continue_button = getattr(self, "_continue_button", None)
+        if continue_button is not None:
+            continue_button.configure(
+                state="normal" if ready else "disabled"
+            )
+
+    def _handle_next(self) -> None:
+        """Move to the next workflow step when all required inputs are loaded."""
+        if not self.upload_service.is_ready_for_scheduling():
+            self.ready_label.configure(
+                text="Load all required files to continue.",
+                text_color="#B00020",
+            )
+            return
+
+        if self._on_next is not None:
+            self._on_next()
+
+    def _refresh_upload_row_statuses(self) -> None:
+        """Mirror already cached data in the three upload status rows."""
+        uploaded_data = self.upload_service.get_uploaded_data()
+        cached_counts = {
+            FileReaderType.COURSES: len(uploaded_data.courses or []),
+            FileReaderType.PROGRAMS: len(uploaded_data.programs or []),
+            FileReaderType.EXAM_PERIODS: len(uploaded_data.exam_periods or []),
+        }
+
+        for file_type, count in cached_counts.items():
+            label = self.status_labels.get(file_type)
+            if label is None:
+                continue
+
+            if count:
+                label.configure(
+                    text=f"Loaded from saved data - {count} item(s)",
+                    text_color="#147A39",
+                )
+            else:
+                label.configure(
+                    text="No file loaded",
+                    text_color=("#5F6368", "#A8A8A8"),
+                )
 
     def _refresh_preview(self) -> None:
         """Reload parsed upload data and redraw the preview text."""

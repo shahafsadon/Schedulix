@@ -95,8 +95,8 @@ class PresenterFactory:
         # Imports are placed here — not at module level — to avoid circular
         # imports between gui modules and to keep this file importable in
         # headless test environments.
-        from gui.programSelectionPresenter import ProgramSelectionPresenter
-        from gui.programDetailsPresenter import ProgramDetailsPresenter
+        from gui.presenters.programSelectionPresenter import ProgramSelectionPresenter
+        from gui.presenters.programDetailsPresenter import ProgramDetailsPresenter
 
         # Maps each PresenterType to its concrete implementation class.
         # Extend this dict whenever a new presenter is added.

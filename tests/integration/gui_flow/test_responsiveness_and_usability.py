@@ -14,13 +14,13 @@ from pathlib import Path
 from time import monotonic, sleep
 from types import ModuleType
 from unittest.mock import MagicMock, patch
-from gui.uploadedDataPresenter import UploadedDataSnapshot, UploadedDataMetadata
+from gui.presenters.uploadedDataPresenter import UploadedDataSnapshot, UploadedDataMetadata
 
 from application.async_runner import AsyncScheduleRunner, LoadingState
 from fileReader.baseFileReader import FileReaderType
-from gui.dateManagementPresenter import DateManagementPresenter
-from gui.programSelectionPresenter import ProgramSelectionPresenter
-from gui.uploadService import FileUploadService
+from gui.presenters.dateManagementPresenter import DateManagementPresenter
+from gui.presenters.programSelectionPresenter import ProgramSelectionPresenter
+from gui.services.uploadService import FileUploadService
 from models import Course, ExamPeriod, ProgramEnrollment
 from scheduling.examDateHandler import ExamDateHandler
 
@@ -74,8 +74,8 @@ def _load_headless_screen_classes():
     fake_ctk.CTkFrame = type("CTkFrame", (), {})
 
     with patch.dict(sys.modules, {"customtkinter": fake_ctk}):
-        upload_module = importlib.import_module("gui.fileUploadScreen")
-        config_module = importlib.import_module("gui.programConfigScreen")
+        upload_module = importlib.import_module("gui.screens.fileUploadScreen")
+        config_module = importlib.import_module("gui.screens.programConfigScreen")
 
     return upload_module.FileUploadScreen, config_module.ProgramConfigScreen
 

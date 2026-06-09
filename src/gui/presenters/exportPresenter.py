@@ -15,7 +15,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from gui.scheduleNavigationPresenter import ScheduleNavigationPresenter
+from gui.presenters.scheduleNavigationPresenter import ScheduleNavigationPresenter
 from output.exportService import ExportService
 
 
@@ -77,8 +77,12 @@ class ExportPresenter:
 
         # Read the currently displayed system from the navigation presenter:
         # it is the single source of truth for "which system the user picked".
-        current_index = self._navigation.position() - 1   # back to 0-based
-        current_system = self._navigation._schedules[current_index]
+        current_system = self._navigation.current_system()
+        if current_system is None:
+            return ExportResult(
+                success=False,
+                message="No schedule to export.",
+            )
 
         outcome = self._service.export(current_system, output_path)
         if not outcome.success:

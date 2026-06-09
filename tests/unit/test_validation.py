@@ -64,8 +64,7 @@ FALL, Aleph
         ExamPeriodsFileReader().parse(content)
 
 
-def test_program_reader_rejects_more_than_five_programs() -> None:
-    with pytest.raises(ValueError, match="maximum allowed is 5"):
-        ProgramsFileReader().parse(
-            "83101,83102,83103,83104,83105,83107"
-        )
+def test_program_reader_accepts_more_than_five_programs_for_gui_selection() -> None:
+    assert ProgramsFileReader().parse(
+        "83101,83102,83103,83104,83105,83107"
+    ) == ["83101", "83102", "83103", "83104", "83105", "83107"]

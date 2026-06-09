@@ -41,6 +41,7 @@ class ProgramSelectionPresenter:
         self,
         courses: list[Course],
         max_programs: int = DEFAULT_MAX_PROGRAMS,
+        selected_programs: list[str] | None = None,
     ) -> None:
         """Build the presenter from the loaded courses.
 
@@ -49,6 +50,8 @@ class ProgramSelectionPresenter:
                 enrollments are scanned to build the selectable program list.
             max_programs: the upper limit on how many programs may be selected
                 (defaults to the Version 1.0 rule of five).
+            selected_programs: optional initial selection, usually restored
+                from the uploaded programs file or persisted cache state.
         """
         # Selectable programs are exactly those that appear in the loaded
         # courses, matching the requirement that the on-screen list is built
@@ -58,6 +61,13 @@ class ProgramSelectionPresenter:
         # always receive a sorted list so the View and tests see stable ordering.
         self._selected_programs: set[str] = set()
         self.max_programs = max_programs
+
+        for program_number in selected_programs or []:
+            if (
+                program_number in self._available_programs
+                and len(self._selected_programs) < self.max_programs
+            ):
+                self._selected_programs.add(program_number)
 
     @property
     def available_programs(self) -> list[str]:

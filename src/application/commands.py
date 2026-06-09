@@ -456,12 +456,11 @@ class EditPeriodCommand(Command):
         self._did_edit = True
 
         valid_dates = self._date_handler.get_valid_dates(self._exam_period)
+        start_text = self._new_start_date.strftime("%d-%m-%Y")
+        end_text = self._new_end_date.strftime("%d-%m-%Y")
         return CommandResult(
             success=True,
-            message=(
-                f"Exam period updated to "
-                f"{self._new_start_date}–{self._new_end_date}."
-            ),
+            message=f"Exam period updated to {start_text} - {end_text}.",
             data=valid_dates,
         )
 

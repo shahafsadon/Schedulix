@@ -18,7 +18,7 @@ SRC = ROOT / "src"
 sys.path.insert(0, str(SRC))
 
 from models import Course, ProgramEnrollment
-from gui.programSelectionPresenter import ProgramSelectionPresenter
+from gui.presenters.programSelectionPresenter import ProgramSelectionPresenter
 
 
 def make_course(course_number: str, program_numbers: list[str]) -> Course:
@@ -93,6 +93,17 @@ class ProgramSelectionPresenterTests(unittest.TestCase):
         # One program selected -> can proceed.
         presenter.toggle("83101")
         self.assertTrue(presenter.can_proceed())
+
+    def test_initial_selection_is_restored_from_cache(self) -> None:
+        """Known cached selections start checked; unknown ones are ignored."""
+        presenter = ProgramSelectionPresenter(
+            [make_course("83102", ["83101"])],
+            selected_programs=["83101", "99999"],
+        )
+
+        self.assertEqual(presenter.selected_programs, ["83101"])
+        self.assertTrue(presenter.is_selected("83101"))
+        self.assertFalse(presenter.is_selected("99999"))
 
     def test_selected_programs_returns_sorted_list(self) -> None:
         """The selected programs are returned sorted, regardless of click order."""

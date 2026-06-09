@@ -25,8 +25,18 @@ except ModuleNotFoundError as error:
         "Install it with: .venv\\Scripts\\python.exe -m pip install -r requirements.txt"
     ) from error
 
-from gui.programSelectionPresenter import ProgramSelectionPresenter
-from gui.programDetailsPresenter import ProgramDetailsPresenter, ProgramDetails
+from gui.presenters.programSelectionPresenter import ProgramSelectionPresenter
+from gui.presenters.programDetailsPresenter import ProgramDetailsPresenter, ProgramDetails
+
+
+_PAGE_BG = ("#F3F6FB", "#0B1220")
+_SURFACE = ("#FFFFFF", "#151B26")
+_SUBTLE_SURFACE = ("#F8FAFC", "#101826")
+_BORDER = ("#D8E2F0", "#2D3748")
+_TEXT = ("#111827", "#F8FAFC")
+_MUTED = ("#5F6368", "#A8A8A8")
+_PRIMARY = "#2563EB"
+_PRIMARY_HOVER = "#1D4ED8"
 
 
 class ProgramConfigScreen(ctk.CTkFrame):
@@ -49,7 +59,7 @@ class ProgramConfigScreen(ctk.CTkFrame):
             on_next: optional callback fired when the user confirms the selection.
             on_back: optional callback fired when the user goes back a step.
         """
-        super().__init__(master, corner_radius=0)
+        super().__init__(master, corner_radius=0, fg_color=_PAGE_BG)
         # Two presenters, two responsibilities: selecting vs inspecting.
         self.selection_presenter = selection_presenter
         self.details_presenter = details_presenter
@@ -75,17 +85,46 @@ class ProgramConfigScreen(ctk.CTkFrame):
         self.grid_rowconfigure(1, weight=1)
         self.grid_columnconfigure(0, weight=1)
 
-        title = ctk.CTkLabel(
-            self,
-            text="Select Study Programs (up to 5)",
-            font=("Segoe UI", 16, "bold"),
+        header = ctk.CTkFrame(self, fg_color="transparent")
+        header.grid(row=0, column=0, sticky="ew", padx=24, pady=(18, 12))
+        header.grid_columnconfigure(0, weight=1)
+
+        ctk.CTkLabel(
+            header,
+            text="Select Study Programs",
+            font=("Segoe UI", 24, "bold"),
+            text_color=_TEXT,
+        ).grid(row=0, column=0, sticky="w")
+
+        ctk.CTkLabel(
+            header,
+            text=f"Choose up to {self.selection_presenter.max_programs} programs and inspect their courses before scheduling.",
+            font=("Segoe UI", 13),
+            text_color=_MUTED,
+        ).grid(row=1, column=0, sticky="w", pady=(2, 0))
+
+        self._selection_badge = ctk.CTkLabel(
+            header,
+            text=f"0 / {self.selection_presenter.max_programs} selected",
+            font=("Segoe UI", 12, "bold"),
+            fg_color=("#E8F1FF", "#111D33"),
+            text_color=(_PRIMARY, "#93C5FD"),
+            corner_radius=14,
+            padx=12,
+            pady=5,
         )
-        title.grid(row=0, column=0, sticky="w", padx=16, pady=(16, 8))
+        self._selection_badge.grid(row=0, column=1, sticky="ne", rowspan=2)
 
         # Every program row lives in one scrollable column so expanding a row
         # pushes the rows below it downward, as described in section 4.2.
-        self._list_frame = ctk.CTkScrollableFrame(self)
-        self._list_frame.grid(row=1, column=0, sticky="nsew", padx=16, pady=8)
+        self._list_frame = ctk.CTkScrollableFrame(
+            self,
+            fg_color=_SURFACE,
+            border_width=1,
+            border_color=_BORDER,
+            corner_radius=8,
+        )
+        self._list_frame.grid(row=1, column=0, sticky="nsew", padx=24, pady=(0, 12))
         self._list_frame.grid_columnconfigure(0, weight=1)
 
         programs = self.selection_presenter.available_programs
@@ -94,8 +133,8 @@ class ProgramConfigScreen(ctk.CTkFrame):
             ctk.CTkLabel(
                 self._list_frame,
                 text="No programs found. Load a courses file first.",
-                text_color="#666666",
-            ).grid(row=0, column=0, sticky="w", padx=8, pady=8)
+                text_color=_MUTED,
+            ).grid(row=0, column=0, sticky="w", padx=16, pady=16)
         else:
             # One self-contained row widget per selectable program.
             for program in programs:
@@ -111,8 +150,14 @@ class ProgramConfigScreen(ctk.CTkFrame):
         """
         # A row container holds the header line (row 0) plus a details frame
         # (row 1) that is only gridded in when the row is expanded.
-        row = ctk.CTkFrame(self._list_frame, fg_color="transparent")
-        row.pack(fill="x", pady=2)
+        row = ctk.CTkFrame(
+            self._list_frame,
+            fg_color=_SUBTLE_SURFACE,
+            border_width=1,
+            border_color=_BORDER,
+            corner_radius=8,
+        )
+        row.pack(fill="x", padx=10, pady=(10, 0))
         # Column 1 stretches so the toggle button is pushed to the far right.
         row.grid_columnconfigure(1, weight=1)
 
@@ -126,28 +171,41 @@ class ProgramConfigScreen(ctk.CTkFrame):
             row,
             text=f"Program {program_number}",
             variable=variable,
+            font=("Segoe UI", 13, "bold"),
+            text_color=_TEXT,
+            fg_color=_PRIMARY,
+            hover_color=_PRIMARY_HOVER,
             # default argument binds the current program to this row's callback,
             # avoiding the classic late-binding closure bug inside the loop.
             command=lambda current=program_number: self._on_check(current),
         )
-        checkbox.grid(row=0, column=0, columnspan=2, sticky="w", padx=(4, 8), pady=4)
+        checkbox.grid(row=0, column=0, columnspan=2, sticky="w", padx=(14, 8), pady=12)
         self._checkbox_vars[program_number] = variable
 
         # (b) Expand/collapse toggle: reveals the program's course details.
         toggle = ctk.CTkButton(
             row,
             text=">",
-            width=32,
+            width=36,
+            height=30,
             fg_color="transparent",
             border_width=1,
+            border_color=_BORDER,
+            text_color=(_PRIMARY, "#93C5FD"),
             command=lambda current=program_number: self._on_toggle(current),
         )
-        toggle.grid(row=0, column=2, sticky="e", padx=(8, 4), pady=4)
+        toggle.grid(row=0, column=2, sticky="e", padx=(8, 14), pady=10)
         self._toggle_buttons[program_number] = toggle
 
         # Details frame is created now but NOT gridded yet: it stays empty and
         # hidden until the row is first expanded (lazy build in _on_toggle).
-        details_frame = ctk.CTkFrame(row, fg_color=("#f0f0f0", "#2b2b2b"))
+        details_frame = ctk.CTkFrame(
+            row,
+            fg_color=_SURFACE,
+            border_width=1,
+            border_color=_BORDER,
+            corner_radius=8,
+        )
         details_frame.grid_columnconfigure(0, weight=1)
         self._detail_frames[program_number] = details_frame
         self._expanded[program_number] = False
@@ -155,12 +213,12 @@ class ProgramConfigScreen(ctk.CTkFrame):
     def _build_footer(self) -> None:
         """Build the footer: selection counter and Back/Next navigation buttons."""
         footer = ctk.CTkFrame(self, fg_color="transparent")
-        footer.grid(row=2, column=0, sticky="ew", padx=16, pady=(8, 16))
+        footer.grid(row=2, column=0, sticky="ew", padx=24, pady=(0, 16))
         # Column 0 stretches so the status label sits left and buttons sit right.
         footer.grid_columnconfigure(0, weight=1)
 
         # Live counter ("Selected: X / 5") and rejection messages share this label.
-        self._status_label = ctk.CTkLabel(footer, text="", text_color="#666666")
+        self._status_label = ctk.CTkLabel(footer, text="", text_color=_MUTED)
         self._status_label.grid(row=0, column=0, sticky="w")
 
         # Back is only shown when a callback exists (i.e. inside the wizard).
@@ -171,12 +229,19 @@ class ProgramConfigScreen(ctk.CTkFrame):
                 width=90,
                 fg_color="transparent",
                 border_width=1,
+                border_color=_BORDER,
+                text_color=(_PRIMARY, "#93C5FD"),
                 command=self._on_back,
             ).grid(row=0, column=1, padx=(8, 8))
 
         # Kept as an attribute because _refresh_status enables/disables it.
         self._next_button = ctk.CTkButton(
-            footer, text="Next", width=90, command=self._handle_next
+            footer,
+            text="Next",
+            width=100,
+            fg_color=_PRIMARY,
+            hover_color=_PRIMARY_HOVER,
+            command=self._handle_next,
         )
         self._next_button.grid(row=0, column=2)
 
@@ -221,7 +286,7 @@ class ProgramConfigScreen(ctk.CTkFrame):
             # Grid the frame on row 1 of the row container, spanning all columns
             # so it sits directly under the checkbox + toggle and pushes the
             # following rows down.
-            frame.grid(row=1, column=0, columnspan=3, sticky="ew", padx=(24, 4), pady=(0, 6))
+            frame.grid(row=1, column=0, columnspan=3, sticky="ew", padx=14, pady=(0, 12))
             self._toggle_buttons[program_number].configure(text="v")
         else:
             # Collapse: detach the frame from the grid (it keeps its children,
@@ -241,8 +306,8 @@ class ProgramConfigScreen(ctk.CTkFrame):
             ctk.CTkLabel(
                 frame,
                 text="No courses found for this program.",
-                text_color="#666666",
-            ).grid(row=0, column=0, sticky="w", padx=8, pady=4)
+                text_color=_MUTED,
+            ).grid(row=0, column=0, sticky="w", padx=12, pady=10)
             return
 
         # grid_row advances manually because headers and course lines are mixed
@@ -254,7 +319,8 @@ class ProgramConfigScreen(ctk.CTkFrame):
                 frame,
                 text=f"Year {group.year} - {group.semester}",
                 font=("Segoe UI", 12, "bold"),
-            ).grid(row=grid_row, column=0, sticky="w", padx=8, pady=(6, 2))
+                text_color=_TEXT,
+            ).grid(row=grid_row, column=0, sticky="w", padx=12, pady=(10, 4))
             grid_row += 1
 
             # One readable line per course under its slot header.
@@ -264,7 +330,11 @@ class ProgramConfigScreen(ctk.CTkFrame):
                     f"{course.status}  |  {course.evaluation_type}"
                 )
                 ctk.CTkLabel(frame, text=line, anchor="w").grid(
-                    row=grid_row, column=0, sticky="w", padx=20, pady=1
+                    row=grid_row,
+                    column=0,
+                    sticky="w",
+                    padx=24,
+                    pady=2,
                 )
                 grid_row += 1
 
@@ -293,6 +363,10 @@ class ProgramConfigScreen(ctk.CTkFrame):
             text=f"Selected: {count} / {self.selection_presenter.max_programs}",
             text_color="#666666",
         )
+        if hasattr(self, "_selection_badge"):
+            self._selection_badge.configure(
+                text=f"{count} / {self.selection_presenter.max_programs} selected"
+            )
         # Disable Next until the selection is valid, so the user can't advance
         # with zero programs chosen.
         self._next_button.configure(

@@ -17,7 +17,7 @@ sys.path.insert(0, str(SRC))
 from models import Course, ProgramEnrollment
 from scheduling.examConflictDetector import ScheduledExam
 from scheduling.examScheduleGenerator import ExamSchedule, ExamSystem
-from gui.scheduleNavigationPresenter import ScheduleNavigationPresenter
+from gui.presenters.scheduleNavigationPresenter import ScheduleNavigationPresenter
 
 
 def make_exam(name, number, exam_date, status="Obligatory"):
@@ -113,6 +113,18 @@ class ScheduleNavigationPresenterTests(unittest.TestCase):
         self.assertEqual(section.exams[0].course_name, "Physics 1")
         self.assertEqual(section.exams[0].exam_date, "29-01-2026")
         self.assertEqual(section.exams[1].course_name, "Calculus 1")
+
+    def test_current_system_returns_the_displayed_raw_system(self) -> None:
+        """Export can ask for the currently displayed system without private access."""
+        first = make_system(exams=[make_exam("First", "83001", date(2026, 1, 1))])
+        second = make_system(exams=[make_exam("Second", "83002", date(2026, 1, 2))])
+        presenter = ScheduleNavigationPresenter([first, second])
+
+        self.assertIs(presenter.current_system(), first)
+
+        presenter.next()
+
+        self.assertIs(presenter.current_system(), second)
 
     def test_sections_sorted_by_semester_then_moed(self) -> None:
         """Sections follow the FALL/SPRI and Aleph/Bet ordering."""

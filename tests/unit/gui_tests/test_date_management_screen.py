@@ -31,7 +31,9 @@ sys.path.insert(0, str(_SRC))
 # Import under test
 # ---------------------------------------------------------------------------
 
-from gui.dateManagementScreen import parse_calendar_date
+from gui.screens.dateManagementScreen import DateManagementScreen, parse_calendar_date
+from gui.presenters.schedulingPresenter import GenerationResult
+from models import ExamPeriod
 
 
 class TestParseCalendarDate(unittest.TestCase):
@@ -54,6 +56,171 @@ class TestParseCalendarDate(unittest.TestCase):
         """Free text that is not a date raises ValueError for the View to catch."""
         with self.assertRaises(ValueError):
             parse_calendar_date("not a date")
+
+
+class _FakePeriodPresenter:
+    def __init__(self, period: ExamPeriod, hidden_count: int = 0) -> None:
+        self._period = period
+        self._hidden_count = hidden_count
+
+    def current_period(self) -> ExamPeriod:
+        return self._period
+
+    def count_excluded_outside_window(self) -> int:
+        return self._hidden_count
+
+    def can_undo(self) -> bool:
+        return False
+
+
+class _FakeWidget:
+    def __init__(self) -> None:
+        self.options: dict[str, object] = {}
+
+    def configure(self, **kwargs) -> None:
+        self.options.update(kwargs)
+
+
+class _FakeRunner:
+    def __init__(self, result: GenerationResult | None = None, accepted: bool = True) -> None:
+        self.result = result
+        self.accepted = accepted
+
+    def run(self, task, on_started=None, on_complete=None, on_error=None) -> bool:
+        if not self.accepted:
+            return False
+        if on_started is not None:
+            on_started()
+        result = self.result if self.result is not None else task()
+        if on_complete is not None:
+            on_complete(result)
+        return True
+
+
+class TestDateManagementScreenHelpers(unittest.TestCase):
+    """Headless checks for screen helpers that protect production UX edges."""
+
+    def test_period_option_labels_are_unique_even_for_duplicate_periods(self) -> None:
+        period = ExamPeriod(
+            semester="FALL",
+            moed="Aleph",
+            start_date=date(2026, 1, 29),
+            end_date=date(2026, 3, 11),
+            excluded_dates=[],
+        )
+        screen = DateManagementScreen.__new__(DateManagementScreen)
+        screen._presenters = [
+            _FakePeriodPresenter(period),
+            _FakePeriodPresenter(period),
+        ]
+
+        labels = DateManagementScreen._period_option_labels(screen)
+
+        self.assertEqual(len(set(labels)), 2)
+        self.assertTrue(labels[0].startswith("1. FALL Aleph"))
+        self.assertTrue(labels[1].startswith("2. FALL Aleph"))
+
+    def test_hidden_exclusion_message_is_disclosed_when_present(self) -> None:
+        screen = DateManagementScreen.__new__(DateManagementScreen)
+        screen.presenter = _FakePeriodPresenter(
+            ExamPeriod(
+                semester="FALL",
+                moed="Aleph",
+                start_date=date(2026, 1, 29),
+                end_date=date(2026, 3, 11),
+                excluded_dates=[],
+            ),
+            hidden_count=2,
+        )
+
+        message = DateManagementScreen._message_with_hidden_exclusions(
+            screen,
+            "Click a calendar day.",
+        )
+
+        self.assertEqual(
+            message,
+            "Click a calendar day. 2 excluded dates are outside this window.",
+        )
+
+    def _generation_screen(self, result: GenerationResult, visited: list[str]):
+        screen = DateManagementScreen.__new__(DateManagementScreen)
+        period = ExamPeriod(
+            semester="FALL",
+            moed="Aleph",
+            start_date=date(2026, 1, 29),
+            end_date=date(2026, 3, 11),
+            excluded_dates=[],
+        )
+        screen.presenter = _FakePeriodPresenter(period)
+        screen._scheduling_presenter = type(
+            "FakeSchedulingPresenter",
+            (),
+            {"generate": lambda self: result},
+        )()
+        screen._runner = _FakeRunner(result)
+        screen._on_generation_success = lambda: visited.append("results")
+        screen._generation_in_progress = False
+        screen._status_label = _FakeWidget()
+        screen._period_selector = _FakeWidget()
+        screen._start_entry = _FakeWidget()
+        screen._end_entry = _FakeWidget()
+        screen._apply_button = _FakeWidget()
+        screen._undo_button = _FakeWidget()
+        screen._back_button = _FakeWidget()
+        screen._generate_button = _FakeWidget()
+        screen._day_cells = {"2026-01-29": _FakeWidget()}
+        screen.after = lambda _delay, callback: callback()
+        return screen
+
+    def test_generation_success_locks_controls_and_navigates_to_results(self) -> None:
+        visited: list[str] = []
+        screen = self._generation_screen(
+            GenerationResult(True, "Generated.", 297472),
+            visited,
+        )
+
+        DateManagementScreen._handle_generate(screen)
+
+        self.assertEqual(visited, ["results"])
+        self.assertEqual(
+            screen._status_label.options["text"],
+            "297,472 schedule systems generated successfully.",
+        )
+        self.assertEqual(screen._generate_button.options["state"], "disabled")
+        self.assertEqual(screen._generate_button.options["text"], "Generating...")
+        self.assertEqual(screen._day_cells["2026-01-29"].options["state"], "disabled")
+
+    def test_generation_failure_restores_controls_and_stays_on_screen(self) -> None:
+        visited: list[str] = []
+        screen = self._generation_screen(
+            GenerationResult(False, "No exam periods loaded.", 0),
+            visited,
+        )
+
+        DateManagementScreen._handle_generate(screen)
+
+        self.assertEqual(visited, [])
+        self.assertEqual(screen._status_label.options["text"], "No exam periods loaded.")
+        self.assertEqual(screen._generate_button.options["state"], "normal")
+        self.assertEqual(screen._generate_button.options["text"], "Generate Exam Schedules")
+        self.assertEqual(screen._day_cells["2026-01-29"].options["state"], "normal")
+
+    def test_duplicate_generation_request_shows_busy_feedback(self) -> None:
+        visited: list[str] = []
+        screen = self._generation_screen(
+            GenerationResult(True, "Generated.", 1),
+            visited,
+        )
+        screen._runner = _FakeRunner(accepted=False)
+
+        DateManagementScreen._handle_generate(screen)
+
+        self.assertEqual(visited, [])
+        self.assertEqual(
+            screen._status_label.options["text"],
+            "Schedule generation is already running.",
+        )
 
 
 if __name__ == "__main__":

@@ -22,8 +22,8 @@ SRC = ROOT / "src"
 sys.path.insert(0, str(SRC))
 
 from fileReader.fileTypeReaders.coursesReader import CoursesFileReader
-from gui.programSelectionPresenter import ProgramSelectionPresenter
-from gui.programDetailsPresenter import ProgramDetailsPresenter
+from gui.presenters.programSelectionPresenter import ProgramSelectionPresenter
+from gui.presenters.programDetailsPresenter import ProgramDetailsPresenter
 
 
 # Real example file shipped with the project; using it (instead of hand-built

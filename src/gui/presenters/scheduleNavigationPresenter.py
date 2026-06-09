@@ -205,6 +205,12 @@ class ScheduleNavigationPresenter:
             exams_by_iso_date=exams_by_iso_date,
         )
 
+    def current_system(self) -> ExamSystem | None:
+        """Return the currently selected raw exam system, if one exists."""
+        if not self._schedules:
+            return None
+        return self._schedules[self._index]
+
     def _build_rows(self, schedule) -> list[ExamRow]:
         """Flatten one period schedule's exams into display rows.
 

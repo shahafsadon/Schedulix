@@ -12,16 +12,16 @@ import sys
 from pathlib import Path
 from types import ModuleType
 from unittest.mock import MagicMock, patch
-from gui.uploadedDataPresenter import UploadedDataSnapshot, UploadedDataMetadata
+from gui.presenters.uploadedDataPresenter import UploadedDataSnapshot, UploadedDataMetadata
 
 from application.cache_manager import CacheManager
 from fileReader.baseFileReader import FileReaderType
-from gui.programDetailsPresenter import ProgramDetailsPresenter
-from gui.programSelectionPresenter import ProgramSelectionPresenter
-from gui.schedulingPresenter import SchedulingPresenter
-from gui.uploadService import FileUploadService
+from gui.presenters.programDetailsPresenter import ProgramDetailsPresenter
+from gui.presenters.programSelectionPresenter import ProgramSelectionPresenter
+from gui.presenters.schedulingPresenter import SchedulingPresenter
+from gui.services.uploadService import FileUploadService
 from output.outputWriter import OutputWriter
-from gui.uploadedDataPresenter import UploadedDataSnapshot, UploadedDataMetadata
+from gui.presenters.uploadedDataPresenter import UploadedDataSnapshot, UploadedDataMetadata
 
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -47,8 +47,8 @@ def _load_headless_screen_classes():
     fake_ctk.CTkFrame = type("CTkFrame", (), {})
 
     with patch.dict(sys.modules, {"customtkinter": fake_ctk}):
-        upload_module = importlib.import_module("gui.fileUploadScreen")
-        config_module = importlib.import_module("gui.programConfigScreen")
+        upload_module = importlib.import_module("gui.screens.fileUploadScreen")
+        config_module = importlib.import_module("gui.screens.programConfigScreen")
 
     return upload_module.FileUploadScreen, config_module.ProgramConfigScreen
 
@@ -157,6 +157,31 @@ def test_upload_screen_feedback_becomes_ready_only_after_all_files_are_loaded(
         FileReaderType.PROGRAMS: PROGRAMS_PATH,
         FileReaderType.EXAM_PERIODS: PERIODS_PATH,
     }
+
+
+def test_upload_screen_rows_reflect_saved_cached_data_on_open() -> None:
+    """Reopened upload screen rows must not contradict cache-backed readiness."""
+    FileUploadScreen, _ = _load_headless_screen_classes()
+
+    screen = object.__new__(FileUploadScreen)
+    screen.upload_service = _upload_examples()
+    screen.status_labels = {
+        FileReaderType.COURSES: _FakeLabel(),
+        FileReaderType.PROGRAMS: _FakeLabel(),
+        FileReaderType.EXAM_PERIODS: _FakeLabel(),
+    }
+
+    screen._refresh_upload_row_statuses()
+
+    assert screen.status_labels[FileReaderType.COURSES].options["text"] == (
+        "Loaded from saved data - 3 item(s)"
+    )
+    assert screen.status_labels[FileReaderType.PROGRAMS].options["text"] == (
+        "Loaded from saved data - 3 item(s)"
+    )
+    assert screen.status_labels[FileReaderType.EXAM_PERIODS].options["text"] == (
+        "Loaded from saved data - 3 item(s)"
+    )
 
 
 def test_failed_reupload_keeps_the_last_valid_uploaded_courses(
