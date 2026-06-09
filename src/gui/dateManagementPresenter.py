@@ -78,6 +78,7 @@ class DateManagementPresenter:
         schedule_generator=None,
         courses: list | None = None,
         exam_periods: list | None = None,
+        on_change: Callable[[], None] | None = None,
     ) -> None:
         self._exam_period = exam_period
         self._date_handler = date_handler
@@ -85,6 +86,7 @@ class DateManagementPresenter:
         self._generator = schedule_generator
         self._courses = courses or []
         self._exam_periods = exam_periods or []
+        self._on_change = on_change
 
         # Keeps the last executed command so undo_last() can reverse it.
         self._last_command: object | None = None
@@ -122,6 +124,7 @@ class DateManagementPresenter:
         # meaningful (a failed toggle has no state to reverse).
         if result.success:
             self._last_command = command
+            self._notify_change()
         return result
 
     def on_regenerate(self) -> CommandResult:
@@ -232,6 +235,7 @@ class DateManagementPresenter:
         # meaningful (a rejected inverted-range edit has no state to reverse).
         if result.success:
             self._last_command = command
+            self._notify_change()
         return result
 
     def undo_last(self) -> CommandResult:
@@ -252,7 +256,13 @@ class DateManagementPresenter:
         if result.success:
             # Consuming the command: a second undo would be a no-op anyway.
             self._last_command = None
+            self._notify_change()
         return result
+
+    def _notify_change(self) -> None:
+        """Tell the workflow that the managed period was mutated."""
+        if self._on_change is not None:
+            self._on_change()
 
     # ------------------------------------------------------------------
     # Read-only queries for the View

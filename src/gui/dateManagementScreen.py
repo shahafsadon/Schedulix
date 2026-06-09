@@ -86,6 +86,7 @@ class DateManagementScreen(ctk.CTkFrame):
         self,
         master,
         presenter: DateManagementPresenter,
+        period_presenters: list[DateManagementPresenter] | None = None,
         on_next: Callable[[], None] | None = None,
         on_back: Callable[[], None] | None = None,
     ) -> None:
@@ -98,11 +99,14 @@ class DateManagementScreen(ctk.CTkFrame):
             on_back: optional callback fired when the user goes back a step.
         """
         super().__init__(master, corner_radius=0)
-        self.presenter = presenter
+        self._presenters = period_presenters or [presenter]
+        self._current_period_index = 0
+        self.presenter = self._presenters[self._current_period_index]
         # Navigation callbacks are optional so the screen can be shown/tested
         # standalone; the wizard shell wires them in the full application.
         self._on_next = on_next
         self._on_back = on_back
+        self._period_selector = None
 
         # Day cells keyed by ISO date "YYYY-MM-DD". Only in-window days are
         # stored, since those are the only cells the user can toggle and the
@@ -120,8 +124,8 @@ class DateManagementScreen(ctk.CTkFrame):
 
     def _build(self) -> None:
         """Build the static layout: title, edit panel, scrollable calendar, footer."""
-        # The calendar body (row 2) takes all spare vertical space.
-        self.grid_rowconfigure(2, weight=1)
+        # The calendar body (row 3) takes all spare vertical space.
+        self.grid_rowconfigure(3, weight=1)
         self.grid_columnconfigure(0, weight=1)
 
         ctk.CTkLabel(
@@ -130,14 +134,38 @@ class DateManagementScreen(ctk.CTkFrame):
             font=("Segoe UI", 16, "bold"),
         ).grid(row=0, column=0, sticky="w", padx=16, pady=(16, 4))
 
+        self._build_period_selector()
         self._build_edit_panel()
 
         # Scrollable area holding the month grid(s) of the active window.
         self._body = ctk.CTkScrollableFrame(self)
-        self._body.grid(row=2, column=0, sticky="nsew", padx=16, pady=8)
+        self._body.grid(row=3, column=0, sticky="nsew", padx=16, pady=8)
         self._body.grid_columnconfigure(0, weight=1)
 
         self._build_footer()
+
+    def _build_period_selector(self) -> None:
+        """Build the semester/moed selector when more than one period exists."""
+        if len(self._presenters) <= 1:
+            return
+
+        panel = ctk.CTkFrame(self, fg_color="transparent")
+        panel.grid(row=1, column=0, sticky="ew", padx=16, pady=(0, 8))
+        panel.grid_columnconfigure(1, weight=1)
+
+        ctk.CTkLabel(panel, text="Exam period:").grid(
+            row=0, column=0, sticky="w", padx=(0, 8)
+        )
+
+        values = self._period_option_labels()
+        self._period_selector = ctk.CTkOptionMenu(
+            panel,
+            values=values,
+            command=self._handle_period_selected,
+            width=260,
+        )
+        self._period_selector.grid(row=0, column=1, sticky="w")
+        self._period_selector.set(values[self._current_period_index])
 
     def _build_edit_panel(self) -> None:
         """Build the in-screen period-editing panel (start/end fields + Apply).
@@ -147,7 +175,7 @@ class DateManagementScreen(ctk.CTkFrame):
         ``presenter.on_edit_period`` and redraws the calendar on success.
         """
         panel = ctk.CTkFrame(self, fg_color="transparent")
-        panel.grid(row=1, column=0, sticky="ew", padx=16, pady=(0, 4))
+        panel.grid(row=2, column=0, sticky="ew", padx=16, pady=(0, 4))
 
         ctk.CTkLabel(panel, text="Period start (DD-MM-YYYY):").grid(
             row=0, column=0, sticky="w", padx=(0, 6)
@@ -181,7 +209,7 @@ class DateManagementScreen(ctk.CTkFrame):
     def _build_footer(self) -> None:
         """Build the footer: status label and Back/Next navigation buttons."""
         footer = ctk.CTkFrame(self, fg_color="transparent")
-        footer.grid(row=3, column=0, sticky="ew", padx=16, pady=(8, 16))
+        footer.grid(row=4, column=0, sticky="ew", padx=16, pady=(8, 16))
         # Column 0 stretches so the status label sits left and buttons sit right.
         footer.grid_columnconfigure(0, weight=1)
 
@@ -371,6 +399,7 @@ class DateManagementScreen(ctk.CTkFrame):
         if result.success:
             # The window changed: redraw months and recolor days.
             self._rebuild_calendar()
+            self._refresh_period_selector()
         else:
             # Rejected (e.g. inverted range): snap the fields back to the real
             # window so the displayed values stay consistent with the period.
@@ -385,12 +414,26 @@ class DateManagementScreen(ctk.CTkFrame):
             # also recolors days for an undone toggle.
             self._rebuild_calendar()
             self._sync_entries_from_period()
+            self._refresh_period_selector()
         self._show_message(result.message, ok=result.success)
 
     def _handle_next(self) -> None:
         """Move to the next wizard step if a navigation callback was provided."""
         if self._on_next is not None:
             self._on_next()
+
+    def _handle_period_selected(self, selected_label: str) -> None:
+        """Switch the active presenter to the selected semester/moed period."""
+        labels = self._period_option_labels()
+        try:
+            self._current_period_index = labels.index(selected_label)
+        except ValueError:
+            return
+
+        self.presenter = self._presenters[self._current_period_index]
+        self._sync_entries_from_period()
+        self._rebuild_calendar()
+        self._refresh_status()
 
     # ------------------------------------------------------------------
     # Small helpers
@@ -417,3 +460,26 @@ class DateManagementScreen(ctk.CTkFrame):
             text=text,
             text_color="#1f7a1f" if ok else "#B00020",
         )
+
+    def _period_option_labels(self) -> list[str]:
+        """Return stable labels for the available semester/moed periods."""
+        labels: list[str] = []
+        for presenter in self._presenters:
+            period = presenter.current_period()
+            labels.append(
+                (
+                    f"{period.semester} {period.moed} | "
+                    f"{period.start_date.strftime(_DATE_FORMAT)} - "
+                    f"{period.end_date.strftime(_DATE_FORMAT)}"
+                )
+            )
+        return labels
+
+    def _refresh_period_selector(self) -> None:
+        """Refresh selector labels after a period window edit or undo."""
+        if self._period_selector is None:
+            return
+
+        labels = self._period_option_labels()
+        self._period_selector.configure(values=labels)
+        self._period_selector.set(labels[self._current_period_index])

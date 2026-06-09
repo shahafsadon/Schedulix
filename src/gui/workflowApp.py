@@ -9,6 +9,8 @@ except ModuleNotFoundError as error:
     ) from error
 
 from application.cache_manager import CacheManager
+from gui.dateManagementPresenter import DateManagementPresenter
+from gui.dateManagementScreen import DateManagementScreen
 from gui.fileUploadScreen import FileUploadScreen
 from gui.programDetailsPresenter import ProgramDetailsPresenter
 from gui.programConfigScreen import ProgramConfigScreen
@@ -16,6 +18,7 @@ from gui.programSelectionPresenter import ProgramSelectionPresenter
 from gui.uploadService import FileUploadService
 from gui.uploadedDataExportService import UploadedDataExportService
 from gui.uploadedDataPresenter import UploadedDataPresenter
+from scheduling.examDateHandler import ExamDateHandler
 
 
 class SchedulixWorkflow(ctk.CTkFrame):
@@ -88,20 +91,63 @@ class SchedulixWorkflow(ctk.CTkFrame):
         self.cache.set_selected_programs(
             self._program_selection.selected_programs
         )
-        self._show_date_step_placeholder()
+        self.show_date_management()
 
-    def _show_date_step_placeholder(self) -> None:
-        """Temporary bridge while the date-management step is wired in."""
+    def show_date_management(self) -> None:
+        """Show the calendar editing step for all uploaded exam periods."""
+        self._set_window_title("Schedulix - Date Management")
+        exam_periods = self.cache.get_exam_periods()
+
+        if not exam_periods:
+            self._set_screen(
+                _MessageScreen(
+                    self,
+                    title="No Exam Periods Loaded",
+                    message="Go back and load an exam-periods file before editing dates.",
+                    on_back=self.show_program_config,
+                )
+            )
+            return
+
+        date_handler = ExamDateHandler()
+        presenters = [
+            DateManagementPresenter(
+                exam_period=exam_period,
+                date_handler=date_handler,
+                cache_manager=self.cache,
+                courses=self.cache.get_courses(),
+                exam_periods=exam_periods,
+                on_change=self._persist_exam_periods,
+            )
+            for exam_period in exam_periods
+        ]
+
+        self._set_screen(
+            DateManagementScreen(
+                self,
+                presenter=presenters[0],
+                period_presenters=presenters,
+                on_back=self.show_program_config,
+                on_next=self._show_generation_step_placeholder,
+            )
+        )
+
+    def _persist_exam_periods(self) -> None:
+        """Persist the currently mutated exam-period objects to disk cache."""
+        self.cache.set_exam_periods(self.cache.get_exam_periods())
+
+    def _show_generation_step_placeholder(self) -> None:
+        """Temporary bridge while the generation step is wired in."""
         self._set_window_title("Schedulix - Workflow")
         self._set_screen(
             _MessageScreen(
                 self,
-                title="Program Selection Saved",
+                title="Date Management Saved",
                 message=(
-                    "The selected programs were saved. "
-                    "The next checkpoint opens date management."
+                    "Date changes were saved. "
+                    "The next checkpoint generates schedules from the cache."
                 ),
-                on_back=self.show_program_config,
+                on_back=self.show_date_management,
             )
         )
 
