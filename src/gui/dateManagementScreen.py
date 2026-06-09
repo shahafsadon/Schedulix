@@ -1,34 +1,10 @@
-"""Date management screen for the Version 2.0 GUI (SCRUM-124).
-
-This is wizard step C from section 4.2 of the design document: the user sees a
-calendar for the active exam period, clicks a day to toggle it between "active"
-and "excluded" (the cell changes color), and can adjust the period's scheduling
-window (start/end dates) in the same screen.
-
-As a passive MVP View it owns no domain logic. Every user action is delegated to
-the injected ``DateManagementPresenter``:
-- clicking a day  -> presenter.on_date_clicked(date)         (Command: toggle)
-- editing a window -> presenter.on_edit_period(start, end)   (Command: edit)
-- undo            -> presenter.undo_last()                   (one-step revert)
-The presenter returns a ``CommandResult`` carrying the refreshed valid-date
-list, which the View uses to repaint the calendar. The View never imports or
-touches the Command classes, the cache, or the scheduling engine directly.
-
-Calendar rendering mirrors the SCRUM-126 output screen: a month grid built with
-``calendar.monthcalendar``, lightweight day buttons, and (light, dark) color
-pairs as expected by customtkinter. Only the months spanned by the active
-period are drawn, and the grid is rebuilt whenever the window changes (an edit
-can grow or shrink the set of months).
-"""
+"""Date management screen for the Version 2.0 GUI workflow."""
 from __future__ import annotations
 
 import calendar
 from datetime import date, datetime
 from typing import Callable
 
-# The GUI layer depends on customtkinter. We fail early with a clear, actionable
-# message rather than a bare ImportError, since this is the most common setup
-# mistake (running without installing the project requirements).
 try:
     import customtkinter as ctk
 except ModuleNotFoundError as error:
@@ -40,47 +16,37 @@ except ModuleNotFoundError as error:
 from gui.dateManagementPresenter import DateManagementPresenter
 
 
-# Date format shown in the edit fields and parsed back from them. Matches the
-# DD-MM-YYYY convention used throughout the input files (see ExamPeriodsReader).
 _DATE_FORMAT = "%d-%m-%Y"
-
 _MONTH_NAMES = [
     "January", "February", "March", "April", "May", "June",
     "July", "August", "September", "October", "November", "December",
 ]
 _WEEKDAY_HEADERS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
 
-# Colors are (light_mode, dark_mode) pairs as expected by customtkinter.
-# Excluded days are red (blocked); active in-window days are a neutral fill.
-_EXCLUDED_DAY_COLOR = ("#ffd6d6", "#5a2b2b")
-_EXCLUDED_DAY_HOVER = ("#ffbcbc", "#6e3636")
-_EXCLUDED_DAY_TEXT = ("#7a0000", "#ffe0e0")
-_ACTIVE_DAY_COLOR = ("#e6f0e6", "#2b3b2b")
-_ACTIVE_DAY_HOVER = ("#d2e6d2", "#365036")
-_ACTIVE_DAY_TEXT = ("#1f5130", "#d6f0d6")
+_PAGE_BG = ("#F3F6FB", "#0B1220")
+_SURFACE = ("#FFFFFF", "#151B26")
+_SUBTLE_SURFACE = ("#F8FAFC", "#101826")
+_BORDER = ("#D8E2F0", "#2D3748")
+_TEXT = ("#111827", "#F8FAFC")
+_MUTED = ("#5F6368", "#A8A8A8")
+_PRIMARY = "#2563EB"
+_PRIMARY_HOVER = "#1D4ED8"
+_ACTIVE_DAY_COLOR = ("#DBEAFE", "#1E3A8A")
+_ACTIVE_DAY_HOVER = ("#BFDBFE", "#274A9F")
+_ACTIVE_DAY_TEXT = ("#0F172A", "#EAF2FF")
+_EXCLUDED_DAY_COLOR = ("#FEE2E2", "#5A1F1F")
+_EXCLUDED_DAY_HOVER = ("#FECACA", "#7F2A2A")
+_EXCLUDED_DAY_TEXT = ("#991B1B", "#FEE2E2")
+_OUTSIDE_DAY_TEXT = ("#B8C0CC", "#64748B")
 
 
 def parse_calendar_date(text: str) -> date:
-    """Parse a ``DD-MM-YYYY`` string into a ``date``.
-
-    Kept as a module-level function (not a method) so the parsing rule can be
-    unit-tested without constructing a customtkinter widget. Raises ``ValueError``
-    on a malformed string, which the View catches to show an error message.
-
-    Args:
-        text: the date string typed by the user, e.g. "29-01-2026".
-
-    Returns:
-        The parsed ``date`` object.
-
-    Raises:
-        ValueError: if ``text`` does not match the expected DD-MM-YYYY format.
-    """
+    """Parse a ``DD-MM-YYYY`` string into a date."""
     return datetime.strptime(text.strip(), _DATE_FORMAT).date()
 
 
 class DateManagementScreen(ctk.CTkFrame):
-    """Calendar screen to exclude/activate days and edit the period window."""
+    """Calendar screen for editing exam-period windows and excluded dates."""
 
     def __init__(
         self,
@@ -90,133 +56,224 @@ class DateManagementScreen(ctk.CTkFrame):
         on_next: Callable[[], None] | None = None,
         on_back: Callable[[], None] | None = None,
     ) -> None:
-        """Create the date management screen.
-
-        Args:
-            master: the parent customTkinter container.
-            presenter: drives date toggling, period editing, and undo.
-            on_next: optional callback fired when the user moves to the next step.
-            on_back: optional callback fired when the user goes back a step.
-        """
-        super().__init__(master, corner_radius=0)
+        super().__init__(master, corner_radius=0, fg_color=_PAGE_BG)
         self._presenters = period_presenters or [presenter]
         self._current_period_index = 0
         self.presenter = self._presenters[self._current_period_index]
-        # Navigation callbacks are optional so the screen can be shown/tested
-        # standalone; the wizard shell wires them in the full application.
         self._on_next = on_next
         self._on_back = on_back
-        self._period_selector = None
 
-        # Day cells keyed by ISO date "YYYY-MM-DD". Only in-window days are
-        # stored, since those are the only cells the user can toggle and the
-        # only ones we repaint after a change.
+        self._period_selector = None
         self._day_cells: dict[str, ctk.CTkButton] = {}
+        self._metric_labels: dict[str, ctk.CTkLabel] = {}
 
         self._build()
-        # Draw the calendar for the period's current window and color the days.
         self._rebuild_calendar()
         self._refresh_status()
-
-    # ------------------------------------------------------------------
-    # Layout
-    # ------------------------------------------------------------------
+        self._refresh_metrics()
 
     def _build(self) -> None:
-        """Build the static layout: title, edit panel, scrollable calendar, footer."""
-        # The calendar body (row 3) takes all spare vertical space.
-        self.grid_rowconfigure(3, weight=1)
+        """Build the modern date-management workspace."""
         self.grid_columnconfigure(0, weight=1)
+        self.grid_rowconfigure(3, weight=1)
 
-        ctk.CTkLabel(
-            self,
-            text="Manage Exam Dates",
-            font=("Segoe UI", 16, "bold"),
-        ).grid(row=0, column=0, sticky="w", padx=16, pady=(16, 4))
-
-        self._build_period_selector()
-        self._build_edit_panel()
-
-        # Scrollable area holding the month grid(s) of the active window.
-        self._body = ctk.CTkScrollableFrame(self)
-        self._body.grid(row=3, column=0, sticky="nsew", padx=16, pady=8)
-        self._body.grid_columnconfigure(0, weight=1)
-
+        self._build_header()
+        self._build_metrics()
+        self._build_controls()
+        self._build_calendar_area()
         self._build_footer()
 
-    def _build_period_selector(self) -> None:
-        """Build the semester/moed selector when more than one period exists."""
-        if len(self._presenters) <= 1:
-            return
+    def _build_header(self) -> None:
+        header = ctk.CTkFrame(self, fg_color="transparent")
+        header.grid(row=0, column=0, sticky="ew", padx=24, pady=(18, 10))
+        header.grid_columnconfigure(0, weight=1)
 
-        panel = ctk.CTkFrame(self, fg_color="transparent")
-        panel.grid(row=1, column=0, sticky="ew", padx=16, pady=(0, 8))
-        panel.grid_columnconfigure(1, weight=1)
+        ctk.CTkLabel(
+            header,
+            text="Manage Exam Dates",
+            font=("Segoe UI", 24, "bold"),
+            text_color=_TEXT,
+        ).grid(row=0, column=0, sticky="w")
 
-        ctk.CTkLabel(panel, text="Exam period:").grid(
-            row=0, column=0, sticky="w", padx=(0, 8)
+        ctk.CTkLabel(
+            header,
+            text="Choose an exam period, adjust its window, and mark unavailable days.",
+            font=("Segoe UI", 13),
+            text_color=_MUTED,
+        ).grid(row=1, column=0, sticky="w", pady=(2, 0))
+
+    def _build_metrics(self) -> None:
+        metrics = ctk.CTkFrame(self, fg_color="transparent")
+        metrics.grid(row=1, column=0, sticky="ew", padx=24, pady=(0, 12))
+        for column in range(4):
+            metrics.grid_columnconfigure(column, weight=1)
+
+        self._build_metric(metrics, 0, "periods", "Periods")
+        self._build_metric(metrics, 1, "window", "Window days")
+        self._build_metric(metrics, 2, "active", "Active days")
+        self._build_metric(metrics, 3, "excluded", "Excluded days")
+
+    def _build_metric(
+        self,
+        master: ctk.CTkFrame,
+        column: int,
+        key: str,
+        label: str,
+    ) -> None:
+        card = ctk.CTkFrame(
+            master,
+            fg_color=_SURFACE,
+            border_width=1,
+            border_color=_BORDER,
+            corner_radius=8,
         )
+        card.grid(row=0, column=column, sticky="ew", padx=(0 if column == 0 else 10, 0))
+
+        ctk.CTkLabel(
+            card,
+            text=label,
+            font=("Segoe UI", 10, "bold"),
+            text_color=_MUTED,
+            anchor="w",
+        ).grid(row=0, column=0, sticky="w", padx=14, pady=(10, 0))
+
+        value = ctk.CTkLabel(
+            card,
+            text="-",
+            font=("Segoe UI", 19, "bold"),
+            text_color=(_PRIMARY, "#93C5FD"),
+            anchor="w",
+        )
+        value.grid(row=1, column=0, sticky="w", padx=14, pady=(0, 10))
+        self._metric_labels[key] = value
+
+    def _build_controls(self) -> None:
+        controls = ctk.CTkFrame(
+            self,
+            fg_color=_SURFACE,
+            border_width=1,
+            border_color=_BORDER,
+            corner_radius=8,
+        )
+        controls.grid(row=2, column=0, sticky="ew", padx=24, pady=(0, 12))
+        controls.grid_columnconfigure(5, weight=1)
+
+        ctk.CTkLabel(
+            controls,
+            text="Exam period",
+            font=("Segoe UI", 11, "bold"),
+            text_color=_MUTED,
+        ).grid(row=0, column=0, sticky="w", padx=16, pady=(12, 2))
 
         values = self._period_option_labels()
-        self._period_selector = ctk.CTkOptionMenu(
-            panel,
-            values=values,
-            command=self._handle_period_selected,
-            width=260,
-        )
-        self._period_selector.grid(row=0, column=1, sticky="w")
-        self._period_selector.set(values[self._current_period_index])
+        if len(self._presenters) > 1:
+            self._period_selector = ctk.CTkOptionMenu(
+                controls,
+                values=values,
+                command=self._handle_period_selected,
+                width=260,
+                fg_color=_PRIMARY,
+                button_color="#1E40AF",
+                button_hover_color=_PRIMARY_HOVER,
+            )
+            self._period_selector.grid(row=1, column=0, sticky="w", padx=16, pady=(0, 14))
+            self._period_selector.set(values[self._current_period_index])
+        else:
+            ctk.CTkLabel(
+                controls,
+                text=values[0],
+                font=("Segoe UI", 13, "bold"),
+                text_color=_TEXT,
+            ).grid(row=1, column=0, sticky="w", padx=16, pady=(0, 14))
 
-    def _build_edit_panel(self) -> None:
-        """Build the in-screen period-editing panel (start/end fields + Apply).
+        ctk.CTkLabel(
+            controls,
+            text="Start date",
+            font=("Segoe UI", 11, "bold"),
+            text_color=_MUTED,
+        ).grid(row=0, column=1, sticky="w", padx=(8, 8), pady=(12, 2))
+        self._start_entry = ctk.CTkEntry(controls, width=132)
+        self._start_entry.grid(row=1, column=1, sticky="w", padx=(8, 8), pady=(0, 14))
 
-        Implements the "Edit semester periods" sub-task: the user types a new
-        start and end date and clicks Apply; the View delegates to
-        ``presenter.on_edit_period`` and redraws the calendar on success.
-        """
-        panel = ctk.CTkFrame(self, fg_color="transparent")
-        panel.grid(row=2, column=0, sticky="ew", padx=16, pady=(0, 4))
-
-        ctk.CTkLabel(panel, text="Period start (DD-MM-YYYY):").grid(
-            row=0, column=0, sticky="w", padx=(0, 6)
-        )
-        self._start_entry = ctk.CTkEntry(panel, width=120)
-        self._start_entry.grid(row=0, column=1, padx=(0, 16))
-
-        ctk.CTkLabel(panel, text="Period end (DD-MM-YYYY):").grid(
-            row=0, column=2, sticky="w", padx=(0, 6)
-        )
-        self._end_entry = ctk.CTkEntry(panel, width=120)
-        self._end_entry.grid(row=0, column=3, padx=(0, 16))
+        ctk.CTkLabel(
+            controls,
+            text="End date",
+            font=("Segoe UI", 11, "bold"),
+            text_color=_MUTED,
+        ).grid(row=0, column=2, sticky="w", padx=(8, 8), pady=(12, 2))
+        self._end_entry = ctk.CTkEntry(controls, width=132)
+        self._end_entry.grid(row=1, column=2, sticky="w", padx=(8, 12), pady=(0, 14))
 
         ctk.CTkButton(
-            panel, text="Apply Period", width=110, command=self._handle_apply_period
-        ).grid(row=0, column=4, padx=(0, 8))
+            controls,
+            text="Apply Period",
+            width=118,
+            fg_color=_PRIMARY,
+            hover_color=_PRIMARY_HOVER,
+            command=self._handle_apply_period,
+        ).grid(row=1, column=3, sticky="w", padx=(0, 8), pady=(0, 14))
 
         ctk.CTkButton(
-            panel,
+            controls,
             text="Undo",
-            width=80,
+            width=84,
             fg_color="transparent",
             border_width=1,
+            border_color=_BORDER,
+            text_color=(_PRIMARY, "#93C5FD"),
             command=self._handle_undo,
-        ).grid(row=0, column=5)
+        ).grid(row=1, column=4, sticky="w", padx=(0, 12), pady=(0, 14))
 
-        # Prefill the entries with the period's current window so the user edits
-        # the real values rather than typing from scratch.
+        legend = ctk.CTkFrame(controls, fg_color="transparent")
+        legend.grid(row=1, column=5, sticky="e", padx=16, pady=(0, 14))
+        self._build_legend_item(legend, 0, "Active", _ACTIVE_DAY_COLOR)
+        self._build_legend_item(legend, 1, "Excluded", _EXCLUDED_DAY_COLOR)
+
         self._sync_entries_from_period()
 
+    def _build_legend_item(self, master, column: int, label: str, color) -> None:
+        swatch = ctk.CTkLabel(master, text="", width=18, height=18, fg_color=color, corner_radius=5)
+        swatch.grid(row=0, column=column * 2, padx=(0 if column == 0 else 12, 6))
+        ctk.CTkLabel(master, text=label, text_color=_MUTED, font=("Segoe UI", 11)).grid(
+            row=0, column=column * 2 + 1
+        )
+
+    def _build_calendar_area(self) -> None:
+        card = ctk.CTkFrame(
+            self,
+            fg_color=_SURFACE,
+            border_width=1,
+            border_color=_BORDER,
+            corner_radius=8,
+        )
+        card.grid(row=3, column=0, sticky="nsew", padx=24, pady=(0, 12))
+        card.grid_columnconfigure(0, weight=1)
+        card.grid_rowconfigure(1, weight=1)
+
+        ctk.CTkLabel(
+            card,
+            text="Period Calendar",
+            font=("Segoe UI", 16, "bold"),
+            text_color=_TEXT,
+        ).grid(row=0, column=0, sticky="w", padx=18, pady=(14, 8))
+
+        self._body = ctk.CTkScrollableFrame(
+            card,
+            fg_color=_SUBTLE_SURFACE,
+            border_width=0,
+            corner_radius=8,
+        )
+        self._body.grid(row=1, column=0, sticky="nsew", padx=14, pady=(0, 14))
+        self._body.grid_columnconfigure(0, weight=1)
+
     def _build_footer(self) -> None:
-        """Build the footer: status label and Back/Next navigation buttons."""
         footer = ctk.CTkFrame(self, fg_color="transparent")
-        footer.grid(row=4, column=0, sticky="ew", padx=16, pady=(8, 16))
-        # Column 0 stretches so the status label sits left and buttons sit right.
+        footer.grid(row=4, column=0, sticky="ew", padx=24, pady=(0, 16))
         footer.grid_columnconfigure(0, weight=1)
 
-        self._status_label = ctk.CTkLabel(footer, text="", text_color="#666666")
+        self._status_label = ctk.CTkLabel(footer, text="", text_color=_MUTED)
         self._status_label.grid(row=0, column=0, sticky="w")
 
-        # Back is only shown when a callback exists (i.e. inside the wizard).
         if self._on_back is not None:
             ctk.CTkButton(
                 footer,
@@ -224,49 +281,38 @@ class DateManagementScreen(ctk.CTkFrame):
                 width=90,
                 fg_color="transparent",
                 border_width=1,
+                border_color=_BORDER,
+                text_color=(_PRIMARY, "#93C5FD"),
                 command=self._on_back,
             ).grid(row=0, column=1, padx=(8, 8))
 
-        # Next is always present; date management is optional, so the user may
-        # proceed without excluding anything.
         ctk.CTkButton(
-            footer, text="Next", width=90, command=self._handle_next
+            footer,
+            text="Next",
+            width=100,
+            fg_color=_PRIMARY,
+            hover_color=_PRIMARY_HOVER,
+            command=self._handle_next,
         ).grid(row=0, column=2)
 
-    # ------------------------------------------------------------------
-    # Calendar rendering
-    # ------------------------------------------------------------------
-
     def _rebuild_calendar(self) -> None:
-        """Clear and redraw the month grid for the period's current window.
-
-        Called on first build and again after a successful period edit, because
-        changing start/end can add or remove whole months from the view.
-        """
-        # Drop any previously drawn months and their cached cells.
+        """Clear and redraw the month cards for the selected period."""
         for child in self._body.winfo_children():
             child.destroy()
         self._day_cells.clear()
 
-        # Draw every month spanned by the active window. The presenter exposes
-        # the valid dates, but we draw full months (start..end) so the user sees
-        # the days they can toggle in their normal calendar context.
-        start = self.presenter.current_period().start_date
-        end = self.presenter.current_period().end_date
-        for (year, month) in self._months_between(start, end):
-            self._build_month(year, month, start, end)
+        period = self.presenter.current_period()
+        for year, month in self._months_between(period.start_date, period.end_date):
+            self._build_month(year, month, period.start_date, period.end_date)
 
-        # Color the days according to the current excluded/active state.
         self._paint_days()
 
     @staticmethod
     def _months_between(start: date, end: date) -> list[tuple[int, int]]:
-        """Return the (year, month) pairs spanned by the window, in order."""
         months: list[tuple[int, int]] = []
         year, month = start.year, start.month
         while (year, month) <= (end.year, end.month):
             months.append((year, month))
-            # Advance one calendar month, rolling over to January of next year.
             if month == 12:
                 year, month = year + 1, 1
             else:
@@ -274,51 +320,53 @@ class DateManagementScreen(ctk.CTkFrame):
         return months
 
     def _build_month(self, year: int, month: int, start: date, end: date) -> None:
-        """Create one month's header + weekday row + grid of day cells.
-
-        Only days inside the [start, end] window become interactive cells (they
-        can be toggled); days outside the window are flat, disabled labels so the
-        calendar reads naturally without inviting clicks that do nothing.
-        """
-        month_frame = ctk.CTkFrame(self._body)
-        month_frame.pack(fill="x", pady=(8, 4))
+        month_frame = ctk.CTkFrame(
+            self._body,
+            fg_color=_SURFACE,
+            border_width=1,
+            border_color=_BORDER,
+            corner_radius=8,
+        )
+        month_frame.pack(fill="x", padx=6, pady=(6, 10))
         for col in range(7):
             month_frame.grid_columnconfigure(col, weight=1, uniform="day")
 
         ctk.CTkLabel(
             month_frame,
             text=f"{_MONTH_NAMES[month - 1]} {year}",
-            font=("Segoe UI", 13, "bold"),
-        ).grid(row=0, column=0, columnspan=7, sticky="w", padx=8, pady=(6, 2))
+            font=("Segoe UI", 14, "bold"),
+            text_color=_TEXT,
+        ).grid(row=0, column=0, columnspan=7, sticky="w", padx=12, pady=(10, 6))
 
         for col, label in enumerate(_WEEKDAY_HEADERS):
             ctk.CTkLabel(
                 month_frame,
                 text=label,
                 font=("Segoe UI", 10, "bold"),
-                text_color="#888888",
-            ).grid(row=1, column=col, padx=1, pady=1)
+                text_color=_MUTED,
+            ).grid(row=1, column=col, padx=3, pady=2)
 
         for week_index, week in enumerate(calendar.monthcalendar(year, month)):
             for col, day in enumerate(week):
                 if day == 0:
-                    # Padding cell for days outside this month.
                     ctk.CTkLabel(month_frame, text="").grid(
-                        row=2 + week_index, column=col, padx=1, pady=1
+                        row=2 + week_index,
+                        column=col,
+                        padx=3,
+                        pady=3,
+                        sticky="nsew",
                     )
                     continue
 
                 current = date(year, month, day)
                 if start <= current <= end:
-                    # In-window: an interactive cell the user can toggle.
                     self._build_day_cell(month_frame, 2 + week_index, col, current)
                 else:
-                    # Out-of-window: a flat, non-interactive label.
                     ctk.CTkLabel(
                         month_frame,
                         text=str(day),
-                        text_color="#bbbbbb",
-                    ).grid(row=2 + week_index, column=col, padx=1, pady=1)
+                        text_color=_OUTSIDE_DAY_TEXT,
+                    ).grid(row=2 + week_index, column=col, padx=3, pady=3)
 
     def _build_day_cell(
         self,
@@ -327,29 +375,18 @@ class DateManagementScreen(ctk.CTkFrame):
         col: int,
         cell_date: date,
     ) -> None:
-        """Create one interactive in-window day cell and register it by ISO date.
-
-        The cell's color is set later by ``_paint_days``; here we only wire the
-        click to the presenter via the day's date.
-        """
         iso = cell_date.isoformat()
         cell = ctk.CTkButton(
             parent,
             text=str(cell_date.day),
-            width=32,
-            height=28,
-            # Default arg binds this iteration's date, not the loop's last value.
+            height=30,
+            corner_radius=7,
             command=lambda d=cell_date: self._handle_day_click(d),
         )
-        cell.grid(row=row, column=col, padx=1, pady=1, sticky="nsew")
+        cell.grid(row=row, column=col, padx=3, pady=3, sticky="ew")
         self._day_cells[iso] = cell
 
     def _paint_days(self) -> None:
-        """Color every in-window cell as excluded (red) or active (neutral).
-
-        The presenter is the single source of truth for the excluded state, so
-        each cell is colored by asking ``presenter.is_excluded`` for its date.
-        """
         for iso, cell in self._day_cells.items():
             cell_date = date.fromisoformat(iso)
             if self.presenter.is_excluded(cell_date):
@@ -365,65 +402,43 @@ class DateManagementScreen(ctk.CTkFrame):
                     text_color=_ACTIVE_DAY_TEXT,
                 )
 
-    # ------------------------------------------------------------------
-    # Event handlers (delegate to the presenter)
-    # ------------------------------------------------------------------
-
     def _handle_day_click(self, clicked_date: date) -> None:
-        """Toggle a day's excluded/active state via the presenter, then repaint."""
         result = self.presenter.on_date_clicked(clicked_date)
-        # Recolor every cell from the presenter's updated state and echo the
-        # command's message (green for success, red otherwise).
         self._paint_days()
+        self._refresh_metrics()
         self._show_message(result.message, ok=result.success)
 
     def _handle_apply_period(self) -> None:
-        """Apply a new start/end window from the edit fields via the presenter.
-
-        Parses the two date fields, delegates to ``on_edit_period``, and on
-        success rebuilds the calendar (the month set may have changed). A parse
-        error or a presenter rejection is shown in red and leaves the calendar
-        untouched.
-        """
-        # Parse the fields first; a malformed date never reaches the presenter.
         try:
             new_start = parse_calendar_date(self._start_entry.get())
             new_end = parse_calendar_date(self._end_entry.get())
         except ValueError:
-            self._show_message(
-                "Dates must be in DD-MM-YYYY format.", ok=False
-            )
+            self._show_message("Dates must be in DD-MM-YYYY format.", ok=False)
             return
 
         result = self.presenter.on_edit_period(new_start, new_end)
         if result.success:
-            # The window changed: redraw months and recolor days.
             self._rebuild_calendar()
             self._refresh_period_selector()
+            self._refresh_metrics()
         else:
-            # Rejected (e.g. inverted range): snap the fields back to the real
-            # window so the displayed values stay consistent with the period.
             self._sync_entries_from_period()
         self._show_message(result.message, ok=result.success)
 
     def _handle_undo(self) -> None:
-        """Revert the last toggle or period edit via the presenter, then refresh."""
         result = self.presenter.undo_last()
         if result.success:
-            # An undone edit can change the window, so rebuild to be safe; this
-            # also recolors days for an undone toggle.
             self._rebuild_calendar()
             self._sync_entries_from_period()
             self._refresh_period_selector()
+            self._refresh_metrics()
         self._show_message(result.message, ok=result.success)
 
     def _handle_next(self) -> None:
-        """Move to the next wizard step if a navigation callback was provided."""
         if self._on_next is not None:
             self._on_next()
 
     def _handle_period_selected(self, selected_label: str) -> None:
-        """Switch the active presenter to the selected semester/moed period."""
         labels = self._period_option_labels()
         try:
             self._current_period_index = labels.index(selected_label)
@@ -433,36 +448,46 @@ class DateManagementScreen(ctk.CTkFrame):
         self.presenter = self._presenters[self._current_period_index]
         self._sync_entries_from_period()
         self._rebuild_calendar()
+        self._refresh_metrics()
         self._refresh_status()
 
-    # ------------------------------------------------------------------
-    # Small helpers
-    # ------------------------------------------------------------------
-
     def _sync_entries_from_period(self) -> None:
-        """Fill the start/end entry fields with the period's current window."""
         period = self.presenter.current_period()
         self._start_entry.delete(0, "end")
         self._start_entry.insert(0, period.start_date.strftime(_DATE_FORMAT))
         self._end_entry.delete(0, "end")
         self._end_entry.insert(0, period.end_date.strftime(_DATE_FORMAT))
 
+    def _refresh_metrics(self) -> None:
+        period = self.presenter.current_period()
+        window_days = (period.end_date - period.start_date).days + 1
+        active_days = len(self.presenter.get_valid_dates())
+        excluded_inside_window = sum(
+            1
+            for excluded_date in period.excluded_dates
+            if period.start_date <= excluded_date <= period.end_date
+        )
+
+        self._metric_labels["periods"].configure(
+            text=f"{self._current_period_index + 1}/{len(self._presenters)}"
+        )
+        self._metric_labels["window"].configure(text=str(window_days))
+        self._metric_labels["active"].configure(text=str(active_days))
+        self._metric_labels["excluded"].configure(text=str(excluded_inside_window))
+
     def _refresh_status(self) -> None:
-        """Show a neutral hint describing how to use the screen."""
         self._status_label.configure(
-            text="Click a day to exclude or re-activate it.",
-            text_color="#666666",
+            text="Click a calendar day to exclude it or re-enable it.",
+            text_color=_MUTED,
         )
 
     def _show_message(self, text: str, ok: bool) -> None:
-        """Display a status message, green on success and red on failure."""
         self._status_label.configure(
             text=text,
-            text_color="#1f7a1f" if ok else "#B00020",
+            text_color="#147A39" if ok else "#B00020",
         )
 
     def _period_option_labels(self) -> list[str]:
-        """Return stable labels for the available semester/moed periods."""
         labels: list[str] = []
         for presenter in self._presenters:
             period = presenter.current_period()
@@ -476,7 +501,6 @@ class DateManagementScreen(ctk.CTkFrame):
         return labels
 
     def _refresh_period_selector(self) -> None:
-        """Refresh selector labels after a period window edit or undo."""
         if self._period_selector is None:
             return
 
