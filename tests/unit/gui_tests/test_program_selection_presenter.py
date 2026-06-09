@@ -94,6 +94,17 @@ class ProgramSelectionPresenterTests(unittest.TestCase):
         presenter.toggle("83101")
         self.assertTrue(presenter.can_proceed())
 
+    def test_initial_selection_is_restored_from_cache(self) -> None:
+        """Known cached selections start checked; unknown ones are ignored."""
+        presenter = ProgramSelectionPresenter(
+            [make_course("83102", ["83101"])],
+            selected_programs=["83101", "99999"],
+        )
+
+        self.assertEqual(presenter.selected_programs, ["83101"])
+        self.assertTrue(presenter.is_selected("83101"))
+        self.assertFalse(presenter.is_selected("99999"))
+
     def test_selected_programs_returns_sorted_list(self) -> None:
         """The selected programs are returned sorted, regardless of click order."""
         courses = [make_course("100", ["83108", "83101", "83104"])]

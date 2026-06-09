@@ -159,6 +159,31 @@ def test_upload_screen_feedback_becomes_ready_only_after_all_files_are_loaded(
     }
 
 
+def test_upload_screen_rows_reflect_saved_cached_data_on_open() -> None:
+    """Reopened upload screen rows must not contradict cache-backed readiness."""
+    FileUploadScreen, _ = _load_headless_screen_classes()
+
+    screen = object.__new__(FileUploadScreen)
+    screen.upload_service = _upload_examples()
+    screen.status_labels = {
+        FileReaderType.COURSES: _FakeLabel(),
+        FileReaderType.PROGRAMS: _FakeLabel(),
+        FileReaderType.EXAM_PERIODS: _FakeLabel(),
+    }
+
+    screen._refresh_upload_row_statuses()
+
+    assert screen.status_labels[FileReaderType.COURSES].options["text"] == (
+        "Loaded from saved data - 3 item(s)"
+    )
+    assert screen.status_labels[FileReaderType.PROGRAMS].options["text"] == (
+        "Loaded from saved data - 3 item(s)"
+    )
+    assert screen.status_labels[FileReaderType.EXAM_PERIODS].options["text"] == (
+        "Loaded from saved data - 3 item(s)"
+    )
+
+
 def test_failed_reupload_keeps_the_last_valid_uploaded_courses(
     tmp_path: Path,
 ) -> None:
