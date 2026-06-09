@@ -1,8 +1,6 @@
 from fileReader.baseFileReader import BaseFileReader
 
 
-MAX_PROGRAMS = 5
-
 VALID_PROGRAMS = {
     "83101",
     "83102",
@@ -52,11 +50,5 @@ class ProgramsFileReader(BaseFileReader[list[str]]):
             if program not in seen:
                 unique_programs.append(program)
                 seen.add(program)
-
-        if len(unique_programs) > MAX_PROGRAMS:
-            raise ValueError(
-                f"Program file contains {len(unique_programs)} "
-                f"distinct programs; maximum allowed is {MAX_PROGRAMS}."
-            )
 
         return unique_programs

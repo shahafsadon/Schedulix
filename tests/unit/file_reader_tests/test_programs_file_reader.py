@@ -25,12 +25,16 @@ class ProgramsFileReaderTests(unittest.TestCase):
 
         self.assertEqual(result, ["83101", "83102", "83108"])
 
-    def test_rejects_more_than_five_programs(self) -> None:
-        """Version 1.0 supports up to five selected programs."""
-        with self.assertRaises(ValueError):
-            ProgramsFileReader().parse(
-                "83101,83102,83103,83104,83105,83106"
-            )
+    def test_reads_more_than_five_valid_programs(self) -> None:
+        """The GUI may load many programs; selection is limited on-screen."""
+        result = ProgramsFileReader().parse(
+            "83101,83102,83103,83104,83105,83107"
+        )
+
+        self.assertEqual(
+            result,
+            ["83101", "83102", "83103", "83104", "83105", "83107"],
+        )
 
     def test_rejects_program_number_that_is_not_five_digits(self) -> None:
         """Program numbers must match the five-digit identifier format."""
