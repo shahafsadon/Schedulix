@@ -15,24 +15,76 @@ The project supports two flows:
 
 ## Version 2.0 GUI Workflow
 
-The Version 2.0 desktop workflow is:
+The Version 2.0 desktop app guides the user through the complete scheduling
+process:
 
-1. Upload the three required files:
-   - courses file
-   - selected programs file
-   - exam periods file
-2. Preview the uploaded data and export uploaded datasets if needed.
-3. Select up to five study programs and inspect each program's courses.
-4. Edit exam-period dates in a calendar:
-   - switch between semester/moed periods
-   - exclude or re-activate days
-   - edit start/end dates
-5. Generate schedules from the cached uploaded data.
-6. Browse generated systems with previous/next.
-7. Save the selected schedule to a readable text file.
+```text
+Upload Files -> Select Programs -> Manage Exam Dates -> Generate Schedules -> Review Results
+```
 
 Generated schedules are created on a background worker so the GUI remains
 responsive during heavier scheduling runs.
+
+### 1. Upload Files
+
+![File upload and data preview](images/file-upload-preview-screen.png)
+
+The first screen loads the three required inputs: courses, study programs, and
+exam periods. The user can replace or append each dataset, export the currently
+loaded data, and confirm that the uploaded data is ready before continuing.
+The preview panel summarizes the cached data so the user can verify the input
+state before moving to program selection.
+
+![Loaded files control center](images/input-control-center-loaded-files.png)
+
+This focused view shows the input control center after all required files have
+been loaded successfully. Once the status is ready, the user continues to choose
+which study programs should participate in scheduling.
+
+### 2. Select Programs
+
+![Program selection and course details](images/program-selection-details-screen.png)
+
+The program selection screen lets the user choose up to five study programs and
+inspect the courses attached to each selected program. Expanding a program shows
+courses grouped by year and semester, including requirement type and evaluation
+method. After selecting the relevant programs, the user continues to review and
+edit exam dates.
+
+### 3. Manage Exam Dates
+
+![Date management and direct generation](images/date-management-generate-screen.png)
+
+Date Management is the final review step before schedule generation. The user
+can switch between exam periods, edit start/end dates, exclude unavailable days,
+re-enable dates, and undo the latest edit. The summary cards show the current
+period count, window length, active days, excluded days, and hidden exclusions.
+When the calendar is ready, the user clicks **Generate Exam Schedules** directly
+from this screen.
+
+### 4. Generate Schedules
+
+The generation action runs asynchronously from the Date Management screen. While
+generation is running, calendar editing controls are disabled to prevent
+conflicting changes or duplicate generation requests. If generation succeeds,
+the generated schedule systems are saved in the GUI cache and the app opens the
+results screen automatically. If generation fails, the user stays on Date
+Management and receives a clear error message.
+
+### 5. Review Results
+
+![Generated schedules review screen](images/generated-schedules-review-screen.png)
+
+The results screen lets the user review one generated exam-system option at a
+time. The calendar highlights scheduled exam dates, and the side panel lists the
+exams on the selected date plus the full system grouped by semester and moed.
+The user can move between generated systems with previous/next controls.
+
+![Generated schedules navigation controls](images/generated-schedules-navigation-header.png)
+
+The navigation header shows the current system number out of the total generated
+options. After reviewing the alternatives, the user can save the selected system
+to a readable output file.
 
 
 ## Project Structure
@@ -47,6 +99,7 @@ Schedulix/
 |   |-- outputs/
 |   |   `-- exam_schedules.txt       # Generated output file after running the system
 |   `-- output/                      # Old/unused output folder placeholder
+|-- images/                          # README screenshots for the GUI workflow
 |-- src/
 |   |-- main.py                      # Main file to run from PyCharm or terminal
 |   |-- models.py                    # Shared data classes: Course, ProgramEnrollment, ExamPeriod
