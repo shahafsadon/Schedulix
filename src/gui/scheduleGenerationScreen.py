@@ -10,6 +10,8 @@ except ModuleNotFoundError as error:
         "Install it with: .venv\\Scripts\\python.exe -m pip install -r requirements.txt"
     ) from error
 
+from application.async_runner import AsyncScheduleRunner
+from gui.schedulingPresenter import GenerationResult
 from gui.schedulingPresenter import SchedulingPresenter
 
 
@@ -20,11 +22,13 @@ class ScheduleGenerationScreen(ctk.CTkFrame):
         self,
         master,
         presenter: SchedulingPresenter,
+        runner: AsyncScheduleRunner | None = None,
         on_back: Callable[[], None] | None = None,
         on_next: Callable[[], None] | None = None,
     ) -> None:
         super().__init__(master, corner_radius=0)
         self.presenter = presenter
+        self._runner = runner or AsyncScheduleRunner()
         self._on_back = on_back
         self._on_next = on_next
 
@@ -95,16 +99,37 @@ class ScheduleGenerationScreen(ctk.CTkFrame):
         self._next_button.grid(row=0, column=2)
 
     def _handle_generate(self) -> None:
-        """Generate schedules and update the screen with the result."""
+        """Generate schedules in the background and update the screen later."""
+        accepted = self._runner.run(
+            task=self.presenter.generate,
+            on_started=self._show_generation_started,
+            on_complete=lambda result: self.after(
+                0,
+                lambda: self._show_generation_result(result),
+            ),
+            on_error=lambda error: self.after(
+                0,
+                lambda: self._show_generation_error(error),
+            ),
+        )
+
+        if not accepted:
+            self._status_label.configure(
+                text="Schedule generation is already running.",
+                text_color="#666666",
+            )
+
+    def _show_generation_started(self) -> None:
+        """Reflect that the worker accepted a generation task."""
         self._generate_button.configure(state="disabled")
+        self._next_button.configure(state="disabled")
         self._status_label.configure(
             text="Generating schedules...",
             text_color="#666666",
         )
-        self.update_idletasks()
 
-        result = self.presenter.generate()
-
+    def _show_generation_result(self, result: GenerationResult) -> None:
+        """Render the generation result returned by the worker."""
         color = "#147A39" if result.success else "#B00020"
         self._status_label.configure(
             text=result.message,
@@ -116,6 +141,15 @@ class ScheduleGenerationScreen(ctk.CTkFrame):
         else:
             self._next_button.configure(state="disabled")
 
+        self._generate_button.configure(state="normal")
+
+    def _show_generation_error(self, error: Exception) -> None:
+        """Render unexpected worker failures without crashing the GUI."""
+        self._status_label.configure(
+            text=f"Schedule generation failed unexpectedly: {type(error).__name__}.",
+            text_color="#B00020",
+        )
+        self._next_button.configure(state="disabled")
         self._generate_button.configure(state="normal")
 
     def _handle_next(self) -> None:
