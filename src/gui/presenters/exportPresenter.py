@@ -15,7 +15,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from gui.scheduleNavigationPresenter import ScheduleNavigationPresenter
+from gui.presenters.scheduleNavigationPresenter import ScheduleNavigationPresenter
 from output.exportService import ExportService
 
 

@@ -12,16 +12,16 @@ import sys
 from pathlib import Path
 from types import ModuleType
 from unittest.mock import MagicMock, patch
-from gui.uploadedDataPresenter import UploadedDataSnapshot, UploadedDataMetadata
+from gui.presenters.uploadedDataPresenter import UploadedDataSnapshot, UploadedDataMetadata
 
 from application.cache_manager import CacheManager
 from fileReader.baseFileReader import FileReaderType
-from gui.programDetailsPresenter import ProgramDetailsPresenter
-from gui.programSelectionPresenter import ProgramSelectionPresenter
-from gui.schedulingPresenter import SchedulingPresenter
-from gui.uploadService import FileUploadService
+from gui.presenters.programDetailsPresenter import ProgramDetailsPresenter
+from gui.presenters.programSelectionPresenter import ProgramSelectionPresenter
+from gui.presenters.schedulingPresenter import SchedulingPresenter
+from gui.services.uploadService import FileUploadService
 from output.outputWriter import OutputWriter
-from gui.uploadedDataPresenter import UploadedDataSnapshot, UploadedDataMetadata
+from gui.presenters.uploadedDataPresenter import UploadedDataSnapshot, UploadedDataMetadata
 
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -47,8 +47,8 @@ def _load_headless_screen_classes():
     fake_ctk.CTkFrame = type("CTkFrame", (), {})
 
     with patch.dict(sys.modules, {"customtkinter": fake_ctk}):
-        upload_module = importlib.import_module("gui.fileUploadScreen")
-        config_module = importlib.import_module("gui.programConfigScreen")
+        upload_module = importlib.import_module("gui.screens.fileUploadScreen")
+        config_module = importlib.import_module("gui.screens.programConfigScreen")
 
     return upload_module.FileUploadScreen, config_module.ProgramConfigScreen
 

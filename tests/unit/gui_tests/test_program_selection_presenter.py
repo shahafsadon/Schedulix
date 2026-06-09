@@ -18,7 +18,7 @@ SRC = ROOT / "src"
 sys.path.insert(0, str(SRC))
 
 from models import Course, ProgramEnrollment
-from gui.programSelectionPresenter import ProgramSelectionPresenter
+from gui.presenters.programSelectionPresenter import ProgramSelectionPresenter
 
 
 def make_course(course_number: str, program_numbers: list[str]) -> Course:

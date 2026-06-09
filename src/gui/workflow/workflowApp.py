@@ -9,20 +9,20 @@ except ModuleNotFoundError as error:
     ) from error
 
 from application.cache_manager import CacheManager
-from gui.dateManagementPresenter import DateManagementPresenter
-from gui.dateManagementScreen import DateManagementScreen
-from gui.exportPresenter import ExportPresenter
-from gui.fileUploadScreen import FileUploadScreen
-from gui.programDetailsPresenter import ProgramDetailsPresenter
-from gui.programConfigScreen import ProgramConfigScreen
-from gui.programSelectionPresenter import ProgramSelectionPresenter
-from gui.scheduleGenerationScreen import ScheduleGenerationScreen
-from gui.scheduleNavigationPresenter import ScheduleNavigationPresenter
-from gui.scheduleNavigationScreen import ScheduleNavigationScreen
-from gui.schedulingPresenter import SchedulingPresenter
-from gui.uploadService import FileUploadService
-from gui.uploadedDataExportService import UploadedDataExportService
-from gui.uploadedDataPresenter import UploadedDataPresenter
+from gui.presenters.dateManagementPresenter import DateManagementPresenter
+from gui.screens.dateManagementScreen import DateManagementScreen
+from gui.presenters.exportPresenter import ExportPresenter
+from gui.screens.fileUploadScreen import FileUploadScreen
+from gui.presenters.programDetailsPresenter import ProgramDetailsPresenter
+from gui.screens.programConfigScreen import ProgramConfigScreen
+from gui.presenters.programSelectionPresenter import ProgramSelectionPresenter
+from gui.screens.scheduleGenerationScreen import ScheduleGenerationScreen
+from gui.presenters.scheduleNavigationPresenter import ScheduleNavigationPresenter
+from gui.screens.scheduleNavigationScreen import ScheduleNavigationScreen
+from gui.presenters.schedulingPresenter import SchedulingPresenter
+from gui.services.uploadService import FileUploadService
+from gui.services.uploadedDataExportService import UploadedDataExportService
+from gui.presenters.uploadedDataPresenter import UploadedDataPresenter
 from scheduling.examDateHandler import ExamDateHandler
 
 

@@ -13,8 +13,8 @@ SRC = ROOT / "src"
 sys.path.insert(0, str(SRC))
 
 from application.cache_manager import CacheManager
-from gui.uploadService import UploadedInputData
-from gui.uploadedDataPresenter import UploadedDataPresenter
+from gui.services.uploadService import UploadedInputData
+from gui.presenters.uploadedDataPresenter import UploadedDataPresenter
 from models import Course, ExamPeriod, ProgramEnrollment
 
 

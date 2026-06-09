@@ -18,8 +18,8 @@ except ModuleNotFoundError as error:
         "Install it with: .venv\\Scripts\\python.exe -m pip install -r requirements.txt"
     ) from error
 
-from gui.exportPresenter import ExportPresenter
-from gui.scheduleNavigationPresenter import ExamRow, ScheduleNavigationPresenter
+from gui.presenters.exportPresenter import ExportPresenter
+from gui.presenters.scheduleNavigationPresenter import ExamRow, ScheduleNavigationPresenter
 
 
 _MONTH_NAMES = [

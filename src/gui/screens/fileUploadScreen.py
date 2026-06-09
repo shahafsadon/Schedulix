@@ -13,9 +13,9 @@ except ModuleNotFoundError as error:
     ) from error
 
 from fileReader.baseFileReader import FileReaderType
-from gui.uploadService import FileUploadService, UploadMode, UploadResult
-from gui.uploadedDataExportService import UploadedDataExportService, ExportResult
-from gui.uploadedDataPresenter import UploadedDataPresenter, UploadedDataSnapshot
+from gui.services.uploadService import FileUploadService, UploadMode, UploadResult
+from gui.services.uploadedDataExportService import UploadedDataExportService, ExportResult
+from gui.presenters.uploadedDataPresenter import UploadedDataPresenter, UploadedDataSnapshot
 
 
 #this class builds the file upload screen in the GUI.

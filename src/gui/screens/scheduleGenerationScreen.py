@@ -11,7 +11,7 @@ except ModuleNotFoundError as error:
     ) from error
 
 from application.async_runner import AsyncScheduleRunner
-from gui.schedulingPresenter import GenerationResult, SchedulingPresenter
+from gui.presenters.schedulingPresenter import GenerationResult, SchedulingPresenter
 
 
 _PAGE_BG = ("#F3F6FB", "#0B1220")

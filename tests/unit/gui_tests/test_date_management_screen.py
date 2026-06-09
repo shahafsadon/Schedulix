@@ -31,7 +31,7 @@ sys.path.insert(0, str(_SRC))
 # Import under test
 # ---------------------------------------------------------------------------
 
-from gui.dateManagementScreen import parse_calendar_date
+from gui.screens.dateManagementScreen import parse_calendar_date
 
 
 class TestParseCalendarDate(unittest.TestCase):

@@ -17,7 +17,7 @@ from typing import Any
 
 from application.cache_manager import CacheManager
 from fileReader.baseFileReader import FileReaderFactory, FileReaderType
-from gui.uploadService import UploadedInputData
+from gui.services.uploadService import UploadedInputData
 from models import Course, ExamPeriod
 
 

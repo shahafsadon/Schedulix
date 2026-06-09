@@ -18,7 +18,7 @@ SRC = ROOT / "src"
 sys.path.insert(0, str(SRC))
 
 from models import Course, ProgramEnrollment
-from gui.programDetailsPresenter import ProgramDetailsPresenter
+from gui.presenters.programDetailsPresenter import ProgramDetailsPresenter
 
 
 def course(name, number, enrollments, evaluation_type="Exam", instructor="Dr. Test"):

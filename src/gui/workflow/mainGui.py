@@ -7,7 +7,7 @@ except ModuleNotFoundError as error:
         ".venv\\Scripts\\python.exe -m pip install -r requirements.txt"
     ) from error
 
-from gui.workflowApp import SchedulixWorkflow
+from gui.workflow.workflowApp import SchedulixWorkflow
 
 
 def main() -> None:

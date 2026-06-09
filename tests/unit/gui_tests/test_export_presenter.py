@@ -17,8 +17,8 @@ SRC = ROOT / "src"
 sys.path.insert(0, str(SRC))
 
 from models import Course, ProgramEnrollment
-from gui.exportPresenter import ExportPresenter
-from gui.scheduleNavigationPresenter import ScheduleNavigationPresenter
+from gui.presenters.exportPresenter import ExportPresenter
+from gui.presenters.scheduleNavigationPresenter import ScheduleNavigationPresenter
 from output.exportService import ExportOutcome
 from scheduling.examConflictDetector import ScheduledExam
 from scheduling.examScheduleGenerator import ExamSchedule, ExamSystem

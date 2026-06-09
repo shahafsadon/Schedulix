@@ -37,7 +37,7 @@ sys.path.insert(0, str(_SRC))
 from models import ExamPeriod
 from scheduling.examDateHandler import ExamDateHandler
 from application.async_runner import AsyncScheduleRunner, LoadingState
-from gui.dateManagementPresenter import DateManagementPresenter
+from gui.presenters.dateManagementPresenter import DateManagementPresenter
 
 
 # ---------------------------------------------------------------------------

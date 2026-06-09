@@ -11,7 +11,7 @@ sys.path.insert(0, str(SRC))
 
 from application.cache_manager import CacheManager
 from fileReader.baseFileReader import FileReaderType
-from gui.uploadService import FileUploadService, UploadMode
+from gui.services.uploadService import FileUploadService, UploadMode
 
 
 class FileUploadServiceTests(unittest.TestCase):

@@ -13,7 +13,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from application.cache_manager import CacheManager
-from gui.uploadService import UploadedInputData
+from gui.services.uploadService import UploadedInputData
 from models import Course, ExamPeriod
 
 

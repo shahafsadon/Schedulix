@@ -14,7 +14,7 @@ SRC = ROOT / "src"
 
 sys.path.insert(0, str(SRC))
 
-from gui.schedulingPresenter import SchedulingPresenter
+from gui.presenters.schedulingPresenter import SchedulingPresenter
 from scheduling.schedulingService import SchedulingOutcome
 
 

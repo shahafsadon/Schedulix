@@ -78,14 +78,27 @@ Schedulix/
 |   |   |-- exportService.py         # Exports one chosen generated schedule
 |   |   `-- outputWriter.py          # Formats and writes readable schedule output
 |   |-- gui/
-|   |   |-- mainGui.py               # Opens the Version 2.0 desktop app
-|   |   |-- workflowApp.py           # Owns the multi-step GUI workflow
-|   |   |-- fileUploadScreen.py      # Upload, preview, and uploaded-data export
-|   |   |-- programConfigScreen.py   # Select programs and inspect details
-|   |   |-- dateManagementScreen.py  # Calendar date editing
-|   |   |-- scheduleGenerationScreen.py # Runs schedule generation
-|   |   |-- scheduleNavigationScreen.py # Browse/export generated schedules
-|   |   `-- uploadService.py         # Validates uploaded files with existing readers
+|   |   |-- workflow/
+|   |   |   |-- mainGui.py            # Opens the Version 2.0 desktop app
+|   |   |   `-- workflowApp.py       # Owns the multi-step GUI workflow
+|   |   |-- screens/                 # customTkinter views only
+|   |   |   |-- fileUploadScreen.py
+|   |   |   |-- programConfigScreen.py
+|   |   |   |-- dateManagementScreen.py
+|   |   |   |-- scheduleGenerationScreen.py
+|   |   |   `-- scheduleNavigationScreen.py
+|   |   |-- presenters/              # Testable MVP presenter logic
+|   |   |   |-- dateManagementPresenter.py
+|   |   |   |-- exportPresenter.py
+|   |   |   |-- programSelectionPresenter.py
+|   |   |   |-- schedulingPresenter.py
+|   |   |   `-- uploadedDataPresenter.py
+|   |   |-- services/                # GUI-facing data services
+|   |   |   |-- uploadService.py
+|   |   |   `-- uploadedDataExportService.py
+|   |   `-- factories/               # View/presenter factories
+|   |       |-- presenter_factory.py
+|   |       `-- view_factory.py
 |   `-- scheduling/
 |       |-- courseFilter.py          # Keeps only selected-program exam courses
 |       |-- examDateHandler.py       # Builds valid exam dates and removes blocked dates
@@ -135,7 +148,7 @@ The Version 2.0 GUI workflow can be opened from the project root:
 ```powershell
 cd C:\Users\user\Desktop\Schedulix
 $env:PYTHONPATH="src"
-.\.venv\Scripts\python.exe -m gui.mainGui
+.\.venv\Scripts\python.exe -m gui.workflow.mainGui
 ```
 
 The app opens the full workflow: upload, program selection, date management,

@@ -121,10 +121,10 @@ class ViewFactory:
         # can be checked (and a ValueError raised) BEFORE importing customtkinter
         # or any concrete screen — keeping headless tests safe.
         _registry: dict[ViewType, tuple[str, str]] = {
-            ViewType.FILE_UPLOAD:    ("gui.fileUploadScreen",   "FileUploadScreen"),
-            ViewType.PROGRAM_CONFIG: ("gui.programConfigScreen", "ProgramConfigScreen"),
-            ViewType.DATE_MANAGEMENT: ("gui.dateManagementScreen", "DateManagementScreen"),
-            ViewType.SCHEDULE_NAVIGATION: ("gui.scheduleNavigationScreen", "ScheduleNavigationScreen"),
+            ViewType.FILE_UPLOAD:    ("gui.screens.fileUploadScreen",   "FileUploadScreen"),
+            ViewType.PROGRAM_CONFIG: ("gui.screens.programConfigScreen", "ProgramConfigScreen"),
+            ViewType.DATE_MANAGEMENT: ("gui.screens.dateManagementScreen", "DateManagementScreen"),
+            ViewType.SCHEDULE_NAVIGATION: ("gui.screens.scheduleNavigationScreen", "ScheduleNavigationScreen"),
         }
 
         entry = _registry.get(view_type)

@@ -13,7 +13,7 @@ except ModuleNotFoundError as error:
         "Install it with: .venv\\Scripts\\python.exe -m pip install -r requirements.txt"
     ) from error
 
-from gui.dateManagementPresenter import DateManagementPresenter
+from gui.presenters.dateManagementPresenter import DateManagementPresenter
 
 
 _DATE_FORMAT = "%d-%m-%Y"

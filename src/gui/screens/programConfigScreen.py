@@ -25,8 +25,8 @@ except ModuleNotFoundError as error:
         "Install it with: .venv\\Scripts\\python.exe -m pip install -r requirements.txt"
     ) from error
 
-from gui.programSelectionPresenter import ProgramSelectionPresenter
-from gui.programDetailsPresenter import ProgramDetailsPresenter, ProgramDetails
+from gui.presenters.programSelectionPresenter import ProgramSelectionPresenter
+from gui.presenters.programDetailsPresenter import ProgramDetailsPresenter, ProgramDetails
 
 
 _PAGE_BG = ("#F3F6FB", "#0B1220")

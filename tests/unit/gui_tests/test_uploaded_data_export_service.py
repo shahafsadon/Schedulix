@@ -18,7 +18,7 @@ from fileReader.baseFileReader import FileReaderType
 from fileReader.fileTypeReaders.coursesReader import CoursesFileReader
 from fileReader.fileTypeReaders.examPeriodsReader import ExamPeriodsFileReader
 from fileReader.fileTypeReaders.programReader import ProgramsFileReader
-from gui.uploadedDataExportService import UploadedDataExportService
+from gui.services.uploadedDataExportService import UploadedDataExportService
 from models import Course, ExamPeriod, ProgramEnrollment
 
 
@@ -126,7 +126,7 @@ class UploadedDataExportServiceTests(unittest.TestCase):
 
     def test_export_uses_local_uploaded_data_when_no_cache_is_injected(self) -> None:
         """Standalone export works from UploadedInputData-style local state."""
-        from gui.uploadService import UploadedInputData
+        from gui.services.uploadService import UploadedInputData
 
         uploaded_data = UploadedInputData(programs=["83101"])
         export_path = self._tmp_dir / "local_programs.txt"
@@ -159,7 +159,7 @@ class UploadedDataExportServiceTests(unittest.TestCase):
         fake_reader.read.return_value = []
 
         with patch(
-            "gui.uploadedDataExportService.FileReaderFactory.get_reader",
+            "gui.services.uploadedDataExportService.FileReaderFactory.get_reader",
             return_value=fake_reader,
         ):
             result = UploadedDataExportService(cache_manager=cache).export(

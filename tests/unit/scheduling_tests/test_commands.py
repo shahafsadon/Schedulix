@@ -42,7 +42,7 @@ from application.commands import (
     RegenerateSchedulesCommand,
     ToggleDateExceptionCommand,
 )
-from gui.dateManagementPresenter import DateManagementPresenter
+from gui.presenters.dateManagementPresenter import DateManagementPresenter
 
 
 # ---------------------------------------------------------------------------

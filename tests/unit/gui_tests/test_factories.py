@@ -35,8 +35,8 @@ sys.path.insert(0, str(_SRC))
 # Imports under test
 # ---------------------------------------------------------------------------
 
-from gui.presenter_factory import PresenterFactory, PresenterType
-from gui.view_factory import ViewFactory, ViewType
+from gui.factories.presenter_factory import PresenterFactory, PresenterType
+from gui.factories.view_factory import ViewFactory, ViewType
 
 # Domain helpers used to build realistic presenter arguments
 from models import Course, ExamPeriod, ProgramEnrollment
@@ -66,7 +66,7 @@ class TestPresenterFactory(unittest.TestCase):
 
     def test_creates_program_selection_presenter(self) -> None:
         """PROGRAM_SELECTION returns a ProgramSelectionPresenter instance."""
-        from gui.programSelectionPresenter import ProgramSelectionPresenter
+        from gui.presenters.programSelectionPresenter import ProgramSelectionPresenter
 
         presenter = PresenterFactory.create(
             PresenterType.PROGRAM_SELECTION,
@@ -77,7 +77,7 @@ class TestPresenterFactory(unittest.TestCase):
 
     def test_creates_program_details_presenter(self) -> None:
         """PROGRAM_DETAILS returns a ProgramDetailsPresenter instance."""
-        from gui.programDetailsPresenter import ProgramDetailsPresenter
+        from gui.presenters.programDetailsPresenter import ProgramDetailsPresenter
 
         presenter = PresenterFactory.create(
             PresenterType.PROGRAM_DETAILS,

@@ -17,7 +17,7 @@ sys.path.insert(0, str(SRC))
 from models import Course, ProgramEnrollment
 from scheduling.examConflictDetector import ScheduledExam
 from scheduling.examScheduleGenerator import ExamSchedule, ExamSystem
-from gui.scheduleNavigationPresenter import ScheduleNavigationPresenter
+from gui.presenters.scheduleNavigationPresenter import ScheduleNavigationPresenter
 
 
 def make_exam(name, number, exam_date, status="Obligatory"):
