@@ -1,12 +1,38 @@
 # Schedulix
 
-Schedulix is a Python exam-scheduling system for Version 1.0 of the Software
-Engineering project.
+Schedulix is a Python exam-scheduling system for the Software Engineering
+project. It reads course data, exam-period data, and selected study programs
+from text files, then generates valid exam-system options that avoid the
+critical conflicts defined for the project.
 
-The system reads course data, exam-period data, and selected study programs from
-text files. It then generates every valid exam-system option that avoids the
-critical conflicts defined for Version 1.0, and writes the result to a readable
-output text file.
+The project supports two flows:
+
+- **Version 1.0 file flow**: run from `src/main.py`, read the default example
+  files, generate schedules, and write all schedule options to a text file.
+- **Version 2.0 GUI flow**: run the customTkinter application, upload/preview
+  data, select up to five programs, edit exam dates in a calendar, generate
+  schedules, browse them with previous/next, and export the chosen schedule.
+
+## Version 2.0 GUI Workflow
+
+The Version 2.0 desktop workflow is:
+
+1. Upload the three required files:
+   - courses file
+   - selected programs file
+   - exam periods file
+2. Preview the uploaded data and export uploaded datasets if needed.
+3. Select up to five study programs and inspect each program's courses.
+4. Edit exam-period dates in a calendar:
+   - switch between semester/moed periods
+   - exclude or re-activate days
+   - edit start/end dates
+5. Generate schedules from the cached uploaded data.
+6. Browse generated systems with previous/next.
+7. Save the selected schedule to a readable text file.
+
+Generated schedules are created on a background worker so the GUI remains
+responsive during heavier scheduling runs.
 
 ## Version 1.0 Scope
 
@@ -49,10 +75,16 @@ Schedulix/
 |   |       |-- examPeriodsReader.py # Parses DatesExample-style exam-period files
 |   |       `-- programReader.py     # Parses selected program files
 |   |-- output/
+|   |   |-- exportService.py         # Exports one chosen generated schedule
 |   |   `-- outputWriter.py          # Formats and writes readable schedule output
 |   |-- gui/
-|   |   |-- mainGui.py               # Opens the Version 2.0 file upload window
-|   |   |-- fileUploadScreen.py      # customTkinter screen for choosing input files
+|   |   |-- mainGui.py               # Opens the Version 2.0 desktop app
+|   |   |-- workflowApp.py           # Owns the multi-step GUI workflow
+|   |   |-- fileUploadScreen.py      # Upload, preview, and uploaded-data export
+|   |   |-- programConfigScreen.py   # Select programs and inspect details
+|   |   |-- dateManagementScreen.py  # Calendar date editing
+|   |   |-- scheduleGenerationScreen.py # Runs schedule generation
+|   |   |-- scheduleNavigationScreen.py # Browse/export generated schedules
 |   |   `-- uploadService.py         # Validates uploaded files with existing readers
 |   `-- scheduling/
 |       |-- courseFilter.py          # Keeps only selected-program exam courses
@@ -89,7 +121,7 @@ python src\main.py
 
 If `python` is not recognized on your computer, run it from PyCharm instead.
 
-### Run The Version 2.0 Upload Window
+### Run The Version 2.0 GUI App
 
 Install the GUI dependency once from the project root:
 
@@ -98,7 +130,7 @@ cd C:\Users\user\Desktop\Schedulix
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
 ```
 
-The SCRUM-117 upload workflow can be opened from the project root:
+The Version 2.0 GUI workflow can be opened from the project root:
 
 ```powershell
 cd C:\Users\user\Desktop\Schedulix
@@ -106,9 +138,8 @@ $env:PYTHONPATH="src"
 .\.venv\Scripts\python.exe -m gui.mainGui
 ```
 
-The window lets the user choose courses, programs, and exam-period files. Each
-file is validated with the existing file readers, and the screen shows success
-or error feedback for each upload.
+The app opens the full workflow: upload, program selection, date management,
+schedule generation, schedule navigation, and export.
 
 The upload window uses `customtkinter`, as planned in the Version 2.0 software
 design document. If a teammate does not have a `.venv` folder yet, create it
@@ -118,6 +149,18 @@ first and then install the dependencies:
 python -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
 ```
+
+## GUI State Cache
+
+The GUI stores uploaded data, selected programs, edited exam periods, and
+generated schedules in a local pickle file:
+
+```text
+src/application/internal_data.pkl
+```
+
+This file is runtime state and is ignored by git. It lets the GUI reopen with
+the last saved data, but teammates do not need to commit or share it.
 
 ## What The Run Prints
 
