@@ -11,11 +11,14 @@ except ModuleNotFoundError as error:
 from application.cache_manager import CacheManager
 from gui.dateManagementPresenter import DateManagementPresenter
 from gui.dateManagementScreen import DateManagementScreen
+from gui.exportPresenter import ExportPresenter
 from gui.fileUploadScreen import FileUploadScreen
 from gui.programDetailsPresenter import ProgramDetailsPresenter
 from gui.programConfigScreen import ProgramConfigScreen
 from gui.programSelectionPresenter import ProgramSelectionPresenter
 from gui.scheduleGenerationScreen import ScheduleGenerationScreen
+from gui.scheduleNavigationPresenter import ScheduleNavigationPresenter
+from gui.scheduleNavigationScreen import ScheduleNavigationScreen
 from gui.schedulingPresenter import SchedulingPresenter
 from gui.uploadService import FileUploadService
 from gui.uploadedDataExportService import UploadedDataExportService
@@ -146,21 +149,34 @@ class SchedulixWorkflow(ctk.CTkFrame):
                 self,
                 presenter=SchedulingPresenter(self.cache),
                 on_back=self.show_date_management,
-                on_next=self._show_output_step_placeholder,
+                on_next=self.show_output_navigation,
             )
         )
 
-    def _show_output_step_placeholder(self) -> None:
-        """Temporary bridge while the output step is wired in."""
-        self._set_window_title("Schedulix - Workflow")
+    def show_output_navigation(self) -> None:
+        """Show generated schedules with previous/next and export support."""
+        self._set_window_title("Schedulix - Generated Schedules")
+        schedules = self.cache.get_generated_schedules()
+
+        if not schedules:
+            self._set_screen(
+                _MessageScreen(
+                    self,
+                    title="No Generated Schedules",
+                    message="Generate schedules before opening the output screen.",
+                    on_back=self.show_schedule_generation,
+                )
+            )
+            return
+
+        navigation_presenter = ScheduleNavigationPresenter(schedules)
+        export_presenter = ExportPresenter(navigation_presenter)
+
         self._set_screen(
-            _MessageScreen(
+            ScheduleNavigationScreen(
                 self,
-                title="Schedules Generated",
-                message=(
-                    "Schedules are now stored in the cache. "
-                    "The next checkpoint opens the output navigation screen."
-                ),
+                presenter=navigation_presenter,
+                export_presenter=export_presenter,
                 on_back=self.show_schedule_generation,
             )
         )
