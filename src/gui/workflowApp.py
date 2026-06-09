@@ -41,6 +41,7 @@ class SchedulixWorkflow(ctk.CTkFrame):
             uploaded_data=self.upload_service.get_uploaded_data(),
         )
         self._screen: ctk.CTkFrame | None = None
+        self._program_selection: ProgramSelectionPresenter | None = None
 
         self.show_upload()
 
@@ -62,8 +63,12 @@ class SchedulixWorkflow(ctk.CTkFrame):
         self._set_window_title("Schedulix - Program Selection")
 
         courses = self.cache.get_courses()
-        selection_presenter = ProgramSelectionPresenter(courses)
+        selection_presenter = ProgramSelectionPresenter(
+            courses,
+            selected_programs=self.cache.get_selected_programs(),
+        )
         details_presenter = ProgramDetailsPresenter(courses)
+        self._program_selection = selection_presenter
 
         self._set_screen(
             ProgramConfigScreen(
@@ -71,20 +76,30 @@ class SchedulixWorkflow(ctk.CTkFrame):
                 selection_presenter=selection_presenter,
                 details_presenter=details_presenter,
                 on_back=self.show_upload,
-                on_next=self._show_next_step_placeholder,
+                on_next=self._handle_program_selection_next,
             )
         )
 
-    def _show_next_step_placeholder(self) -> None:
-        """Temporary bridge while the later workflow steps are wired in."""
+    def _handle_program_selection_next(self) -> None:
+        """Persist the selected programs before leaving the program step."""
+        if self._program_selection is None or not self._program_selection.can_proceed():
+            return
+
+        self.cache.set_selected_programs(
+            self._program_selection.selected_programs
+        )
+        self._show_date_step_placeholder()
+
+    def _show_date_step_placeholder(self) -> None:
+        """Temporary bridge while the date-management step is wired in."""
         self._set_window_title("Schedulix - Workflow")
         self._set_screen(
             _MessageScreen(
                 self,
-                title="Program Selection Connected",
+                title="Program Selection Saved",
                 message=(
-                    "This checkpoint connects upload to program selection. "
-                    "The next checkpoint saves the selection and opens date management."
+                    "The selected programs were saved. "
+                    "The next checkpoint opens date management."
                 ),
                 on_back=self.show_program_config,
             )
