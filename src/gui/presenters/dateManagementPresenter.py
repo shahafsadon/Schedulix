@@ -259,6 +259,10 @@ class DateManagementPresenter:
             self._notify_change()
         return result
 
+    def can_undo(self) -> bool:
+        """Return True when the presenter has a successful command to undo."""
+        return self._last_command is not None
+
     def _notify_change(self) -> None:
         """Tell the workflow that the managed period was mutated."""
         if self._on_change is not None:
@@ -289,3 +293,15 @@ class DateManagementPresenter:
     def is_excluded(self, d: date) -> bool:
         """Return ``True`` if ``d`` is currently in the blocked-dates list."""
         return d in self._exam_period.excluded_dates
+
+    def count_excluded_inside_window(self) -> int:
+        """Return excluded dates currently visible inside the active period."""
+        return sum(
+            1
+            for excluded_date in self._exam_period.excluded_dates
+            if self._exam_period.start_date <= excluded_date <= self._exam_period.end_date
+        )
+
+    def count_excluded_outside_window(self) -> int:
+        """Return stored exclusions that are outside the active period window."""
+        return len(self._exam_period.excluded_dates) - self.count_excluded_inside_window()

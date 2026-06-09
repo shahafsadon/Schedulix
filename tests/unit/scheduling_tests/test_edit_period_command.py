@@ -93,6 +93,7 @@ class TestEditPeriodCommand(unittest.TestCase):
         self.assertEqual(len(result.data), 11)
         self.assertEqual(result.data[0], JAN10)
         self.assertEqual(result.data[-1], JAN20)
+        self.assertIn("10-01-2026 - 20-01-2026", result.message)
 
     def test_execute_rejects_inverted_range_without_mutating(self) -> None:
         """An inverted range (start after end) is rejected; period unchanged."""
@@ -157,7 +158,9 @@ class TestPresenterOnEditPeriod(unittest.TestCase):
 
     def test_successful_edit_is_undoable_via_undo_last(self) -> None:
         """A successful edit is stored, so undo_last reverses it."""
+        self.assertFalse(self.presenter.can_undo())
         self.presenter.on_edit_period(JAN10, JAN20)
+        self.assertTrue(self.presenter.can_undo())
 
         undo_result = self.presenter.undo_last()
 
@@ -165,6 +168,7 @@ class TestPresenterOnEditPeriod(unittest.TestCase):
         # The original window is restored.
         self.assertEqual(self.period.start_date, JAN1)
         self.assertEqual(self.period.end_date, date(2026, 1, 5))
+        self.assertFalse(self.presenter.can_undo())
 
     def test_rejected_edit_is_not_stored_for_undo(self) -> None:
         """An inverted-range edit fails and leaves nothing to undo."""

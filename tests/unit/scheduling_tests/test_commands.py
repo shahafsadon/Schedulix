@@ -390,12 +390,15 @@ class TestDateManagementPresenter(unittest.TestCase):
     def test_undo_last_reverses_click(self) -> None:
         """undo_last() reverses the most recent on_date_clicked call."""
         presenter, period, _ = self._make_presenter()
+        self.assertFalse(presenter.can_undo())
         presenter.on_date_clicked(JAN3)  # exclude JAN3
+        self.assertTrue(presenter.can_undo())
 
         result = presenter.undo_last()
 
         self.assertTrue(result.success)
         self.assertNotIn(JAN3, period.excluded_dates)
+        self.assertFalse(presenter.can_undo())
 
     def test_undo_last_without_prior_click_returns_failure(self) -> None:
         """undo_last() returns failure when nothing has been clicked yet."""
@@ -440,6 +443,15 @@ class TestDateManagementPresenter(unittest.TestCase):
 
         self.assertTrue(presenter.is_excluded(JAN3))
         self.assertFalse(presenter.is_excluded(JAN1))
+
+    def test_excluded_counts_distinguish_visible_and_hidden_dates(self) -> None:
+        """Presenter exposes hidden exclusions that the screen should disclose."""
+        presenter, _, _ = self._make_presenter(
+            excluded=[JAN3, date(2026, 2, 1)]
+        )
+
+        self.assertEqual(presenter.count_excluded_inside_window(), 1)
+        self.assertEqual(presenter.count_excluded_outside_window(), 1)
 
 
 # ---------------------------------------------------------------------------

@@ -64,6 +64,7 @@ class DateManagementScreen(ctk.CTkFrame):
         self._on_back = on_back
 
         self._period_selector = None
+        self._undo_button = None
         self._day_cells: dict[str, ctk.CTkButton] = {}
         self._metric_labels: dict[str, ctk.CTkLabel] = {}
 
@@ -71,6 +72,7 @@ class DateManagementScreen(ctk.CTkFrame):
         self._rebuild_calendar()
         self._refresh_status()
         self._refresh_metrics()
+        self._refresh_undo_state()
 
     def _build(self) -> None:
         """Build the modern date-management workspace."""
@@ -105,13 +107,14 @@ class DateManagementScreen(ctk.CTkFrame):
     def _build_metrics(self) -> None:
         metrics = ctk.CTkFrame(self, fg_color="transparent")
         metrics.grid(row=1, column=0, sticky="ew", padx=24, pady=(0, 12))
-        for column in range(4):
+        for column in range(5):
             metrics.grid_columnconfigure(column, weight=1)
 
         self._build_metric(metrics, 0, "periods", "Periods")
         self._build_metric(metrics, 1, "window", "Window days")
         self._build_metric(metrics, 2, "active", "Active days")
         self._build_metric(metrics, 3, "excluded", "Excluded days")
+        self._build_metric(metrics, 4, "hidden", "Hidden exclusions")
 
     def _build_metric(
         self,
@@ -213,7 +216,7 @@ class DateManagementScreen(ctk.CTkFrame):
             command=self._handle_apply_period,
         ).grid(row=1, column=3, sticky="w", padx=(0, 8), pady=(0, 14))
 
-        ctk.CTkButton(
+        self._undo_button = ctk.CTkButton(
             controls,
             text="Undo",
             width=84,
@@ -222,7 +225,8 @@ class DateManagementScreen(ctk.CTkFrame):
             border_color=_BORDER,
             text_color=(_PRIMARY, "#93C5FD"),
             command=self._handle_undo,
-        ).grid(row=1, column=4, sticky="w", padx=(0, 12), pady=(0, 14))
+        )
+        self._undo_button.grid(row=1, column=4, sticky="w", padx=(0, 12), pady=(0, 14))
 
         legend = ctk.CTkFrame(controls, fg_color="transparent")
         legend.grid(row=1, column=5, sticky="e", padx=16, pady=(0, 14))
@@ -394,18 +398,22 @@ class DateManagementScreen(ctk.CTkFrame):
                     fg_color=_EXCLUDED_DAY_COLOR,
                     hover_color=_EXCLUDED_DAY_HOVER,
                     text_color=_EXCLUDED_DAY_TEXT,
+                    border_width=1,
+                    border_color="#DC2626",
                 )
             else:
                 cell.configure(
                     fg_color=_ACTIVE_DAY_COLOR,
                     hover_color=_ACTIVE_DAY_HOVER,
                     text_color=_ACTIVE_DAY_TEXT,
+                    border_width=0,
                 )
 
     def _handle_day_click(self, clicked_date: date) -> None:
         result = self.presenter.on_date_clicked(clicked_date)
         self._paint_days()
         self._refresh_metrics()
+        self._refresh_undo_state()
         self._show_message(result.message, ok=result.success)
 
     def _handle_apply_period(self) -> None:
@@ -421,6 +429,7 @@ class DateManagementScreen(ctk.CTkFrame):
             self._rebuild_calendar()
             self._refresh_period_selector()
             self._refresh_metrics()
+            self._refresh_undo_state()
         else:
             self._sync_entries_from_period()
         self._show_message(result.message, ok=result.success)
@@ -432,6 +441,7 @@ class DateManagementScreen(ctk.CTkFrame):
             self._sync_entries_from_period()
             self._refresh_period_selector()
             self._refresh_metrics()
+            self._refresh_undo_state()
         self._show_message(result.message, ok=result.success)
 
     def _handle_next(self) -> None:
@@ -449,6 +459,7 @@ class DateManagementScreen(ctk.CTkFrame):
         self._sync_entries_from_period()
         self._rebuild_calendar()
         self._refresh_metrics()
+        self._refresh_undo_state()
         self._refresh_status()
 
     def _sync_entries_from_period(self) -> None:
@@ -462,11 +473,8 @@ class DateManagementScreen(ctk.CTkFrame):
         period = self.presenter.current_period()
         window_days = (period.end_date - period.start_date).days + 1
         active_days = len(self.presenter.get_valid_dates())
-        excluded_inside_window = sum(
-            1
-            for excluded_date in period.excluded_dates
-            if period.start_date <= excluded_date <= period.end_date
-        )
+        excluded_inside_window = self.presenter.count_excluded_inside_window()
+        excluded_outside_window = self.presenter.count_excluded_outside_window()
 
         self._metric_labels["periods"].configure(
             text=f"{self._current_period_index + 1}/{len(self._presenters)}"
@@ -474,14 +482,18 @@ class DateManagementScreen(ctk.CTkFrame):
         self._metric_labels["window"].configure(text=str(window_days))
         self._metric_labels["active"].configure(text=str(active_days))
         self._metric_labels["excluded"].configure(text=str(excluded_inside_window))
+        self._metric_labels["hidden"].configure(text=str(excluded_outside_window))
 
     def _refresh_status(self) -> None:
         self._status_label.configure(
-            text="Click a calendar day to exclude it or re-enable it.",
+            text=self._message_with_hidden_exclusions(
+                "Click a calendar day to exclude it or re-enable it."
+            ),
             text_color=_MUTED,
         )
 
     def _show_message(self, text: str, ok: bool) -> None:
+        text = self._message_with_hidden_exclusions(text)
         self._status_label.configure(
             text=text,
             text_color="#147A39" if ok else "#B00020",
@@ -489,16 +501,36 @@ class DateManagementScreen(ctk.CTkFrame):
 
     def _period_option_labels(self) -> list[str]:
         labels: list[str] = []
-        for presenter in self._presenters:
+        for index, presenter in enumerate(self._presenters, start=1):
             period = presenter.current_period()
             labels.append(
                 (
-                    f"{period.semester} {period.moed} | "
+                    f"{index}. {period.semester} {period.moed} | "
                     f"{period.start_date.strftime(_DATE_FORMAT)} - "
                     f"{period.end_date.strftime(_DATE_FORMAT)}"
                 )
             )
         return labels
+
+    def _refresh_undo_state(self) -> None:
+        if self._undo_button is None:
+            return
+
+        can_undo = self.presenter.can_undo()
+        self._undo_button.configure(
+            state="normal" if can_undo else "disabled",
+            text_color=(_PRIMARY, "#93C5FD") if can_undo else _MUTED,
+        )
+
+    def _message_with_hidden_exclusions(self, text: str) -> str:
+        hidden_count = self.presenter.count_excluded_outside_window()
+        if hidden_count == 0:
+            return text
+        suffix = (
+            f" {hidden_count} excluded date"
+            f"{'s are' if hidden_count != 1 else ' is'} outside this window."
+        )
+        return f"{text}{suffix}"
 
     def _refresh_period_selector(self) -> None:
         if self._period_selector is None:
