@@ -15,6 +15,8 @@ from gui.fileUploadScreen import FileUploadScreen
 from gui.programDetailsPresenter import ProgramDetailsPresenter
 from gui.programConfigScreen import ProgramConfigScreen
 from gui.programSelectionPresenter import ProgramSelectionPresenter
+from gui.scheduleGenerationScreen import ScheduleGenerationScreen
+from gui.schedulingPresenter import SchedulingPresenter
 from gui.uploadService import FileUploadService
 from gui.uploadedDataExportService import UploadedDataExportService
 from gui.uploadedDataPresenter import UploadedDataPresenter
@@ -128,7 +130,7 @@ class SchedulixWorkflow(ctk.CTkFrame):
                 presenter=presenters[0],
                 period_presenters=presenters,
                 on_back=self.show_program_config,
-                on_next=self._show_generation_step_placeholder,
+                on_next=self.show_schedule_generation,
             )
         )
 
@@ -136,18 +138,30 @@ class SchedulixWorkflow(ctk.CTkFrame):
         """Persist the currently mutated exam-period objects to disk cache."""
         self.cache.set_exam_periods(self.cache.get_exam_periods())
 
-    def _show_generation_step_placeholder(self) -> None:
-        """Temporary bridge while the generation step is wired in."""
+    def show_schedule_generation(self) -> None:
+        """Show the screen that generates schedules from cached data."""
+        self._set_window_title("Schedulix - Generate Schedules")
+        self._set_screen(
+            ScheduleGenerationScreen(
+                self,
+                presenter=SchedulingPresenter(self.cache),
+                on_back=self.show_date_management,
+                on_next=self._show_output_step_placeholder,
+            )
+        )
+
+    def _show_output_step_placeholder(self) -> None:
+        """Temporary bridge while the output step is wired in."""
         self._set_window_title("Schedulix - Workflow")
         self._set_screen(
             _MessageScreen(
                 self,
-                title="Date Management Saved",
+                title="Schedules Generated",
                 message=(
-                    "Date changes were saved. "
-                    "The next checkpoint generates schedules from the cache."
+                    "Schedules are now stored in the cache. "
+                    "The next checkpoint opens the output navigation screen."
                 ),
-                on_back=self.show_date_management,
+                on_back=self.show_schedule_generation,
             )
         )
 
