@@ -34,22 +34,6 @@ The Version 2.0 desktop workflow is:
 Generated schedules are created on a background worker so the GUI remains
 responsive during heavier scheduling runs.
 
-## Version 1.0 Scope
-
-Version 1.0 supports a file-based workflow:
-
-1. Read selected study programs.
-2. Read all course records.
-3. Read exam periods and blocked dates.
-4. Keep only relevant courses:
-   - courses that belong to the selected programs
-   - courses whose evaluation type is `Exam`
-5. Generate all valid exam-system options.
-6. Write the schedules to a readable text output file.
-7. Print a short run summary, including runtime in seconds.
-
-Version 1.0 checks conflicts by date only. It does not handle exam hours,
-classrooms, student-level repeat courses, preference ranking, or UI filtering.
 
 ## Project Structure
 
@@ -112,27 +96,6 @@ Schedulix/
 
 ## How To Run
 
-### Run From PyCharm
-
-1. Open `src/main.py`.
-2. Press the green Run button.
-3. After the run finishes, open:
-
-```text
-data/outputs/exam_schedules.txt
-```
-
-### Run From Terminal
-
-From the project root:
-
-```powershell
-cd C:\Users\user\Desktop\Schedulix
-python src\main.py
-```
-
-If `python` is not recognized on your computer, run it from PyCharm instead.
-
 ### Run The Version 2.0 GUI App
 
 Install the GUI dependency once from the project root:
@@ -150,8 +113,9 @@ $env:PYTHONPATH="src"
 .\.venv\Scripts\python.exe -m gui.workflow.mainGui
 ```
 
-The app opens the full workflow: upload, program selection, date management,
-schedule generation, schedule navigation, and export.
+The app opens the full workflow: upload input files, select study programs,
+review and edit exam dates, generate schedules directly from the Date Management
+screen, review generated schedule systems, and export the chosen result.
 
 The upload window uses `customtkinter`, as planned in the Version 2.0 software
 design document. If a teammate does not have a `.venv` folder yet, create it
