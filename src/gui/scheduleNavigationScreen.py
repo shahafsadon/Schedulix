@@ -1,21 +1,8 @@
-"""Output screen: navigate and visualize generated schedules (SCRUM-126).
+"""Output screen: review and export generated exam schedules.
 
-Passive MVP View. It renders the current exam system on a calendar, showing only
-the months that actually contain exams (computed across all systems so the month
-list stays stable during navigation). Exam days are highlighted and clickable;
-clicking one opens a popup with that day's exam details. Previous/Next move
-between systems and a "System X of Y" counter sits at the top.
-
-Performance notes:
-- Only relevant months are drawn (a period spans a few months, not the whole
-  year), which keeps the scrollable area small and smooth.
-- Regular days are lightweight CTkLabels; only exam days are CTkButtons. This
-  minimizes the number of heavy widgets in the scroll region.
-- The grid is built once; navigation only repaints the exam-day cells, so
-  Next/Previous stay instant.
-
-Navigation logic and view-model building belong to the presenter; this screen
-neither generates nor filters anything. Export (Save) is SCRUM-127's scope.
+The screen keeps the existing passive MVP boundary: navigation state and
+display models come from ``ScheduleNavigationPresenter`` while the view owns
+layout, buttons, and file dialogs.
 """
 from __future__ import annotations
 
@@ -40,15 +27,25 @@ _MONTH_NAMES = [
     "July", "August", "September", "October", "November", "December",
 ]
 _WEEKDAY_HEADERS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
-# Colors are (light_mode, dark_mode) pairs as expected by customtkinter.
-_EXAM_DAY_COLOR = ("#ffd6d6", "#5a2b2b")
-_EXAM_DAY_HOVER = ("#ffbcbc", "#6e3636")
-_EXAM_DAY_TEXT = ("#7a0000", "#ffe0e0")
-_REGULAR_DAY_TEXT = ("#333333", "#cfcfcf")
+
+_PAGE_BG = ("#F3F6FB", "#0B1220")
+_SURFACE = ("#FFFFFF", "#151B26")
+_SUBTLE_SURFACE = ("#F8FAFC", "#101826")
+_BORDER = ("#D8E2F0", "#2D3748")
+_TEXT = ("#111827", "#F8FAFC")
+_MUTED = ("#5F6368", "#A8A8A8")
+_PRIMARY = "#2563EB"
+_PRIMARY_HOVER = "#1D4ED8"
+_EXAM_DAY_COLOR = ("#DBEAFE", "#1E3A8A")
+_EXAM_DAY_HOVER = ("#BFDBFE", "#274A9F")
+_EXAM_DAY_TEXT = ("#0F172A", "#EAF2FF")
+_SELECTED_DAY_COLOR = ("#2563EB", "#60A5FA")
+_SELECTED_DAY_TEXT = ("#FFFFFF", "#0B1220")
+_REGULAR_DAY_TEXT = ("#A8B0BA", "#64748B")
 
 
 class ScheduleNavigationScreen(ctk.CTkFrame):
-    """Shows one generated exam system on a (relevant-months) calendar."""
+    """Review generated exam systems with calendar, details, and export."""
 
     def __init__(
         self,
@@ -57,104 +54,258 @@ class ScheduleNavigationScreen(ctk.CTkFrame):
         export_presenter: ExportPresenter | None = None,
         on_back: Callable[[], None] | None = None,
     ) -> None:
-        """Create the navigation screen.
-
-        Args:
-            master: the parent customTkinter container.
-            presenter: owns the current-system index and builds the view model.
-            export_presenter: drives the Save action; when None, the Save button
-                is hidden (useful for standalone preview without the wizard).
-            on_back: optional callback to return to the previous wizard step.
-        """
-        super().__init__(master, corner_radius=0)
+        super().__init__(master, corner_radius=0, fg_color=_PAGE_BG)
         self.presenter = presenter
         self._export_presenter = export_presenter
         self._on_back = on_back
 
-        # Exam-day cells only, keyed by ISO date "YYYY-MM-DD". Regular days are
-        # plain labels we never need to touch again, so they are not stored.
         self._exam_cells: dict[str, ctk.CTkButton] = {}
-        # Whether the static month grid has been built yet (built once).
+        self._selected_iso_date: str | None = None
+        self._current_exams_by_iso_date: dict[str, list[ExamRow]] = {}
         self._grid_built = False
+        self._metric_labels: dict[str, ctk.CTkLabel] = {}
 
         self._build()
         self._refresh()
 
     def _build(self) -> None:
-        """Build the static layout: title, counter, scrollable body, nav bar."""
-        self.grid_rowconfigure(2, weight=1)
+        """Build the redesigned output review layout."""
         self.grid_columnconfigure(0, weight=1)
+        self.grid_rowconfigure(2, weight=1)
+
+        self._build_header()
+        self._build_metrics()
+        self._build_main_area()
+        self._build_footer()
+
+    def _build_header(self) -> None:
+        """Build title, counter, and primary actions."""
+        header = ctk.CTkFrame(self, fg_color="transparent")
+        header.grid(row=0, column=0, sticky="ew", padx=24, pady=(18, 10))
+        header.grid_columnconfigure(0, weight=1)
 
         ctk.CTkLabel(
-            self,
+            header,
             text="Generated Exam Schedules",
-            font=("Segoe UI", 16, "bold"),
-        ).grid(row=0, column=0, sticky="w", padx=16, pady=(16, 4))
+            font=("Segoe UI", 24, "bold"),
+            text_color=_TEXT,
+        ).grid(row=0, column=0, sticky="w")
 
-        self._counter_label = ctk.CTkLabel(self, text="", text_color="#666666")
-        self._counter_label.grid(row=1, column=0, sticky="w", padx=16, pady=(0, 8))
+        self._counter_label = ctk.CTkLabel(
+            header,
+            text="",
+            font=("Segoe UI", 13),
+            text_color=_MUTED,
+        )
+        self._counter_label.grid(row=1, column=0, sticky="w", pady=(2, 0))
 
-        # Scrollable area holding the relevant months only.
-        self._body = ctk.CTkScrollableFrame(self)
-        self._body.grid(row=2, column=0, sticky="nsew", padx=16, pady=8)
-        self._body.grid_columnconfigure(0, weight=1)
-
-        self._build_nav_bar()
-
-    def _build_nav_bar(self) -> None:
-        """Build the bottom navigation bar (Back / Previous / Next)."""
-        nav = ctk.CTkFrame(self, fg_color="transparent")
-        nav.grid(row=3, column=0, sticky="ew", padx=16, pady=(8, 16))
-        nav.grid_columnconfigure(0, weight=1)
+        actions = ctk.CTkFrame(header, fg_color="transparent")
+        actions.grid(row=0, column=1, rowspan=2, sticky="e")
 
         if self._on_back is not None:
             ctk.CTkButton(
-                nav,
+                actions,
                 text="Back",
-                width=90,
+                width=86,
                 fg_color="transparent",
                 border_width=1,
+                border_color=_BORDER,
+                text_color=(_PRIMARY, "#93C5FD"),
                 command=self._on_back,
-            ).grid(row=0, column=1, padx=(8, 8))
+            ).grid(row=0, column=0, padx=(0, 8))
 
         self._prev_button = ctk.CTkButton(
-            nav, text="< Previous", width=110, command=self._handle_previous
+            actions,
+            text="< Previous",
+            width=112,
+            fg_color="transparent",
+            border_width=1,
+            border_color=_BORDER,
+            text_color=(_PRIMARY, "#93C5FD"),
+            command=self._handle_previous,
         )
-        self._prev_button.grid(row=0, column=2, padx=(8, 8))
+        self._prev_button.grid(row=0, column=1, padx=(0, 8))
 
         self._next_button = ctk.CTkButton(
-            nav, text="Next >", width=110, command=self._handle_next
+            actions,
+            text="Next >",
+            width=96,
+            command=self._handle_next,
         )
-        self._next_button.grid(row=0, column=3)
+        self._next_button.grid(row=0, column=2, padx=(0, 8))
 
-        # Save button is only shown when an export presenter was injected, so
-        # the screen stays usable as a pure preview without the export wiring.
         self._save_button = None
         if self._export_presenter is not None:
             self._save_button = ctk.CTkButton(
-                nav, text="Save System", width=120, command=self._handle_save
+                actions,
+                text="Save System",
+                width=122,
+                fg_color=_PRIMARY,
+                hover_color=_PRIMARY_HOVER,
+                command=self._handle_save,
             )
-            self._save_button.grid(row=0, column=4, padx=(8, 0))
+            self._save_button.grid(row=0, column=3)
 
-        # Status line under the nav row: shows the last export message.
-        self._status_label = ctk.CTkLabel(nav, text="", text_color="#666666")
-        self._status_label.grid(row=1, column=0, columnspan=5, sticky="w", pady=(6, 0))
+    def _build_metrics(self) -> None:
+        """Build compact summary cards for the current system."""
+        metrics = ctk.CTkFrame(self, fg_color="transparent")
+        metrics.grid(row=1, column=0, sticky="ew", padx=24, pady=(0, 12))
+        for column in range(4):
+            metrics.grid_columnconfigure(column, weight=1)
+
+        self._build_metric(metrics, 0, "exams", "Exams in system")
+        self._build_metric(metrics, 1, "days", "Exam days")
+        self._build_metric(metrics, 2, "sections", "Semester / moed")
+        self._build_metric(metrics, 3, "months", "Months shown")
+
+    def _build_metric(
+        self,
+        master: ctk.CTkFrame,
+        column: int,
+        key: str,
+        label: str,
+    ) -> None:
+        card = ctk.CTkFrame(
+            master,
+            fg_color=_SURFACE,
+            border_width=1,
+            border_color=_BORDER,
+            corner_radius=8,
+        )
+        card.grid(row=0, column=column, sticky="ew", padx=(0 if column == 0 else 10, 0))
+
+        ctk.CTkLabel(
+            card,
+            text=label,
+            font=("Segoe UI", 10, "bold"),
+            text_color=_MUTED,
+            anchor="w",
+        ).grid(row=0, column=0, sticky="w", padx=14, pady=(10, 0))
+
+        value = ctk.CTkLabel(
+            card,
+            text="-",
+            font=("Segoe UI", 19, "bold"),
+            text_color=(_PRIMARY, "#93C5FD"),
+            anchor="w",
+        )
+        value.grid(row=1, column=0, sticky="w", padx=14, pady=(0, 10))
+        self._metric_labels[key] = value
+
+    def _build_main_area(self) -> None:
+        """Build calendar and details columns."""
+        main = ctk.CTkFrame(self, fg_color="transparent")
+        main.grid(row=2, column=0, sticky="nsew", padx=24, pady=(0, 12))
+        main.grid_columnconfigure(0, weight=3)
+        main.grid_columnconfigure(1, weight=1)
+        main.grid_rowconfigure(0, weight=1)
+
+        calendar_card = ctk.CTkFrame(
+            main,
+            fg_color=_SURFACE,
+            border_width=1,
+            border_color=_BORDER,
+            corner_radius=8,
+        )
+        calendar_card.grid(row=0, column=0, sticky="nsew", padx=(0, 12))
+        calendar_card.grid_columnconfigure(0, weight=1)
+        calendar_card.grid_rowconfigure(1, weight=1)
+
+        ctk.CTkLabel(
+            calendar_card,
+            text="Calendar Review",
+            font=("Segoe UI", 16, "bold"),
+            text_color=_TEXT,
+        ).grid(row=0, column=0, sticky="w", padx=18, pady=(14, 8))
+
+        self._body = ctk.CTkScrollableFrame(
+            calendar_card,
+            fg_color=_SUBTLE_SURFACE,
+            border_width=0,
+            corner_radius=8,
+        )
+        self._body.grid(row=1, column=0, sticky="nsew", padx=14, pady=(0, 14))
+        self._body.grid_columnconfigure(0, weight=1)
+
+        details_card = ctk.CTkFrame(
+            main,
+            fg_color=_SURFACE,
+            border_width=1,
+            border_color=_BORDER,
+            corner_radius=8,
+        )
+        details_card.grid(row=0, column=1, sticky="nsew")
+        details_card.grid_columnconfigure(0, weight=1)
+        details_card.grid_rowconfigure(2, weight=1)
+
+        self._selected_day_label = ctk.CTkLabel(
+            details_card,
+            text="Select an exam day",
+            font=("Segoe UI", 16, "bold"),
+            text_color=_TEXT,
+            anchor="w",
+        )
+        self._selected_day_label.grid(row=0, column=0, sticky="ew", padx=16, pady=(14, 2))
+
+        self._selected_day_hint = ctk.CTkLabel(
+            details_card,
+            text="Click a highlighted date to inspect its exams.",
+            font=("Segoe UI", 11),
+            text_color=_MUTED,
+            anchor="w",
+        )
+        self._selected_day_hint.grid(row=1, column=0, sticky="ew", padx=16, pady=(0, 8))
+
+        self._details_body = ctk.CTkScrollableFrame(
+            details_card,
+            fg_color=_SUBTLE_SURFACE,
+            corner_radius=8,
+        )
+        self._details_body.grid(row=2, column=0, sticky="nsew", padx=12, pady=(0, 12))
+        self._details_body.grid_columnconfigure(0, weight=1)
+
+        ctk.CTkLabel(
+            details_card,
+            text="System exams",
+            font=("Segoe UI", 13, "bold"),
+            text_color=_TEXT,
+            anchor="w",
+        ).grid(row=3, column=0, sticky="ew", padx=16, pady=(0, 6))
+
+        self._schedule_body = ctk.CTkScrollableFrame(
+            details_card,
+            fg_color="transparent",
+            height=170,
+        )
+        self._schedule_body.grid(row=4, column=0, sticky="ew", padx=12, pady=(0, 12))
+        self._schedule_body.grid_columnconfigure(0, weight=1)
+
+    def _build_footer(self) -> None:
+        """Build a small export/status footer."""
+        footer = ctk.CTkFrame(self, fg_color="transparent")
+        footer.grid(row=3, column=0, sticky="ew", padx=24, pady=(0, 16))
+        footer.grid_columnconfigure(0, weight=1)
+
+        self._status_label = ctk.CTkLabel(
+            footer,
+            text="",
+            text_color=_MUTED,
+            anchor="w",
+        )
+        self._status_label.grid(row=0, column=0, sticky="ew")
 
     def _handle_next(self) -> None:
-        """Advance to the next system and repaint the exam days."""
+        """Advance to the next system and repaint the review."""
         self.presenter.next()
         self._refresh()
 
-    def _handle_save(self) -> None:
-        """Ask the user for a destination file then export the current system.
+    def _handle_previous(self) -> None:
+        """Go to the previous system and repaint the review."""
+        self.presenter.previous()
+        self._refresh()
 
-        Opening the Save-As dialog is a customtkinter/tkinter concern, so it
-        belongs in the View. The chosen path (or None on cancel) is forwarded
-        to the presenter, which performs the actual export and returns a
-        display-ready result.
-        """
-        # asksaveasfilename returns "" when the user cancels; normalize to None
-        # so the presenter has a single "cancelled" signal to react to.
+    def _handle_save(self) -> None:
+        """Ask for a destination file and export the currently shown system."""
         chosen = filedialog.asksaveasfilename(
             parent=self.winfo_toplevel(),
             title="Save Exam Schedule",
@@ -164,23 +315,16 @@ class ScheduleNavigationScreen(ctk.CTkFrame):
         )
         result = self._export_presenter.export_current(chosen or None)
 
-        # Surface the outcome to the user. Color hint: green for success,
-        # grey for cancel, red for failure.
         if result.success:
-            color = "#2e7d32"   # green
+            color = "#147A39"
         elif "cancelled" in result.message.lower():
-            color = "#666666"   # grey (cancellation is not an error)
+            color = "#666666"
         else:
-            color = "#B00020"   # red
+            color = "#B00020"
         self._status_label.configure(text=result.message, text_color=color)
 
-    def _handle_previous(self) -> None:
-        """Go to the previous system and repaint the exam days."""
-        self.presenter.previous()
-        self._refresh()
-
     def _refresh(self) -> None:
-        """Update counter, repaint exam days, and refresh nav-button states."""
+        """Refresh counter, metrics, calendar highlights, and detail panes."""
         view = self.presenter.current_view()
         if view is None:
             self._counter_label.configure(text="No schedules to display.")
@@ -190,16 +334,21 @@ class ScheduleNavigationScreen(ctk.CTkFrame):
                 self._save_button.configure(state="disabled")
             return
 
-        # Build the (relevant-months) grid once. The month list is computed
-        # across all systems, so it never needs rebuilding during navigation.
         if not self._grid_built:
             self._build_relevant_months_grid()
             self._grid_built = True
 
+        self._current_exams_by_iso_date = view.exams_by_iso_date
+        if self._selected_iso_date not in self._current_exams_by_iso_date:
+            self._selected_iso_date = self._first_exam_date()
+
         self._counter_label.configure(
-            text=f"System {view.position} of {view.total}"
+            text=f"Reviewing system {view.position} of {view.total}"
         )
+        self._refresh_metrics(view)
         self._paint_exam_days(view.exams_by_iso_date)
+        self._render_selected_day()
+        self._render_system_exam_list(view.sections)
 
         self._prev_button.configure(
             state="normal" if self.presenter.can_go_previous() else "disabled"
@@ -208,45 +357,58 @@ class ScheduleNavigationScreen(ctk.CTkFrame):
             state="normal" if self.presenter.can_go_next() else "disabled"
         )
         if self._save_button is not None:
-            # Save is always available when at least one schedule exists.
             self._save_button.configure(state="normal")
 
+    def _refresh_metrics(self, view) -> None:
+        """Update summary cards from the current system view."""
+        exam_count = sum(len(section.exams) for section in view.sections)
+        self._metric_labels["exams"].configure(text=str(exam_count))
+        self._metric_labels["days"].configure(text=str(len(view.exams_by_iso_date)))
+        self._metric_labels["sections"].configure(text=str(len(view.sections)))
+        self._metric_labels["months"].configure(text=str(len(self.presenter.relevant_months())))
+
     def _build_relevant_months_grid(self) -> None:
-        """Draw only the months that contain an exam in any system."""
-        for (year, month) in self.presenter.relevant_months():
+        """Draw only months that contain exams in at least one system."""
+        for year, month in self.presenter.relevant_months():
             self._build_month(year, month)
 
     def _build_month(self, year: int, month: int) -> None:
-        """Create one month's header + weekday row + grid of day cells.
-
-        Regular days are lightweight labels; exam days are buttons (stored in
-        self._exam_cells) so navigation can recolor and rewire them cheaply.
-        """
-        month_frame = ctk.CTkFrame(self._body)
-        month_frame.pack(fill="x", pady=(8, 4))
+        """Create one compact month card."""
+        month_frame = ctk.CTkFrame(
+            self._body,
+            fg_color=_SURFACE,
+            border_width=1,
+            border_color=_BORDER,
+            corner_radius=8,
+        )
+        month_frame.pack(fill="x", padx=6, pady=(6, 10))
         for col in range(7):
             month_frame.grid_columnconfigure(col, weight=1, uniform="day")
 
         ctk.CTkLabel(
             month_frame,
             text=f"{_MONTH_NAMES[month - 1]} {year}",
-            font=("Segoe UI", 13, "bold"),
-        ).grid(row=0, column=0, columnspan=7, sticky="w", padx=8, pady=(6, 2))
+            font=("Segoe UI", 14, "bold"),
+            text_color=_TEXT,
+        ).grid(row=0, column=0, columnspan=7, sticky="w", padx=12, pady=(10, 6))
 
         for col, label in enumerate(_WEEKDAY_HEADERS):
             ctk.CTkLabel(
                 month_frame,
                 text=label,
                 font=("Segoe UI", 10, "bold"),
-                text_color="#888888",
-            ).grid(row=1, column=col, padx=1, pady=1)
+                text_color=_MUTED,
+            ).grid(row=1, column=col, padx=2, pady=2)
 
         for week_index, week in enumerate(calendar.monthcalendar(year, month)):
             for col, day in enumerate(week):
                 if day == 0:
-                    # Padding cell for days outside this month.
                     ctk.CTkLabel(month_frame, text="").grid(
-                        row=2 + week_index, column=col, padx=1, pady=1
+                        row=2 + week_index,
+                        column=col,
+                        padx=3,
+                        pady=3,
+                        sticky="nsew",
                     )
                     continue
                 self._build_day_cell(month_frame, 2 + week_index, col, year, month, day)
@@ -260,45 +422,30 @@ class ScheduleNavigationScreen(ctk.CTkFrame):
         month: int,
         day: int,
     ) -> None:
-        """Create one day.
-
-        We do not yet know which system is active when building the grid, so we
-        cannot tell exam days from regular days here. Every cell starts as a
-        lightweight label; _paint_exam_days later promotes the exam days of the
-        current system to highlighted buttons and demotes the others back.
-        Because promotion/demotion needs a single widget type to swap styling
-        on, we use a button for every day but keep regular days visually flat
-        and disabled (so they read as plain text, not as clickable buttons).
-        """
+        """Create one calendar day cell."""
         iso = f"{year:04d}-{month:02d}-{day:02d}"
         cell = ctk.CTkButton(
             parent,
             text=str(day),
-            width=32,
-            height=28,
+            height=30,
             fg_color="transparent",
             hover=False,
             text_color=_REGULAR_DAY_TEXT,
             command=lambda: None,
             state="disabled",
+            corner_radius=7,
         )
-        cell.grid(row=row, column=col, padx=1, pady=1, sticky="nsew")
+        cell.grid(row=row, column=col, padx=3, pady=3, sticky="ew")
         self._exam_cells[iso] = cell
 
     def _paint_exam_days(
         self,
         exams_by_iso_date: dict[str, list[ExamRow]],
     ) -> None:
-        """Repaint cells so only the current system's exam days are highlighted.
-
-        First every cell is reset to the flat regular-day look, then each exam
-        day of the current system is promoted to a highlighted, clickable
-        button. This is O(number of cells) but touches only color/command, which
-        is far cheaper than rebuilding widgets.
-        """
-        # Reset all cells to the flat, non-interactive regular-day look.
-        for cell in self._exam_cells.values():
+        """Highlight only exam days for the current system."""
+        for iso_date, cell in self._exam_cells.items():
             cell.configure(
+                text=str(int(iso_date[-2:])),
                 fg_color="transparent",
                 hover=False,
                 text_color=_REGULAR_DAY_TEXT,
@@ -306,58 +453,123 @@ class ScheduleNavigationScreen(ctk.CTkFrame):
                 state="disabled",
             )
 
-        # Promote the current system's exam days.
-        for iso_date, exams in exams_by_iso_date.items():
-            cell = self._exam_cells.get(iso_date)
-            if cell is None:
-                # Defensive: an exam day outside the drawn months.
+            exams = exams_by_iso_date.get(iso_date)
+            if not exams:
                 continue
+
+            selected = iso_date == self._selected_iso_date
             cell.configure(
-                fg_color=_EXAM_DAY_COLOR,
+                text=f"{int(iso_date[-2:])}  ({len(exams)})",
+                fg_color=_SELECTED_DAY_COLOR if selected else _EXAM_DAY_COLOR,
                 hover=True,
                 hover_color=_EXAM_DAY_HOVER,
-                text_color=_EXAM_DAY_TEXT,
-                # Default args bind the current iteration's values, not the last.
-                command=lambda d=iso_date, e=exams: self._show_day_popup(d, e),
+                text_color=_SELECTED_DAY_TEXT if selected else _EXAM_DAY_TEXT,
+                command=lambda d=iso_date: self._select_day(d),
                 state="normal",
             )
 
-    def _show_day_popup(self, iso_date: str, exams: list[ExamRow]) -> None:
-        """Open a modal popup listing all exams scheduled on `iso_date`."""
-        popup = ctk.CTkToplevel(self)
-        popup.title(f"Exams on {iso_date}")
-        popup.geometry("520x340")
-        popup.transient(self.winfo_toplevel())
-        popup.grab_set()
+    def _select_day(self, iso_date: str) -> None:
+        """Select a day and refresh the detail panel."""
+        self._selected_iso_date = iso_date
+        self._paint_exam_days(self._current_exams_by_iso_date)
+        self._render_selected_day()
+
+    def _render_selected_day(self) -> None:
+        """Show selected-day exam details in the sidebar."""
+        for child in self._details_body.winfo_children():
+            child.destroy()
+
+        if self._selected_iso_date is None:
+            self._selected_day_label.configure(text="Select an exam day")
+            self._selected_day_hint.configure(text="Click a highlighted date to inspect its exams.")
+            return
+
+        exams = self._current_exams_by_iso_date.get(self._selected_iso_date, [])
+        self._selected_day_label.configure(
+            text=f"Exams on {self._format_iso_date(self._selected_iso_date)}"
+        )
+        self._selected_day_hint.configure(
+            text=f"{len(exams)} exam{'s' if len(exams) != 1 else ''} scheduled on this date."
+        )
+
+        for row_index, exam in enumerate(exams):
+            self._build_exam_detail_card(self._details_body, row_index, exam)
+
+    def _render_system_exam_list(self, sections) -> None:
+        """Render the full current system as compact grouped rows."""
+        for child in self._schedule_body.winfo_children():
+            child.destroy()
+
+        row = 0
+        for section in sections:
+            ctk.CTkLabel(
+                self._schedule_body,
+                text=f"{section.semester} | {section.moed}",
+                font=("Segoe UI", 11, "bold"),
+                text_color=_MUTED,
+                anchor="w",
+            ).grid(row=row, column=0, sticky="ew", padx=4, pady=(6, 2))
+            row += 1
+
+            for exam in section.exams:
+                ctk.CTkLabel(
+                    self._schedule_body,
+                    text=f"{exam.exam_date} - {exam.course_number} {exam.course_name}",
+                    font=("Segoe UI", 11),
+                    text_color=_TEXT,
+                    anchor="w",
+                    justify="left",
+                    wraplength=320,
+                ).grid(row=row, column=0, sticky="ew", padx=12, pady=1)
+                row += 1
+
+    def _build_exam_detail_card(
+        self,
+        master: ctk.CTkFrame,
+        row_index: int,
+        exam: ExamRow,
+    ) -> None:
+        """Render one selected-day exam detail card."""
+        card = ctk.CTkFrame(
+            master,
+            fg_color=_SURFACE,
+            border_width=1,
+            border_color=_BORDER,
+            corner_radius=8,
+        )
+        card.grid(row=row_index, column=0, sticky="ew", padx=4, pady=(4, 8))
+        card.grid_columnconfigure(0, weight=1)
 
         ctk.CTkLabel(
-            popup,
-            text=f"Exams scheduled on {iso_date}",
-            font=("Segoe UI", 14, "bold"),
-        ).pack(anchor="w", padx=16, pady=(12, 6))
+            card,
+            text=f"{exam.course_number} - {exam.course_name}",
+            font=("Segoe UI", 13, "bold"),
+            text_color=_TEXT,
+            anchor="w",
+            wraplength=320,
+        ).grid(row=0, column=0, sticky="ew", padx=12, pady=(10, 4))
 
-        body = ctk.CTkScrollableFrame(popup)
-        body.pack(fill="both", expand=True, padx=12, pady=4)
+        ctk.CTkLabel(
+            card,
+            text=(
+                f"Instructor: {exam.instructor}\n"
+                f"Requirement: {exam.status}\n"
+                f"Programs: {exam.program_numbers}"
+            ),
+            font=("Segoe UI", 11),
+            text_color=_MUTED,
+            justify="left",
+            anchor="w",
+        ).grid(row=1, column=0, sticky="ew", padx=12, pady=(0, 10))
 
-        for exam in exams:
-            row = ctk.CTkFrame(body)
-            row.pack(fill="x", pady=4)
-            ctk.CTkLabel(
-                row,
-                text=f"{exam.course_number}  -  {exam.course_name}",
-                font=("Segoe UI", 12, "bold"),
-                anchor="w",
-            ).pack(fill="x", padx=8, pady=(6, 0))
-            ctk.CTkLabel(
-                row,
-                text=(
-                    f"Instructor: {exam.instructor}    "
-                    f"Requirement: {exam.status}    "
-                    f"Programs: {exam.program_numbers}"
-                ),
-                anchor="w",
-            ).pack(fill="x", padx=8, pady=(0, 6))
+    def _first_exam_date(self) -> str | None:
+        """Return the first exam date in the current system."""
+        if not self._current_exams_by_iso_date:
+            return None
+        return sorted(self._current_exams_by_iso_date)[0]
 
-        ctk.CTkButton(popup, text="Close", width=90, command=popup.destroy).pack(
-            pady=(4, 12)
-        )
+    @staticmethod
+    def _format_iso_date(iso_date: str) -> str:
+        """Format YYYY-MM-DD as DD-MM-YYYY for display."""
+        year, month, day = iso_date.split("-")
+        return f"{day}-{month}-{year}"
