@@ -128,17 +128,26 @@ class RankingSettings:
 # Calculated metric values for one ExamSystem
 # ---------------------------------------------------------------------------
 
-@dataclass
+MISSING_METRIC_VALUE = -1
+
+
+@dataclass(frozen=True)
 class ScheduleMetrics:
     """
-    Stores the five pre-calculated metric values for one complete ExamSystem.
+    Stores the five metric values for one ExamSystem.
 
-    This is a pure data holder: it carries no calculation logic.  The metrics
-    layer (Dan's component) populates it; the ranking layer reads from it.
-    Storing computed values here avoids re-computation during multi-key sorts.
+    This class only stores data. It does not calculate or sort anything.
+    schedule_id is a stable id for the schedule.
+
+    Missing metric rule
+    -------------------
+    If a metric cannot be calculated, its value is -1.
+    Real metric values are zero or higher.
 
     Fields
     ------
+    schedule_id : int
+        Stable identifier assigned in generation order.
     min_mandatory_gap : int
         Minimum gap in days between two mandatory exams sharing a
         (program, year).  Corresponds to ``RankingCriterion.min_mandatory_gap``.
@@ -149,13 +158,15 @@ class ScheduleMetrics:
         Total elective-exam conflicts in the schedule.
         Corresponds to ``RankingCriterion.elective_collision_count``.
     mandatory_span : int
-        Span in days from the first to the last mandatory exam within any
-        single program.  Corresponds to ``RankingCriterion.mandatory_span``.
+        Maximum first-to-last mandatory-exam span across eligible
+        (program, year, semester, moed) groups.  Corresponds to
+        ``RankingCriterion.mandatory_span``.
     max_exams_per_day : int
         Maximum number of exams placed on any single calendar day.
         Corresponds to ``RankingCriterion.max_exams_per_day``.
     """
 
+    schedule_id: int
     min_mandatory_gap: int
     average_all_gap: float
     elective_collision_count: int
@@ -167,16 +178,12 @@ class ScheduleMetrics:
 # Ranked wrapper around one ExamSystem
 # ---------------------------------------------------------------------------
 
-@dataclass
+@dataclass(frozen=True)
 class RankedExamSystem:
     """
-    Wraps one ``ExamSystem`` together with its metrics and a stable key.
+    Holds one ExamSystem with its metrics.
 
-    The key is assigned once by the ranking layer (e.g. a 1-based position
-    integer) and survives re-sorts and GUI refresh cycles unchanged.  This
-    prevents display flickering when the user adjusts the ranking profile
-    and the sort order changes: the key lets the GUI correlate old and new
-    list positions without relying on object identity.
+    key is a stable id. It helps keep equal systems in the same order.
 
     Fields
     ------

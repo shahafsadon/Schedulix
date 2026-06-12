@@ -22,6 +22,7 @@ import pickle
 from pathlib import Path
 
 from models import Course, ExamPeriod
+from ranking_settings import RankedExamSystem
 from scheduling.examScheduleGenerator import ExamSystem
 
 
@@ -48,6 +49,7 @@ class _CacheState:
         self.exam_periods: list[ExamPeriod] = []
         self.selected_programs: list[str] = []
         self.generated_schedules: list[ExamSystem] = []
+        self.ranked_schedules: list[RankedExamSystem] = []
 
 
 # ---------------------------------------------------------------------------
@@ -120,6 +122,7 @@ class CacheManager:
                 loaded = pickle.load(fh)
             # Validate that the payload was written by a compatible version.
             if isinstance(loaded, _CacheState) and loaded.sentinel == _SENTINEL:
+                self._ensure_current_state_shape(loaded)
                 return loaded
         except Exception:
             # Covers PickleError, EOFError, AttributeError, and any other
@@ -127,6 +130,17 @@ class CacheManager:
             pass
 
         return _CacheState()
+
+    @staticmethod
+    def _ensure_current_state_shape(state: _CacheState) -> None:
+        """
+        Add fields introduced after older pickle files were written.
+
+        Pickle restores the saved instance attributes exactly, so an old cache
+        can be a valid _CacheState while still missing newer fields.
+        """
+        if not hasattr(state, "ranked_schedules"):
+            state.ranked_schedules = []
 
     def _persist(self) -> None:
         """
@@ -215,11 +229,35 @@ class CacheManager:
             engine after the user triggers generation.
         """
         self._state.generated_schedules = list(schedules)
+        self._state.ranked_schedules = []
         self._persist()
 
     def get_generated_schedules(self) -> list[ExamSystem]:
         """Return the generated schedules (empty list if none generated yet)."""
         return self._state.generated_schedules
+
+    # ------------------------------------------------------------------
+    # Ranked schedules
+    # ------------------------------------------------------------------
+
+    def set_ranked_schedules(
+        self,
+        schedules: list[RankedExamSystem],
+    ) -> None:
+        """
+        Replace the ranked-schedules list and persist to disk.
+
+        Ranked schedules wrap the original generated ExamSystem objects with
+        cached metrics and the current display order.  They are intentionally
+        stored separately from generated_schedules so ranking-only changes do
+        not mutate the generator output.
+        """
+        self._state.ranked_schedules = list(schedules)
+        self._persist()
+
+    def get_ranked_schedules(self) -> list[RankedExamSystem]:
+        """Return cached ranked schedules (empty list if not calculated yet)."""
+        return self._state.ranked_schedules
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -302,6 +340,7 @@ class CacheManager:
             The additional ``ExamSystem`` objects to append.
         """
         self._state.generated_schedules.extend(schedules)
+        self._state.ranked_schedules = []
         self._persist()
 
     # ------------------------------------------------------------------
@@ -348,4 +387,15 @@ class CacheManager:
         All other fields are left untouched.
         """
         self._state.generated_schedules = []
+        self._state.ranked_schedules = []
+        self._persist()
+
+    def invalidate_ranked_schedules(self) -> None:
+        """
+        Clear only the ranked-schedules field and persist the updated state.
+
+        This is useful when ranking preferences change while generated systems
+        remain valid but the previous display order should be discarded.
+        """
+        self._state.ranked_schedules = []
         self._persist()

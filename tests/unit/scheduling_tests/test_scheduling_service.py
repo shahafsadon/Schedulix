@@ -80,6 +80,14 @@ class SchedulingServiceTests(unittest.TestCase):
             self.cache.get_generated_schedules(),
             outcome.schedules,
         )
+        self.assertEqual(
+            self.cache.get_ranked_schedules(),
+            outcome.ranked_schedules,
+        )
+        self.assertEqual(
+            len(outcome.ranked_schedules),
+            outcome.schedule_count,
+        )
 
     def test_filters_out_non_selected_programs(self) -> None:
         """Courses outside the selected programs are not scheduled."""
