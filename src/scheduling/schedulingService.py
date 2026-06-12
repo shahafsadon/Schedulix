@@ -18,11 +18,13 @@ identical to Version 1.0 for the same inputs.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from application.cache_manager import CacheManager
+from ranking_settings import RankedExamSystem, RankingSettings
 from scheduling.courseFilter import CourseFilter
 from scheduling.examScheduleGenerator import ExamScheduleGenerator, ExamSystem
+from scheduling.scheduleRankingService import ScheduleRankingService
 
 
 @dataclass(frozen=True)
@@ -37,6 +39,8 @@ class SchedulingOutcome:
     relevant_course_count: int
     schedule_count: int
     schedules: list[ExamSystem]
+    ranked_schedules: list[RankedExamSystem] = field(default_factory=list)
+    ranking_seconds: float = 0.0
 
 
 class SchedulingService:
@@ -51,6 +55,8 @@ class SchedulingService:
         self,
         course_filter: CourseFilter | None = None,
         schedule_generator: ExamScheduleGenerator | None = None,
+        ranking_service: ScheduleRankingService | None = None,
+        ranking_settings: RankingSettings | None = None,
     ) -> None:
         """Create the service with its scheduling collaborators.
 
@@ -63,6 +69,8 @@ class SchedulingService:
         # Reuse the real Version 1.0 components unless tests inject their own.
         self._course_filter = course_filter or CourseFilter()
         self._schedule_generator = schedule_generator or ExamScheduleGenerator()
+        self._ranking_service = ranking_service or ScheduleRankingService()
+        self._ranking_settings = ranking_settings or RankingSettings([])
 
     def run(self, cache: CacheManager) -> SchedulingOutcome:
         """Generate exam systems from the cached data and store them back.
@@ -104,12 +112,22 @@ class SchedulingService:
             exam_periods,
         )
 
-        # Step 3: store the results in the cache so the output screen (and a
-        # later restart) can read them without regenerating.
+        # Step 3: calculate metrics once and rank the wrappers. With empty
+        # ranking settings this preserves generation order.
+        ranking_outcome = self._ranking_service.rank_generated_schedules(
+            schedules,
+            self._ranking_settings,
+        )
+
+        # Step 4: store raw and ranked results separately so ranking-only
+        # changes never modify the original generated systems.
         cache.set_generated_schedules(schedules)
+        cache.set_ranked_schedules(ranking_outcome.ranked_schedules)
 
         return SchedulingOutcome(
             relevant_course_count=len(relevant_courses),
             schedule_count=len(schedules),
             schedules=schedules,
+            ranked_schedules=ranking_outcome.ranked_schedules,
+            ranking_seconds=ranking_outcome.elapsed_seconds,
         )

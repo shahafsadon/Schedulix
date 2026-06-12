@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from ranking_settings import RankedExamSystem, ScheduleMetrics
 from scheduling.examScheduleGenerator import ExamSystem
 
 # Stable display order for semesters and moedim, matching the Version 1.0 output
@@ -64,6 +65,18 @@ class CalendarCell:
 
 
 @dataclass(frozen=True)
+class MetricsSummaryView:
+    """Calculated metrics for one ranked system, ready for display."""
+
+    schedule_id: int
+    min_mandatory_gap: int
+    average_all_gap: float
+    elective_collision_count: int
+    mandatory_span: int
+    max_exams_per_day: int
+
+
+@dataclass(frozen=True)
 class SystemView:
     """A full, display-ready view of the currently shown exam system.
 
@@ -77,6 +90,7 @@ class SystemView:
     sections: list[MoedSection]
     calendar_year: int | None   # year shown on the annual calendar (None = empty)
     exams_by_iso_date: dict[str, list[ExamRow]]  # quick lookup for the calendar
+    metrics_summary: MetricsSummaryView | None = None
 
 
 # Date format required by the output specification (DD-MM-YYYY).
@@ -86,14 +100,21 @@ _DATE_FORMAT = "%d-%m-%Y"
 class ScheduleNavigationPresenter:
     """Owns the current-system index and builds display-ready system views."""
 
-    def __init__(self, schedules: list[ExamSystem]) -> None:
+    def __init__(
+        self,
+        schedules: list[ExamSystem | RankedExamSystem],
+    ) -> None:
         """Create the presenter over the list of generated exam systems.
 
         Args:
-            schedules: the exam systems produced by SCRUM-125 (typically read
-                from the cache via get_generated_schedules()). May be empty.
+            schedules: raw exam systems or ranked wrappers read from the cache.
+                May be empty.
         """
-        self._schedules = schedules
+        self._schedules: list[ExamSystem] = []
+        self._ranked_schedules: list[RankedExamSystem] = []
+
+        self._replace_schedules(schedules)
+
         # Start on the first system; stays at 0 when there are no systems.
         self._index = 0
 
@@ -203,6 +224,7 @@ class ScheduleNavigationPresenter:
             sections=sections,
             calendar_year=calendar_year,
             exams_by_iso_date=exams_by_iso_date,
+            metrics_summary=self._current_metrics_summary(),
         )
 
     def current_system(self) -> ExamSystem | None:
@@ -210,6 +232,41 @@ class ScheduleNavigationPresenter:
         if not self._schedules:
             return None
         return self._schedules[self._index]
+
+    def current_ranked_system(self) -> RankedExamSystem | None:
+        """Return the ranked wrapper for the displayed system, if available."""
+        if not self._ranked_schedules:
+            return None
+        return self._ranked_schedules[self._index]
+
+    def apply_ranked_schedules(
+        self,
+        ranked_schedules: list[RankedExamSystem],
+    ) -> None:
+        """
+        Replace the display order while preserving the current system if found.
+
+        This supports ranking-only changes: the generated systems stay cached,
+        and the presenter swaps to the new order without resetting the user's
+        selected system unnecessarily.
+        """
+        current_key = self._current_ranked_key()
+        current_system = self.current_system()
+
+        self._replace_schedules(ranked_schedules)
+        self._index = 0
+
+        if current_key is not None:
+            for index, ranked_system in enumerate(self._ranked_schedules):
+                if ranked_system.key == current_key:
+                    self._index = index
+                    return
+
+        if current_system is not None:
+            for index, system in enumerate(self._schedules):
+                if system is current_system:
+                    self._index = index
+                    return
 
     def _build_rows(self, schedule) -> list[ExamRow]:
         """Flatten one period schedule's exams into display rows.
@@ -222,6 +279,52 @@ class ScheduleNavigationPresenter:
             key=lambda exam: (exam.exam_date, exam.course.course_number),
         )
         return [self._build_row(exam) for exam in ordered_exams]
+
+    def _replace_schedules(
+        self,
+        schedules: list[ExamSystem | RankedExamSystem],
+    ) -> None:
+        """Normalize raw or ranked input into presenter state."""
+        if schedules and isinstance(schedules[0], RankedExamSystem):
+            self._ranked_schedules = list(schedules)
+            self._schedules = [
+                ranked_system.exam_system
+                for ranked_system in self._ranked_schedules
+            ]
+            return
+
+        self._ranked_schedules = []
+        self._schedules = list(schedules)
+
+    def _current_metrics_summary(self) -> MetricsSummaryView | None:
+        """Return display metrics for the current ranked system."""
+        ranked_system = self.current_ranked_system()
+        if ranked_system is None:
+            return None
+
+        return self._metrics_to_view(ranked_system.metrics)
+
+    def _current_ranked_key(self) -> int | None:
+        """Return the stable key of the current ranked item, if present."""
+        ranked_system = self.current_ranked_system()
+        if ranked_system is None:
+            return None
+
+        return ranked_system.key
+
+    @staticmethod
+    def _metrics_to_view(
+        metrics: ScheduleMetrics,
+    ) -> MetricsSummaryView:
+        """Copy domain metric values into a presenter-owned view object."""
+        return MetricsSummaryView(
+            schedule_id=metrics.schedule_id,
+            min_mandatory_gap=metrics.min_mandatory_gap,
+            average_all_gap=metrics.average_all_gap,
+            elective_collision_count=metrics.elective_collision_count,
+            mandatory_span=metrics.mandatory_span,
+            max_exams_per_day=metrics.max_exams_per_day,
+        )
 
     @staticmethod
     def _build_row(exam) -> ExamRow:

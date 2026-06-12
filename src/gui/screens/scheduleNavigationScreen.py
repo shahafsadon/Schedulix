@@ -316,7 +316,7 @@ class ScheduleNavigationScreen(ctk.CTkFrame):
         result = self._export_presenter.export_current(chosen or None)
 
         if result.success:
-            color = "#147A39"
+            color = "#2e7d32"
         elif "cancelled" in result.message.lower():
             color = "#666666"
         else:
@@ -343,7 +343,7 @@ class ScheduleNavigationScreen(ctk.CTkFrame):
             self._selected_iso_date = self._first_exam_date()
 
         self._counter_label.configure(
-            text=f"Reviewing system {view.position} of {view.total}"
+            text=f"System {view.position} of {view.total}"
         )
         self._refresh_metrics(view)
         self._paint_exam_days(view.exams_by_iso_date)
@@ -457,22 +457,80 @@ class ScheduleNavigationScreen(ctk.CTkFrame):
             if not exams:
                 continue
 
-            selected = iso_date == self._selected_iso_date
+            selected = iso_date == getattr(self, "_selected_iso_date", None)
             cell.configure(
                 text=f"{int(iso_date[-2:])}  ({len(exams)})",
                 fg_color=_SELECTED_DAY_COLOR if selected else _EXAM_DAY_COLOR,
                 hover=True,
                 hover_color=_EXAM_DAY_HOVER,
                 text_color=_SELECTED_DAY_TEXT if selected else _EXAM_DAY_TEXT,
-                command=lambda d=iso_date: self._select_day(d),
+                command=lambda d=iso_date, rows=exams: self._handle_exam_day_click(
+                    d,
+                    rows,
+                ),
                 state="normal",
             )
+
+    def _handle_exam_day_click(
+        self,
+        iso_date: str,
+        exams: list[ExamRow],
+    ) -> None:
+        """Handle an exam-day click in full UI or headless compatibility mode."""
+        if hasattr(self, "_details_body"):
+            self._select_day(iso_date)
+            return
+
+        self._show_day_popup(iso_date, exams)
 
     def _select_day(self, iso_date: str) -> None:
         """Select a day and refresh the detail panel."""
         self._selected_iso_date = iso_date
         self._paint_exam_days(self._current_exams_by_iso_date)
         self._render_selected_day()
+
+    def _show_day_popup(
+        self,
+        iso_date: str,
+        exams: list[ExamRow],
+    ) -> None:
+        """Legacy popup used by older headless tests and fallback UI paths."""
+        popup = ctk.CTkToplevel(self.winfo_toplevel())
+        popup.title(f"Exams on {iso_date}")
+        popup.geometry("460x320")
+        popup.transient(self.winfo_toplevel())
+        popup.grab_set()
+
+        body = ctk.CTkFrame(popup, fg_color="transparent")
+        body.pack(fill="both", expand=True, padx=18, pady=18)
+
+        ctk.CTkLabel(
+            body,
+            text=f"Exams scheduled on {iso_date}",
+            font=("Segoe UI", 16, "bold"),
+            text_color=_TEXT,
+        ).pack(anchor="w", pady=(0, 10))
+
+        for exam in exams:
+            ctk.CTkLabel(
+                body,
+                text=f"{exam.course_number}  -  {exam.course_name}",
+                font=("Segoe UI", 13, "bold"),
+                text_color=_TEXT,
+                anchor="w",
+            ).pack(anchor="w", pady=(6, 2))
+
+            ctk.CTkLabel(
+                body,
+                text=(
+                    f"Instructor: {exam.instructor}    "
+                    f"Requirement: {exam.status}    "
+                    f"Programs: {exam.program_numbers}"
+                ),
+                font=("Segoe UI", 11),
+                text_color=_MUTED,
+                anchor="w",
+            ).pack(anchor="w")
 
     def _render_selected_day(self) -> None:
         """Show selected-day exam details in the sidebar."""

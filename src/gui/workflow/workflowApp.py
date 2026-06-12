@@ -145,6 +145,7 @@ class SchedulixWorkflow(ctk.CTkFrame):
         """Show generated schedules with previous/next and export support."""
         self._set_window_title("Schedulix - Generated Schedules")
         schedules = self.cache.get_generated_schedules()
+        ranked_schedules = self.cache.get_ranked_schedules()
 
         if not schedules:
             self._set_screen(
@@ -157,7 +158,11 @@ class SchedulixWorkflow(ctk.CTkFrame):
             )
             return
 
-        navigation_presenter = ScheduleNavigationPresenter(schedules)
+        # Prefer ranked wrappers when metrics were calculated; fall back to the
+        # raw systems so older cached sessions still open normally.
+        navigation_presenter = ScheduleNavigationPresenter(
+            ranked_schedules or schedules
+        )
         export_presenter = ExportPresenter(navigation_presenter)
 
         self._set_screen(
