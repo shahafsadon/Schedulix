@@ -239,33 +239,36 @@ class MandatoryGapDaysConstraint:
     incremental: bool = True
     final: bool = True
 
-    def evaluate(self, context: ConstraintEvaluationContext) -> ConstraintEvaluationResult:
-        if context.candidate_exam is not None and context.candidate_date is not None:
-            indexed_result = _evaluate_candidate_gap_with_index(
-                context=context,
-                candidate_keys_metadata_name="candidate_obligatory_keys",
-                date_index_metadata_name="mandatory_dates_by_key",
-                fallback_keys=_mandatory_keys,
-                requirement_id=self.requirement_id,
-                threshold=self.k,
-                explanation_prefix="Mandatory exams",
+   def evaluate(self, context: ConstraintEvaluationContext) -> ConstraintEvaluationResult:
+    if context.candidate_exam is not None and context.candidate_date is not None:
+        indexed_result = _evaluate_candidate_gap_with_index(
+            context=context,
+            candidate_keys_metadata_name="candidate_obligatory_keys",
+            date_index_metadata_name="mandatory_dates_by_key",
+            fallback_keys=_mandatory_keys,
+            requirement_id=self.requirement_id,
+            threshold=self.k,
+            explanation_prefix="Mandatory exams",
+        )
+        if indexed_result is not None:
+            return indexed_result
+
+    entries = _entries_with_candidate(context)
+    by_group = _dates_by_program_year(entries, mandatory_only=True)
+
+    for key, dates in by_group.items():
+        violation = _first_gap_below_threshold(dates, self.k)
+        if violation is not None:
+            return ConstraintEvaluationResult.reject(
+                self.requirement_id,
+                (
+                    f"Mandatory exams for program {key[0]} year {key[1]} "
+                    f"are only {violation} days apart; "
+                    f"required minimum is {self.k}."
+                ),
             )
-            if indexed_result is not None:
-                return indexed_result
 
-        entries = _entries_with_candidate(context)
-        by_group = _dates_by_program_year(entries, mandatory_only=True)
-
-        for key, dates in by_group.items():
-            violation = _first_gap_below_threshold(dates, self.k)
-            if violation is not None:
-                return ConstraintEvaluationResult.reject(
-                    self.requirement_id,
-                    f"Mandatory exams for program {key[0]} year {key[1]} are only {violation} days apart; required minimum is {self.k}.",
-                )
-
-        return ConstraintEvaluationResult.accept()
-
+    return ConstraintEvaluationResult.accept()
 
 @dataclass(frozen=True)
 class AnyCourseGapDaysConstraint:
@@ -278,32 +281,36 @@ class AnyCourseGapDaysConstraint:
     incremental: bool = True
     final: bool = True
 
-    def evaluate(self, context: ConstraintEvaluationContext) -> ConstraintEvaluationResult:
-        if context.candidate_exam is not None and context.candidate_date is not None:
-            indexed_result = _evaluate_candidate_gap_with_index(
-                context=context,
-                candidate_keys_metadata_name="candidate_all_keys",
-                date_index_metadata_name="all_dates_by_key",
-                fallback_keys=_all_keys,
-                requirement_id=self.requirement_id,
-                threshold=self.k,
-                explanation_prefix="Exams",
+def evaluate(self, context: ConstraintEvaluationContext) -> ConstraintEvaluationResult:
+    if context.candidate_exam is not None and context.candidate_date is not None:
+        indexed_result = _evaluate_candidate_gap_with_index(
+            context=context,
+            candidate_keys_metadata_name="candidate_all_keys",
+            date_index_metadata_name="all_dates_by_key",
+            fallback_keys=_all_keys,
+            requirement_id=self.requirement_id,
+            threshold=self.k,
+            explanation_prefix="Exams",
+        )
+        if indexed_result is not None:
+            return indexed_result
+
+    entries = _entries_with_candidate(context)
+    by_group = _dates_by_program_year(entries, mandatory_only=False)
+
+    for key, dates in by_group.items():
+        violation = _first_gap_below_threshold(dates, self.k)
+        if violation is not None:
+            return ConstraintEvaluationResult.reject(
+                self.requirement_id,
+                (
+                    f"Exams for program {key[0]} year {key[1]} "
+                    f"are only {violation} days apart; "
+                    f"required minimum is {self.k}."
+                ),
             )
-            if indexed_result is not None:
-                return indexed_result
 
-        entries = _entries_with_candidate(context)
-        by_group = _dates_by_program_year(entries, mandatory_only=False)
-
-        for key, dates in by_group.items():
-            violation = _first_gap_below_threshold(dates, self.k)
-            if violation is not None:
-                return ConstraintEvaluationResult.reject(
-                    self.requirement_id,
-                    f"Exams for program {key[0]} year {key[1]} are only {violation} days apart; required minimum is {self.k}.",
-                )
-
-        return ConstraintEvaluationResult.accept()
+    return ConstraintEvaluationResult.accept()
 
 
 @dataclass(frozen=True)
@@ -317,36 +324,43 @@ class ElectiveConflictsPerProgramConstraint:
     incremental: bool = True
     final: bool = True
 
-    def evaluate(self, context: ConstraintEvaluationContext) -> ConstraintEvaluationResult:
-        if context.candidate_exam is not None and context.candidate_date is not None:
-            indexed_result = self._evaluate_candidate_with_index(context)
-            if indexed_result is not None:
-                return indexed_result
+   def evaluate(self, context: ConstraintEvaluationContext) -> ConstraintEvaluationResult:
+    if context.candidate_exam is not None and context.candidate_date is not None:
+        indexed_result = self._evaluate_candidate_with_index(context)
+        if indexed_result is not None:
+            return indexed_result
 
-        entries = _entries_with_candidate(context)
-        counts: dict[str, int] = defaultdict(int)
+    entries = _entries_with_candidate(context)
+    counts: dict[str, int] = defaultdict(int)
 
-        by_date: dict[date, list[ScheduledExam]] = defaultdict(list)
-        for scheduled_exam in entries:
-            by_date[scheduled_exam.exam_date].append(scheduled_exam)
+    by_date: dict[date, list[ScheduledExam]] = defaultdict(list)
+    for scheduled_exam in entries:
+        by_date[scheduled_exam.exam_date].append(scheduled_exam)
 
-        for same_day_exams in by_date.values():
-            for index, first_exam in enumerate(same_day_exams):
-                for second_exam in same_day_exams[index + 1:]:
-                    shared_programs = _elective_programs(first_exam.course).intersection(
-                        _elective_programs(second_exam.course)
-                    )
-                    for program_number in shared_programs:
-                        counts[program_number] += 1
-
-        for program_number, count in counts.items():
-            if count > self.k:
-                return ConstraintEvaluationResult.reject(
-                    self.requirement_id,
-                    f"Program {program_number} has {count} elective same-date collisions; maximum allowed is {self.k}.",
+    for same_day_exams in by_date.values():
+        for index, first_exam in enumerate(same_day_exams):
+            for second_exam in same_day_exams[index + 1:]:
+                shared_programs = _elective_programs(
+                    first_exam.course
+                ).intersection(
+                    _elective_programs(second_exam.course)
                 )
 
-        return ConstraintEvaluationResult.accept()
+                for program_number in shared_programs:
+                    counts[program_number] += 1
+
+    for program_number, count in counts.items():
+        if count > self.k:
+            return ConstraintEvaluationResult.reject(
+                self.requirement_id,
+                (
+                    f"Program {program_number} has {count} "
+                    f"elective same-date collisions; "
+                    f"maximum allowed is {self.k}."
+                ),
+            )
+
+    return ConstraintEvaluationResult.accept()
 
 
     def _evaluate_candidate_with_index(
@@ -433,32 +447,51 @@ class MaxExamsPerDayConstraint:
     incremental: bool = True
     final: bool = True
 
-    def evaluate(self, context: ConstraintEvaluationContext) -> ConstraintEvaluationResult:
-        if context.candidate_date is not None:
-            exam_counts_by_date = context.metadata.get("exam_counts_by_date")
-            if exam_counts_by_date is not None:
-                count = exam_counts_by_date.get(context.candidate_date, 0) + 1
-                if count > self.k:
-                    return ConstraintEvaluationResult.reject(
-                        self.requirement_id,
-                        f"Date {context.candidate_date} has {count} exams; maximum allowed is {self.k}.",
-                    )
+def evaluate(
+    self,
+    context: ConstraintEvaluationContext,
+) -> ConstraintEvaluationResult:
+    if context.candidate_date is not None:
+        exam_counts_by_date = context.metadata.get(
+            "exam_counts_by_date"
+        )
 
-                return ConstraintEvaluationResult.accept()
+        if exam_counts_by_date is not None:
+            count = (
+                exam_counts_by_date.get(
+                    context.candidate_date,
+                    0,
+                )
+                + 1
+            )
 
-        counts: dict[date, int] = defaultdict(int)
-
-        for scheduled_exam in _entries_with_candidate(context):
-            counts[scheduled_exam.exam_date] += 1
-
-        for exam_date, count in counts.items():
             if count > self.k:
                 return ConstraintEvaluationResult.reject(
                     self.requirement_id,
-                    f"Date {exam_date} has {count} exams; maximum allowed is {self.k}.",
+                    (
+                        f"Date {context.candidate_date} has {count} exams; "
+                        f"maximum allowed is {self.k}."
+                    ),
                 )
 
-        return ConstraintEvaluationResult.accept()
+            return ConstraintEvaluationResult.accept()
+
+    counts: dict[date, int] = defaultdict(int)
+
+    for scheduled_exam in _entries_with_candidate(context):
+        counts[scheduled_exam.exam_date] += 1
+
+    for exam_date, count in counts.items():
+        if count > self.k:
+            return ConstraintEvaluationResult.reject(
+                self.requirement_id,
+                (
+                    f"Date {exam_date} has {count} exams; "
+                    f"maximum allowed is {self.k}."
+                ),
+            )
+
+    return ConstraintEvaluationResult.accept()
 
 
 class ConstraintRegistry:
