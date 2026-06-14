@@ -190,7 +190,11 @@ class SameDateProgramYearConflictConstraint:
             if usage is not None and usage[0] > 0:
                 return ConstraintEvaluationResult.reject(
                     self.requirement_id,
-                    _same_date_rejection_message(context.candidate_exam, context.candidate_date, key),
+                    _same_date_rejection_message(
+                        context.candidate_exam,
+                        context.candidate_date,
+                        key,
+                    ),
                 )
 
         for key in elective_keys:
@@ -198,7 +202,11 @@ class SameDateProgramYearConflictConstraint:
             if usage is not None and usage[1] > 0:
                 return ConstraintEvaluationResult.reject(
                     self.requirement_id,
-                    _same_date_rejection_message(context.candidate_exam, context.candidate_date, key),
+                    _same_date_rejection_message(
+                        context.candidate_exam,
+                        context.candidate_date,
+                        key,
+                    ),
                 )
 
         return ConstraintEvaluationResult.accept()
@@ -217,10 +225,12 @@ class SameDateProgramYearConflictConstraint:
                 continue
 
             obligatory_keys, elective_keys = _resource_keys(scheduled_exam.course)
+
             for key in obligatory_keys:
                 usage = day_usage.setdefault(key, [0, 0])
                 usage[0] += 1
                 usage[1] += 1
+
             for key in elective_keys:
                 usage = day_usage.setdefault(key, [0, 0])
                 usage[0] += 1
@@ -261,7 +271,11 @@ class MandatoryGapDaysConstraint:
             if violation is not None:
                 return ConstraintEvaluationResult.reject(
                     self.requirement_id,
-                    f"Mandatory exams for program {key[0]} year {key[1]} are only {violation} days apart; required minimum is {self.k}.",
+                    (
+                        f"Mandatory exams for program {key[0]} year {key[1]} "
+                        f"are only {violation} days apart; "
+                        f"required minimum is {self.k}."
+                    ),
                 )
 
         return ConstraintEvaluationResult.accept()
@@ -300,7 +314,11 @@ class AnyCourseGapDaysConstraint:
             if violation is not None:
                 return ConstraintEvaluationResult.reject(
                     self.requirement_id,
-                    f"Exams for program {key[0]} year {key[1]} are only {violation} days apart; required minimum is {self.k}.",
+                    (
+                        f"Exams for program {key[0]} year {key[1]} "
+                        f"are only {violation} days apart; "
+                        f"required minimum is {self.k}."
+                    ),
                 )
 
         return ConstraintEvaluationResult.accept()
@@ -336,6 +354,7 @@ class ElectiveConflictsPerProgramConstraint:
                     shared_programs = _elective_programs(first_exam.course).intersection(
                         _elective_programs(second_exam.course)
                     )
+
                     for program_number in shared_programs:
                         counts[program_number] += 1
 
@@ -343,11 +362,14 @@ class ElectiveConflictsPerProgramConstraint:
             if count > self.k:
                 return ConstraintEvaluationResult.reject(
                     self.requirement_id,
-                    f"Program {program_number} has {count} elective same-date collisions; maximum allowed is {self.k}.",
+                    (
+                        f"Program {program_number} has {count} "
+                        f"elective same-date collisions; "
+                        f"maximum allowed is {self.k}."
+                    ),
                 )
 
         return ConstraintEvaluationResult.accept()
-
 
     def _evaluate_candidate_with_index(
         self,
@@ -380,10 +402,15 @@ class ElectiveConflictsPerProgramConstraint:
                 elective_collisions_by_program.get(program_number, 0)
                 + same_date_counts.get(program_number, 0)
             )
+
             if resulting_count > self.k:
                 return ConstraintEvaluationResult.reject(
                     self.requirement_id,
-                    f"Program {program_number} has {resulting_count} elective same-date collisions; maximum allowed is {self.k}.",
+                    (
+                        f"Program {program_number} has {resulting_count} "
+                        f"elective same-date collisions; "
+                        f"maximum allowed is {self.k}."
+                    ),
                 )
 
         return ConstraintEvaluationResult.accept()
@@ -443,12 +470,17 @@ class MaxExamsPerDayConstraint:
     def evaluate(self, context: ConstraintEvaluationContext) -> ConstraintEvaluationResult:
         if context.candidate_date is not None:
             exam_counts_by_date = context.metadata.get("exam_counts_by_date")
+
             if exam_counts_by_date is not None:
                 count = exam_counts_by_date.get(context.candidate_date, 0) + 1
+
                 if count > self.k:
                     return ConstraintEvaluationResult.reject(
                         self.requirement_id,
-                        f"Date {context.candidate_date} has {count} exams; maximum allowed is {self.k}.",
+                        (
+                            f"Date {context.candidate_date} has {count} exams; "
+                            f"maximum allowed is {self.k}."
+                        ),
                     )
 
                 return ConstraintEvaluationResult.accept()
@@ -462,7 +494,10 @@ class MaxExamsPerDayConstraint:
             if count > self.k:
                 return ConstraintEvaluationResult.reject(
                     self.requirement_id,
-                    f"Date {exam_date} has {count} exams; maximum allowed is {self.k}.",
+                    (
+                        f"Date {exam_date} has {count} exams; "
+                        f"maximum allowed is {self.k}."
+                    ),
                 )
 
         return ConstraintEvaluationResult.accept()
@@ -560,10 +595,15 @@ def _evaluate_candidate_gap_with_index(
     for key in candidate_keys:
         for existing_date in date_index.get(key, []):
             gap = abs((context.candidate_date - existing_date).days)
+
             if gap < threshold:
                 return ConstraintEvaluationResult.reject(
                     requirement_id,
-                    f"{explanation_prefix} for program {key[0]} year {key[1]} are only {gap} days apart; required minimum is {threshold}.",
+                    (
+                        f"{explanation_prefix} for program {key[0]} year {key[1]} "
+                        f"are only {gap} days apart; "
+                        f"required minimum is {threshold}."
+                    ),
                 )
 
     return ConstraintEvaluationResult.accept()
@@ -621,7 +661,13 @@ def _period_entries_with_candidate(
     if context.exam_system is not None:
         for period_schedule in context.exam_system.period_schedules:
             for scheduled_exam in period_schedule.scheduled_exams:
-                entries.append((scheduled_exam, period_schedule.semester, period_schedule.moed))
+                entries.append(
+                    (
+                        scheduled_exam,
+                        period_schedule.semester,
+                        period_schedule.moed,
+                    )
+                )
 
     if context.candidate_exam is not None and context.candidate_date is not None:
         entries.append(
@@ -684,6 +730,7 @@ def _resource_keys(course: Course) -> tuple[set[ResourceKey], set[ResourceKey]]:
         if _is_elective(program.status)
     }
     elective.difference_update(obligatory)
+
     return obligatory, elective
 
 
@@ -708,11 +755,13 @@ def _elective_programs(course: Course) -> set[str]:
         for program in course.programs
         if not _is_elective(program.status)
     }
+
     elective_programs = {
         program.program_number
         for program in course.programs
         if _is_elective(program.status)
     }
+
     return elective_programs.difference(mandatory_programs)
 
 
