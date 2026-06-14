@@ -61,6 +61,7 @@ class ScheduleConstraint(Protocol):
     enabled: bool
     incremental: bool
     final: bool
+    requires_final_system_evaluation: bool
 
     def evaluate(
         self,
@@ -78,6 +79,7 @@ class NoDuplicateCourseOnSameDateConstraint:
     requirement_id: str = "V2.0-overlapping-period-course-date"
     incremental: bool = True
     final: bool = True
+    requires_final_system_evaluation: bool = False
 
     def evaluate(
         self,
@@ -154,6 +156,7 @@ class SameDateProgramYearConflictConstraint:
     requirement_id: str = "V2.0-critical-conflict-rule"
     incremental: bool = True
     final: bool = True
+    requires_final_system_evaluation: bool = False
 
     def evaluate(
         self,
@@ -237,6 +240,19 @@ class MandatoryGapDaysConstraint:
     final: bool = True
 
     def evaluate(self, context: ConstraintEvaluationContext) -> ConstraintEvaluationResult:
+        if context.candidate_exam is not None and context.candidate_date is not None:
+            indexed_result = _evaluate_candidate_gap_with_index(
+                context=context,
+                candidate_keys_metadata_name="candidate_obligatory_keys",
+                date_index_metadata_name="mandatory_dates_by_key",
+                fallback_keys=_mandatory_keys,
+                requirement_id=self.requirement_id,
+                threshold=self.k,
+                explanation_prefix="Mandatory exams",
+            )
+            if indexed_result is not None:
+                return indexed_result
+
         entries = _entries_with_candidate(context)
         by_group = _dates_by_program_year(entries, mandatory_only=True)
 
@@ -263,6 +279,19 @@ class AnyCourseGapDaysConstraint:
     final: bool = True
 
     def evaluate(self, context: ConstraintEvaluationContext) -> ConstraintEvaluationResult:
+        if context.candidate_exam is not None and context.candidate_date is not None:
+            indexed_result = _evaluate_candidate_gap_with_index(
+                context=context,
+                candidate_keys_metadata_name="candidate_all_keys",
+                date_index_metadata_name="all_dates_by_key",
+                fallback_keys=_all_keys,
+                requirement_id=self.requirement_id,
+                threshold=self.k,
+                explanation_prefix="Exams",
+            )
+            if indexed_result is not None:
+                return indexed_result
+
         entries = _entries_with_candidate(context)
         by_group = _dates_by_program_year(entries, mandatory_only=False)
 
@@ -289,6 +318,11 @@ class ElectiveConflictsPerProgramConstraint:
     final: bool = True
 
     def evaluate(self, context: ConstraintEvaluationContext) -> ConstraintEvaluationResult:
+        if context.candidate_exam is not None and context.candidate_date is not None:
+            indexed_result = self._evaluate_candidate_with_index(context)
+            if indexed_result is not None:
+                return indexed_result
+
         entries = _entries_with_candidate(context)
         counts: dict[str, int] = defaultdict(int)
 
@@ -310,6 +344,46 @@ class ElectiveConflictsPerProgramConstraint:
                 return ConstraintEvaluationResult.reject(
                     self.requirement_id,
                     f"Program {program_number} has {count} elective same-date collisions; maximum allowed is {self.k}.",
+                )
+
+        return ConstraintEvaluationResult.accept()
+
+
+    def _evaluate_candidate_with_index(
+        self,
+        context: ConstraintEvaluationContext,
+    ) -> ConstraintEvaluationResult | None:
+        elective_counts_by_date_program = context.metadata.get(
+            "elective_counts_by_date_program"
+        )
+        elective_collisions_by_program = context.metadata.get(
+            "elective_collisions_by_program"
+        )
+
+        if (
+            elective_counts_by_date_program is None
+            or elective_collisions_by_program is None
+        ):
+            return None
+
+        candidate_programs = context.metadata.get("candidate_elective_programs")
+        if candidate_programs is None:
+            candidate_programs = _elective_programs(context.candidate_exam)
+
+        same_date_counts = elective_counts_by_date_program.get(
+            context.candidate_date,
+            {},
+        )
+
+        for program_number in candidate_programs:
+            resulting_count = (
+                elective_collisions_by_program.get(program_number, 0)
+                + same_date_counts.get(program_number, 0)
+            )
+            if resulting_count > self.k:
+                return ConstraintEvaluationResult.reject(
+                    self.requirement_id,
+                    f"Program {program_number} has {resulting_count} elective same-date collisions; maximum allowed is {self.k}.",
                 )
 
         return ConstraintEvaluationResult.accept()
@@ -360,6 +434,18 @@ class MaxExamsPerDayConstraint:
     final: bool = True
 
     def evaluate(self, context: ConstraintEvaluationContext) -> ConstraintEvaluationResult:
+        if context.candidate_date is not None:
+            exam_counts_by_date = context.metadata.get("exam_counts_by_date")
+            if exam_counts_by_date is not None:
+                count = exam_counts_by_date.get(context.candidate_date, 0) + 1
+                if count > self.k:
+                    return ConstraintEvaluationResult.reject(
+                        self.requirement_id,
+                        f"Date {context.candidate_date} has {count} exams; maximum allowed is {self.k}.",
+                    )
+
+                return ConstraintEvaluationResult.accept()
+
         counts: dict[date, int] = defaultdict(int)
 
         for scheduled_exam in _entries_with_candidate(context):
@@ -407,6 +493,17 @@ class ConstraintRegistry:
     def constraints(self) -> tuple[ScheduleConstraint, ...]:
         return tuple(self._constraints)
 
+    def requires_final_system_evaluation(self) -> bool:
+        return any(
+            getattr(
+                constraint,
+                "requires_final_system_evaluation",
+                constraint.final,
+            )
+            for constraint in self._constraints
+            if constraint.final
+        )
+
     def evaluate_incremental(
         self,
         context: ConstraintEvaluationContext,
@@ -434,6 +531,35 @@ class ConstraintRegistry:
                 return result
 
         return ConstraintEvaluationResult.accept()
+
+
+def _evaluate_candidate_gap_with_index(
+    context: ConstraintEvaluationContext,
+    candidate_keys_metadata_name: str,
+    date_index_metadata_name: str,
+    fallback_keys,
+    requirement_id: str,
+    threshold: int,
+    explanation_prefix: str,
+) -> ConstraintEvaluationResult | None:
+    date_index = context.metadata.get(date_index_metadata_name)
+    if date_index is None:
+        return None
+
+    candidate_keys = context.metadata.get(candidate_keys_metadata_name)
+    if candidate_keys is None:
+        candidate_keys = fallback_keys(context.candidate_exam)
+
+    for key in candidate_keys:
+        for existing_date in date_index.get(key, []):
+            gap = abs((context.candidate_date - existing_date).days)
+            if gap < threshold:
+                return ConstraintEvaluationResult.reject(
+                    requirement_id,
+                    f"{explanation_prefix} for program {key[0]} year {key[1]} are only {gap} days apart; required minimum is {threshold}.",
+                )
+
+    return ConstraintEvaluationResult.accept()
 
 
 def _threshold_constraints_from_settings(
