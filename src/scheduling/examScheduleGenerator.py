@@ -46,6 +46,15 @@ class ExamSystem:
     period_schedules: list[ExamSchedule]
 
 
+@dataclass
+class SchedulingDiagnostics:
+    """Diagnostic counters for recursive candidate evaluation."""
+
+    generated_candidates: int = 0
+    accepted_candidates: int = 0
+    pruned_candidates: int = 0
+
+
 @dataclass(frozen=True)
 class _CourseProfile:
     """Precomputed conflict resources used while placing one course."""
@@ -99,6 +108,12 @@ class ExamScheduleGenerator:
                 constraint_settings
             )
         )
+
+        self.diagnostics = SchedulingDiagnostics()
+
+    def reset_diagnostics(self) -> None:
+        """Reset recursive candidate-evaluation counters."""
+        self.diagnostics = SchedulingDiagnostics()
 
     def generate_for_period(
         self,
@@ -703,6 +718,8 @@ class ExamScheduleGenerator:
         moed: str | None,
     ) -> bool:
         """Return True when all enabled constraints accept the candidate."""
+        self.diagnostics.generated_candidates += 1
+
         result = self.constraint_registry.evaluate_incremental(
             ConstraintEvaluationContext(
                 candidate_exam=profile.course,
@@ -725,6 +742,11 @@ class ExamScheduleGenerator:
                 },
             )
         )
+
+        if result.accepted:
+            self.diagnostics.accepted_candidates += 1
+        else:
+            self.diagnostics.pruned_candidates += 1
 
         return result.accepted
 
