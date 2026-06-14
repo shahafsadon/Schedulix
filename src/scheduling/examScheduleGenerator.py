@@ -5,7 +5,12 @@ from dataclasses import dataclass
 from datetime import date
 from itertools import product
 
+from constraint_settings import SchedulingConstraintSettings
 from models import Course, ExamPeriod
+from scheduling.constraints import (
+    ConstraintEvaluationContext,
+    ConstraintRegistry,
+)
 from scheduling.examConflictDetector import (
     ExamConflictDetector,
     ScheduledExam,
@@ -65,6 +70,8 @@ class ExamScheduleGenerator:
         self,
         date_handler: ExamDateHandler | None = None,
         conflict_detector: ExamConflictDetector | None = None,
+        constraint_registry: ConstraintRegistry | None = None,
+        constraint_settings: SchedulingConstraintSettings | None = None,
     ) -> None:
         self.date_handler = (
             date_handler
@@ -77,6 +84,13 @@ class ExamScheduleGenerator:
         self.conflict_detector = (
             conflict_detector
             or ExamConflictDetector()
+        )
+
+        self.constraint_registry = (
+            constraint_registry
+            or ConstraintRegistry.default(
+                constraint_settings
+            )
         )
 
     def generate_for_period(
@@ -227,11 +241,16 @@ class ExamScheduleGenerator:
                 courses,
                 relevant_periods[0],
             ):
-                yield ExamSystem(
+                exam_system = ExamSystem(
                     period_schedules=[
                         schedule
                     ]
                 )
+
+                if self._is_valid_complete_system(
+                    exam_system
+                ):
+                    yield exam_system
 
             return
 
@@ -272,11 +291,16 @@ class ExamScheduleGenerator:
             for combination in product(
                 *period_options
             ):
-                yield ExamSystem(
+                exam_system = ExamSystem(
                     period_schedules=list(
                         combination
                     )
                 )
+
+                if self._is_valid_complete_system(
+                    exam_system
+                ):
+                    yield exam_system
 
             return
 
@@ -348,10 +372,13 @@ class ExamScheduleGenerator:
 
         for exam_date in valid_dates:
             if not self._can_place(
-                profile,
-                exam_date,
-                occupancy,
-                course_numbers_by_date,
+                profile=profile,
+                exam_date=exam_date,
+                current_schedule=current_schedule,
+                occupancy=occupancy,
+                course_numbers_by_date=course_numbers_by_date,
+                semester=exam_period.semester,
+                moed=exam_period.moed,
             ):
                 continue
 
@@ -416,11 +443,16 @@ class ExamScheduleGenerator:
         if period_index == len(
             period_options
         ):
-            yield ExamSystem(
+            exam_system = ExamSystem(
                 period_schedules=list(
                     current_periods
                 )
             )
+
+            if self._is_valid_complete_system(
+                exam_system
+            ):
+                yield exam_system
 
             return
 
@@ -455,10 +487,22 @@ class ExamScheduleGenerator:
                     ] = profile
 
                 if not self._can_place(
-                    profile,
-                    exam.exam_date,
-                    occupancy,
-                    course_numbers_by_date,
+                    profile=profile,
+                    exam_date=exam.exam_date,
+                    current_schedule=self._flatten_period_schedules(
+                        current_periods
+                    )
+                    + [
+                        ScheduledExam(
+                            course=placed_profile.course,
+                            exam_date=placed_date,
+                        )
+                        for placed_profile, placed_date in placed
+                    ],
+                    occupancy=occupancy,
+                    course_numbers_by_date=course_numbers_by_date,
+                    semester=option.semester,
+                    moed=option.moed,
                 ):
                     break
 
@@ -505,10 +549,38 @@ class ExamScheduleGenerator:
                     course_numbers_by_date,
                 )
 
+    def _is_valid_complete_system(
+        self,
+        exam_system: ExamSystem,
+    ) -> bool:
+        """Return True when all enabled final-system constraints accept it."""
+        result = self.constraint_registry.evaluate_final(
+            ConstraintEvaluationContext(
+                exam_system=exam_system,
+            )
+        )
+
+        return result.accepted
+
     @staticmethod
+    def _flatten_period_schedules(
+        period_schedules: list[ExamSchedule],
+    ) -> list[ScheduledExam]:
+        """Return the already selected period exams as one list."""
+        scheduled_exams: list[ScheduledExam] = []
+
+        for period_schedule in period_schedules:
+            scheduled_exams.extend(
+                period_schedule.scheduled_exams
+            )
+
+        return scheduled_exams
+
     def _can_place(
+        self,
         profile: _CourseProfile,
         exam_date: date,
+        current_schedule: list[ScheduledExam],
         occupancy: dict[
             date,
             dict[ResourceKey, Usage],
@@ -517,43 +589,25 @@ class ExamScheduleGenerator:
             date,
             set[str],
         ],
+        semester: str | None,
+        moed: str | None,
     ) -> bool:
-        """Return True when a course may be assigned to the candidate date."""
-        if (
-            profile.course.course_number
-            in course_numbers_by_date.get(
-                exam_date,
-                set(),
+        """Return True when all enabled constraints accept the candidate."""
+        result = self.constraint_registry.evaluate_incremental(
+            ConstraintEvaluationContext(
+                candidate_exam=profile.course,
+                candidate_date=exam_date,
+                partial_schedule=current_schedule,
+                semester=semester,
+                moed=moed,
+                metadata={
+                    "occupancy": occupancy,
+                    "course_numbers_by_date": course_numbers_by_date,
+                },
             )
-        ):
-            # Prevent the same course from receiving two different moeds on
-            # the same calendar date when exam periods overlap.
-            return False
-
-        day_usage = occupancy.get(
-            exam_date,
-            {},
         )
 
-        for key in profile.obligatory_keys:
-            usage = day_usage.get(key)
-
-            if (
-                usage is not None
-                and usage[0] > 0
-            ):
-                return False
-
-        for key in profile.elective_keys:
-            usage = day_usage.get(key)
-
-            if (
-                usage is not None
-                and usage[1] > 0
-            ):
-                return False
-
-        return True
+        return result.accepted
 
     @staticmethod
     def _place(
