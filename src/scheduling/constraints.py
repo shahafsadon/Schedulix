@@ -391,14 +391,15 @@ class ElectiveConflictsPerProgramConstraint:
 
 @dataclass(frozen=True)
 class MandatorySpanDaysConstraint:
-    """Limit the date span of mandatory exams per program/year/period."""
+    """Require the mandatory exam-period span to be at least k days."""
 
     k: int
     enabled: bool = True
     name: str = "mandatory_span_days"
     requirement_id: str = "Req 2.4"
-    incremental: bool = True
+    incremental: bool = False
     final: bool = True
+    requires_final_system_evaluation: bool = True
 
     def evaluate(self, context: ConstraintEvaluationContext) -> ConstraintEvaluationResult:
         entries = _period_entries_with_candidate(context)
@@ -406,17 +407,23 @@ class MandatorySpanDaysConstraint:
 
         for scheduled_exam, semester, moed in entries:
             for program_number, year in _mandatory_keys(scheduled_exam.course):
-                by_group[(program_number, year, semester, moed)].append(scheduled_exam.exam_date)
+                by_group[(program_number, year, semester, moed)].append(
+                    scheduled_exam.exam_date
+                )
 
         for key, dates in by_group.items():
             if len(dates) < 2:
                 continue
 
             span = (max(dates) - min(dates)).days
-            if span > self.k:
+            if span < self.k:
                 return ConstraintEvaluationResult.reject(
                     self.requirement_id,
-                    f"Mandatory exams for program {key[0]} year {key[1]} span {span} days; maximum allowed is {self.k}.",
+                    (
+                        f"Mandatory exams for program {key[0]} year {key[1]} "
+                        f"semester {key[2]} moed {key[3]} span only {span} days; "
+                        f"required minimum is {self.k}."
+                    ),
                 )
 
         return ConstraintEvaluationResult.accept()
