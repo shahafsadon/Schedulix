@@ -32,15 +32,16 @@ two objects already used elsewhere in the codebase:
 This keeps GUI and file-based flows interchangeable: SchedulingService can
 consume either source identically.
 
-A minimal validation layer (positive-integer / non-negative-integer ranges,
-ranking-criterion uniqueness) is applied inline. When the shared
-``SchedulingSettingsValidator`` from SCRUM-143 lands, it will replace
-``_validate_bundle`` without changing the public interface.
+Validation is delegated to the shared ``SchedulingSettingsValidator``
+(SCRUM-143), the same service used by the GUI flow. This guarantees that a
+settings file accepted here produces settings that are also accepted by the
+GUI, and vice versa.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass
 
+from application.settings_validator import SchedulingSettingsValidator
 from constraint_settings import (
     SchedulingConstraintSettings,
     ThresholdConstraintSetting,
@@ -84,22 +85,31 @@ _FALSE_TOKENS = {"off", "false", "no", "0", "disabled"}
 _DESC_TOKENS = {"desc", "descending", "down", "-"}
 _ASC_TOKENS = {"asc", "ascending", "up", "+"}
 
-# Constraints whose k must be a strictly-positive integer per Reqs 2.1, 2.2,
-# 2.4, 2.5. Req 2.3 (elective collisions) allows k = 0.
-_POSITIVE_K_REQUIRED = {
-    ThresholdConstraintType.mandatory_gap_days,
-    ThresholdConstraintType.any_course_gap_days,
-    ThresholdConstraintType.mandatory_span_days,
-    ThresholdConstraintType.max_exams_per_day,
-}
-
 _RANKING_PREFIX = "ranking:"
 
 
 class SchedulingSettingsFileReader(
     BaseFileReader[SchedulingSettingsBundle]
 ):
-    """Parses an optional Part 3 settings file into the shared model types."""
+    """Parses an optional Part 3 settings file into the shared model types.
+
+    Validation is delegated to the shared ``SchedulingSettingsValidator``
+    (SCRUM-143), so a settings file accepted here is guaranteed to be
+    accepted by the GUI flow as well, and vice versa.
+    """
+
+    def __init__(
+        self,
+        validator: SchedulingSettingsValidator | None = None,
+    ) -> None:
+        """Create the reader.
+
+        Args:
+            validator: the shared SCRUM-143 validation service. A default
+                instance is created when none is supplied so callers do not
+                need to construct one themselves; tests can inject a fake.
+        """
+        self._validator = validator or SchedulingSettingsValidator()
 
     def parse(
         self,
@@ -156,15 +166,25 @@ class SchedulingSettingsFileReader(
             seen_constraints.add(constraint_type)
             constraint_settings.constraints[constraint_type] = setting
 
-        # Minimal validation. Will be replaced by SchedulingSettingsValidator
-        # from SCRUM-143 once that ticket lands.
-        self._validate_bundle(constraint_settings, ranking_preferences)
+        ranking_settings = RankingSettings(priority_list=ranking_preferences)
+
+        # Delegate to the shared validator (SCRUM-143) so the file-based flow
+        # enforces exactly the same rules as the GUI flow. Errors are
+        # collected and re-raised as a single ValueError, matching the
+        # line-level ValueError already raised for malformed lines above.
+        validation_result = self._validator.validate(
+            constraint_settings=constraint_settings,
+            ranking_settings=ranking_settings,
+        )
+        if not validation_result.is_valid:
+            raise ValueError(
+                "Invalid scheduling settings:\n"
+                + "\n".join(validation_result.error_messages)
+            )
 
         return SchedulingSettingsBundle(
             constraint_settings=constraint_settings,
-            ranking_settings=RankingSettings(
-                priority_list=ranking_preferences,
-            ),
+            ranking_settings=ranking_settings,
         )
 
     # ------------------------------------------------------------------
@@ -261,55 +281,6 @@ class SchedulingSettingsFileReader(
             criterion=criterion,
             descending=descending,
         )
-
-    # ------------------------------------------------------------------
-    # Minimal validation (to be replaced by SCRUM-143)
-    # ------------------------------------------------------------------
-
-    @staticmethod
-    def _validate_bundle(
-        constraint_settings: SchedulingConstraintSettings,
-        ranking_preferences: list[RankingPreference],
-    ) -> None:
-        """
-        Reject invalid combinations before generation can see them.
-
-        This is intentionally a small subset of the rules that the shared
-        ``SchedulingSettingsValidator`` (SCRUM-143) will enforce; it lives
-        here only so the reader does not pass obviously invalid data into
-        the engine while SCRUM-143 is still pending.
-        """
-        for constraint_type, setting in constraint_settings.constraints.items():
-            if not setting.enabled:
-                continue
-
-            if setting.k < 0:
-                raise ValueError(
-                    f"Constraint '{constraint_type.value}' requires k >= 0, "
-                    f"got {setting.k}."
-                )
-
-            if (
-                constraint_type in _POSITIVE_K_REQUIRED
-                and setting.k <= 0
-            ):
-                raise ValueError(
-                    f"Constraint '{constraint_type.value}' requires k > 0 "
-                    f"when enabled, got {setting.k}."
-                )
-
-        # RankingSettings.__post_init__ already rejects duplicates, so this
-        # is a belt-and-braces guard for clearer file-line error messages
-        # which the reader emits during parsing.
-        seen: set[RankingCriterion] = set()
-        for preference in ranking_preferences:
-            if preference.criterion in seen:
-                raise ValueError(
-                    "Duplicate ranking criterion in settings file: "
-                    f"'{preference.criterion.value}'."
-                )
-            seen.add(preference.criterion)
-
 
 # ---------------------------------------------------------------------------
 # Small parsing helpers (module-private)

@@ -9,6 +9,7 @@ SRC = ROOT / "src"
 
 sys.path.insert(0, str(SRC))
 
+from application.settings_validator import SchedulingSettingsValidator
 from constraint_settings import ThresholdConstraintType
 from fileReader.baseFileReader import (
     FileReaderFactory,
@@ -85,16 +86,13 @@ class SchedulingSettingsFileReaderTests(unittest.TestCase):
         self.assertTrue(priorities[1].descending)
         self.assertFalse(priorities[2].descending)
 
-    def test_allows_zero_k_for_elective_conflicts(self) -> None:
-        """Req 2.3 explicitly permits k = 0 for elective collisions."""
-        bundle = SchedulingSettingsFileReader().parse(
-            "elective_conflicts_per_program = on, 0"
-        )
-        setting = bundle.constraint_settings.constraints[
-            ThresholdConstraintType.elective_conflicts_per_program
-        ]
-        self.assertTrue(setting.enabled)
-        self.assertEqual(setting.k, 0)
+    def test_rejects_zero_k_for_elective_conflicts(self) -> None:
+        """The shared validator (SCRUM-143) requires k >= 1 for every
+        enabled constraint, including elective_conflicts_per_program."""
+        with self.assertRaises(ValueError):
+            SchedulingSettingsFileReader().parse(
+                "elective_conflicts_per_program = on, 0"
+            )
 
     def test_rejects_zero_k_when_constraint_requires_positive(self) -> None:
         """Enabled mandatory_gap_days with k = 0 must fail validation."""
@@ -155,6 +153,26 @@ class SchedulingSettingsFileReaderTests(unittest.TestCase):
             FileReaderType.SCHEDULING_SETTINGS
         )
         self.assertIsInstance(reader, SchedulingSettingsFileReader)
+
+    def test_accepted_file_passes_the_shared_validator(self) -> None:
+        """A file accepted by the reader must also pass SCRUM-143 directly.
+
+        This is the core "parsed settings are identical in structure to
+        GUI-generated settings" acceptance criterion: anything the reader
+        returns must be re-validatable by the same shared validator with no
+        surprises.
+        """
+        bundle = SchedulingSettingsFileReader().parse(
+            "mandatory_gap_days = on, 3\n"
+            "max_exams_per_day  = on, 2\n"
+            "ranking: min_mandatory_gap\n"
+        )
+
+        result = SchedulingSettingsValidator().validate(
+            constraint_settings=bundle.constraint_settings,
+            ranking_settings=bundle.ranking_settings,
+        )
+        self.assertTrue(result.is_valid, result.error_messages)
 
 
 if __name__ == "__main__":
