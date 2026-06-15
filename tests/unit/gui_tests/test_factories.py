@@ -204,6 +204,10 @@ class TestViewFactory(unittest.TestCase):
                 "gui.dateManagementScreen",
                 "DateManagementScreen",
             ),
+            ViewType.SCHEDULING_SETTINGS: (
+                "gui.schedulingSettingsScreen",
+                "SchedulingSettingsScreen",
+            ),
             ViewType.SCHEDULE_NAVIGATION: (
                 "gui.scheduleNavigationScreen",
                 "ScheduleNavigationScreen",
