@@ -204,13 +204,20 @@ Selected programs: 3
 Courses read: 3
 Relevant Exam courses: 2
 Exam periods read: 3
-Schedules generated: 76032
+Valid exam systems: 76032
+Active constraints: none
+Active ranking criteria: none
 Output file: C:\Users\user\Desktop\Schedulix\data\outputs\exam_schedules.txt
 Runtime seconds: 1.42
 ```
 
 `Runtime seconds` is useful for checking the Version 1.0 performance requirement.
 The requirement says the system should create the output within 30 seconds.
+
+`Active constraints` and `Active ranking criteria` reflect the optional Part 3
+settings file passed via `settings_path` (see "Scheduling Settings File" under
+Input File Format). When no settings file is supplied, both show `none` and
+`Valid exam systems` behaves exactly as the old `Schedules generated` count.
 
 ## Default Example Files
 
@@ -230,14 +237,19 @@ data/outputs/exam_schedules.txt
 
 ## Output Format
 
-The output starts with a title and then lists schedule options:
+The output starts with a title, an optional settings summary, the count of
+valid systems, and then lists schedule options in ranked order:
 
 ```text
 Schedulix Exam Schedules
 ========================================
+Settings: constraints[mandatory_gap_days=3, max_exams_per_day=2] | ranking[min_mandatory_gap desc, average_all_gap desc]
+Valid systems: 12
+========================================
 
 Schedule 1
 ========================================
+Metrics: min_gap=3 | avg_gap=5.0 | elective_collisions=0 | mand_span=2 | max_per_day=1
 Semester: FALL
 Moed: Aleph
 29-01-2026 | Physics 1 | Prof. O. Some
@@ -247,12 +259,25 @@ Moed: Bet
 12-04-2026 | Calculus 1 | Dr. Erez Scheiner
 ```
 
-Each `Schedule N` represents one complete exam-system option. Inside it, exams
-are separated by semester and moed. Each exam line contains:
+The `Settings:` line is omitted when no Part 3 constraints are enabled and no
+ranking criteria are active; it then reads:
+
+```text
+Settings: none (all constraints disabled, no ranking)
+```
+
+Each `Schedule N` represents one complete exam-system option, ordered
+according to the active ranking criteria (or generation order if none are
+set). The `Metrics:` line summarizes the five Part 3 metrics for that system;
+a value of `n/a` means the metric could not be calculated for that system
+(e.g. fewer than two exams). Inside each schedule, exams are separated by
+semester and moed. Each exam line contains:
 
 ```text
 exam date | course name | instructor name
 ```
+
+This exam-line format is unchanged from Version 2.0.
 
 ## Input File Format
 
