@@ -95,7 +95,8 @@ Schedulix/
 |   |-- examples/
 |   |   |-- CourseExample.txt        # Example course records
 |   |   |-- DatesExample.txt         # Example exam periods and excluded dates
-|   |   `-- ProgramsExample.txt      # Example selected study programs
+|   |   |-- ProgramsExample.txt      # Example selected study programs
+|   |   `-- SettingsExample.txt      # Example Part 3 scheduling-settings file (optional)
 |   |-- outputs/
 |   |   `-- exam_schedules.txt       # Generated output file after running the system
 |   `-- output/                      # Old/unused output folder placeholder
@@ -108,9 +109,11 @@ Schedulix/
 |   |-- fileReader/
 |   |   |-- baseFileReader.py        # Shared reader base class and reader factory
 |   |   `-- fileTypeReaders/
-|   |       |-- coursesReader.py     # Parses CourseExample-style course files
-|   |       |-- examPeriodsReader.py # Parses DatesExample-style exam-period files
-|   |       `-- programReader.py     # Parses selected program files
+|   |       |-- coursesReader.py             # Parses CourseExample-style course files
+|   |       |-- examPeriodsReader.py         # Parses DatesExample-style exam-period files
+|   |       |-- programReader.py             # Parses selected program files
+|   |       |-- schedulingSettingsReader.py  # Parses optional Part 3 settings files
+|   |       `-- schedulingSettingsWriter.py  # Writes Part 3 settings files
 |   |-- output/
 |   |   |-- exportService.py         # Exports one chosen generated schedule
 |   |   `-- outputWriter.py          # Formats and writes readable schedule output
@@ -365,8 +368,56 @@ Rules:
 - The leading `-` before excluded dates is optional.
 - Comments after excluded dates are ignored by the scheduler.
 
-## How To Make Your Own Example
+### 4. Scheduling Settings File (optional, Part 3)
 
+File:
+
+```text
+data/examples/SettingsExample.txt
+```
+
+This optional fourth file configures the Part 3 threshold constraints
+(Section 2 of the requirements) and the ranking-criteria priority order
+(Section 3). It is parsed by `SchedulingSettingsFileReader` into the same
+`SchedulingConstraintSettings` and `RankingSettings` models used by the GUI.
+
+> **Status:** This file is parsed and validated, but is not yet wired into
+> `SchedulixApp.run()`. CLI integration is tracked under SCRUM-166.
+
+Format:
+
+```text
+# Comments start with '#'. Blank lines are ignored.
+#
+# Threshold constraints (Section 2).
+# Each line:  <constraint_type> = <enabled>, <k>
+mandatory_gap_days             = on,  3
+any_course_gap_days            = off, 0
+elective_conflicts_per_program = off, 0
+mandatory_span_days            = off, 0
+max_exams_per_day              = on,  2
+
+# Ranking criteria (Section 3), in priority order.
+# Each line:  ranking: <criterion> [ : <direction> ]
+ranking: min_mandatory_gap
+ranking: average_all_gap : desc
+```
+
+Rules:
+
+- Enabled tokens: `on` / `off` (also accepted: `true`/`false`, `yes`/`no`, `1`/`0`).
+- Constraint names: `mandatory_gap_days`, `any_course_gap_days`,
+  `elective_conflicts_per_program`, `mandatory_span_days`, `max_exams_per_day`.
+- `k` must be a positive integer (>= 1) for every enabled constraint,
+  enforced by the shared `SchedulingSettingsValidator` (SCRUM-143).
+- Ranking criteria: `min_mandatory_gap`, `average_all_gap`,
+  `elective_collision_count`, `mandatory_span`, `max_exams_per_day`.
+- Ranking direction: `desc` (default) or `asc`.
+- Each constraint and each ranking criterion may appear at most once.
+- Omitting the file preserves Version 2.0 behavior (all constraints
+  disabled, generation order preserved).
+
+## How To Make Your Own Example
 There are two simple options.
 
 ### Option A: Replace The Default Example Files
