@@ -5,6 +5,7 @@ from gui.presenters.scheduleNavigationPresenter import (
     ExamRow,
     MetricsSummaryView,
     MoedSection,
+    RankingApplyResult,
     ScheduleNavigationPresenter,
     SystemView,
 )
@@ -15,6 +16,7 @@ __all__ = [
     "ExamRow",
     "MetricsSummaryView",
     "MoedSection",
+    "RankingApplyResult",
     "ScheduleNavigationPresenter",
     "SystemView",
 ]
