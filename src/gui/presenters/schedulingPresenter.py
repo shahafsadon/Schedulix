@@ -26,11 +26,20 @@ class GenerationResult:
     The View shows `message` directly. On success `schedule_count` drives the
     "X systems generated" text and whether navigation to the output screen is
     offered; on failure `success` is False and `message` holds the reason.
+
+    `pruned_candidates` is populated for successful, zero-schedule runs and
+    mirrors `SchedulingOutcome.pruned_candidates` (a raw diagnostic count of
+    rejected placement attempts, not complete systems). It is informational
+    only: the message-routing decision below uses
+    `SchedulingOutcome.any_constraint_enabled`, not this count, since
+    `pruned_candidates` also reflects the always-active base conflict rule
+    and does not reflect final-system-only constraint rejections.
     """
 
     success: bool
     message: str
     schedule_count: int = 0
+    pruned_candidates: int = 0
 
 
 class SchedulingPresenter:
@@ -87,9 +96,23 @@ class SchedulingPresenter:
                     "No exam courses found for the selected programs. "
                     "Try selecting different programs."
                 )
+            elif outcome.any_constraint_enabled:
+                # At least one Part 3 threshold constraint is active. We
+                # cannot say for certain that it alone caused the zero
+                # result (the always-active base conflict rule may also be
+                # involved), but pointing the user at the active constraints
+                # is the most actionable suggestion in this case.
+                message = (
+                    "No valid exam systems satisfy the current selection "
+                    "with the active threshold constraints. "
+                    "Try relaxing a threshold constraint, excluding fewer "
+                    "dates, or changing programs."
+                )
             else:
-                # There are courses, but no conflict-free arrangement fits the
-                # available dates, so suggest loosening the date constraints.
+                # No Part 3 constraint is active: the zero result is caused
+                # by date availability / the base conflict rule alone, so
+                # suggest loosening the date constraints (pre-Part-3
+                # behavior, unchanged).
                 message = (
                     "No valid exam systems could be generated for the current "
                     "selection. Try excluding fewer dates or changing programs."
@@ -98,6 +121,7 @@ class SchedulingPresenter:
                 success=True,
                 message=message,
                 schedule_count=0,
+                pruned_candidates=outcome.pruned_candidates,
             )
 
         return GenerationResult(
