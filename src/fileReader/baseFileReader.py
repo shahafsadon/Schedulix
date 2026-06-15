@@ -18,6 +18,8 @@ class FileReaderType(Enum):
     PROGRAMS = auto()     # Selected study programs file
     COURSES = auto()      # Courses data file
     EXAM_PERIODS = auto() # Exam periods and blocked dates file
+    SCHEDULING_SETTINGS = auto()  # Part 3 optional settings file
+
 
 
 class BaseFileReader(ABC, Generic[T]):
@@ -81,12 +83,14 @@ class FileReaderFactory:
         from fileReader.fileTypeReaders.programReader import ProgramsFileReader
         from fileReader.fileTypeReaders.coursesReader import CoursesFileReader
         from fileReader.fileTypeReaders.examPeriodsReader import ExamPeriodsFileReader
-
+        from fileReader.fileTypeReaders.schedulingSettingsReader import SchedulingSettingsFileReader
+        
         # Maps each file type to its matching reader implementation.
         registry: dict[FileReaderType, type[BaseFileReader]] = {
-            FileReaderType.PROGRAMS:     ProgramsFileReader,
-            FileReaderType.COURSES:      CoursesFileReader,
-            FileReaderType.EXAM_PERIODS: ExamPeriodsFileReader,
+            FileReaderType.PROGRAMS:            ProgramsFileReader,
+            FileReaderType.COURSES:             CoursesFileReader,
+            FileReaderType.EXAM_PERIODS:        ExamPeriodsFileReader,
+            FileReaderType.SCHEDULING_SETTINGS: SchedulingSettingsFileReader,
         }
 
         cls = registry.get(reader_type)
