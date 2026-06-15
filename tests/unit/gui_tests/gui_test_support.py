@@ -110,6 +110,10 @@ class FakeButton(FakeWidget):
     pass
 
 
+class FakeCheckBox(FakeButton):
+    pass
+
+
 class FakeEntry(FakeWidget):
     pass
 
@@ -140,6 +144,7 @@ def make_fake_ctk() -> ModuleType:
         FakeFrame,
         FakeLabel,
         FakeButton,
+        FakeCheckBox,
         FakeEntry,
         FakeTextbox,
         FakeToplevel,
@@ -154,7 +159,7 @@ def make_fake_ctk() -> ModuleType:
     module.CTkEntry = FakeEntry
     module.CTkTextbox = FakeTextbox
     module.CTkToplevel = FakeToplevel
-    module.CTkCheckBox = FakeButton
+    module.CTkCheckBox = FakeCheckBox
     module.BooleanVar = FakeBooleanVar
 
     return module
