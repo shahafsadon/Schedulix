@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+from importlib import import_module
+from inspect import Parameter, signature
+from typing import Any
+
 try:
     import customtkinter as ctk
 except ModuleNotFoundError as error:
@@ -23,6 +27,7 @@ from gui.services.uploadService import FileUploadService
 from gui.services.uploadedDataExportService import UploadedDataExportService
 from gui.presenters.uploadedDataPresenter import UploadedDataPresenter
 from scheduling.examDateHandler import ExamDateHandler
+from constraint_settings import SchedulingConstraintSettings
 
 
 class SchedulixWorkflow(ctk.CTkFrame):
@@ -49,6 +54,7 @@ class SchedulixWorkflow(ctk.CTkFrame):
         )
         self._screen: ctk.CTkFrame | None = None
         self._program_selection: ProgramSelectionPresenter | None = None
+        self._settings_presenter: Any | None = None
 
         self.show_upload()
 
@@ -95,7 +101,120 @@ class SchedulixWorkflow(ctk.CTkFrame):
         self.cache.set_selected_programs(
             self._program_selection.selected_programs
         )
-        self.show_date_management()
+        self.show_scheduling_settings()
+
+    def show_scheduling_settings(self) -> None:
+        """Show the Part 3 threshold-settings step before date management."""
+        self._set_window_title("Schedulix - Scheduling Settings")
+
+        components = self._load_scheduling_settings_components()
+        if components is None:
+            self._set_screen(
+                _MessageScreen(
+                    self,
+                    title="Scheduling Settings Unavailable",
+                    message=(
+                        "The scheduling settings screen is not available in "
+                        "this checkout. Merge the settings screen and "
+                        "presenter changes before opening this step."
+                    ),
+                    on_back=self.show_program_config,
+                )
+            )
+            return
+
+        presenter_cls, screen_cls = components
+        self._settings_presenter = presenter_cls(cache_manager=self.cache)
+
+        self._set_screen(
+            screen_cls(
+                self,
+                **self._settings_screen_kwargs(
+                    screen_cls,
+                    self._settings_presenter,
+                ),
+            )
+        )
+
+    def _handle_settings_next(
+        self,
+        settings: SchedulingConstraintSettings | None = None,
+    ) -> None:
+        """Persist valid settings, then continue to Date Management."""
+        if settings is not None:
+            self._save_constraint_settings_if_changed(settings)
+            self.show_date_management()
+            return
+
+        if self._settings_presenter is None:
+            return
+
+        save = getattr(self._settings_presenter, "save", None)
+        if save is None:
+            self.show_date_management()
+            return
+
+        result = save()
+        if getattr(result, "success", False):
+            self.show_date_management()
+
+    def _save_constraint_settings_if_changed(
+        self,
+        settings: SchedulingConstraintSettings,
+    ) -> None:
+        """Avoid invalidating generated schedules when settings did not change."""
+        if settings != self.cache.get_constraint_settings():
+            self.cache.set_constraint_settings(settings)
+
+    @staticmethod
+    def _load_scheduling_settings_components():
+        """Import settings components only when the workflow reaches the step."""
+        try:
+            presenter_module = import_module(
+                "gui.presenters.schedulingSettingsPresenter"
+            )
+            screen_module = import_module(
+                "gui.screens.schedulingSettingsScreen"
+            )
+        except ModuleNotFoundError:
+            return None
+
+        return (
+            presenter_module.SchedulingSettingsPresenter,
+            screen_module.SchedulingSettingsScreen,
+        )
+
+    def _settings_screen_kwargs(
+        self,
+        screen_cls,
+        presenter,
+    ) -> dict[str, Any]:
+        """Build constructor kwargs across the screen/presenter transition."""
+        kwargs: dict[str, Any] = {
+            "on_back": self.show_program_config,
+            "on_next": self._handle_settings_next,
+        }
+
+        if self._constructor_accepts(screen_cls, "presenter"):
+            kwargs["presenter"] = presenter
+        elif self._constructor_accepts(screen_cls, "settings_presenter"):
+            kwargs["settings_presenter"] = presenter
+        else:
+            kwargs["initial_settings"] = self.cache.get_constraint_settings()
+
+        return kwargs
+
+    @staticmethod
+    def _constructor_accepts(
+        cls,
+        parameter_name: str,
+    ) -> bool:
+        parameters = signature(cls.__init__).parameters.values()
+        return any(
+            parameter.name == parameter_name
+            or parameter.kind == Parameter.VAR_KEYWORD
+            for parameter in parameters
+        )
 
     def show_date_management(self) -> None:
         """Show the calendar editing step for all uploaded exam periods."""
@@ -108,7 +227,7 @@ class SchedulixWorkflow(ctk.CTkFrame):
                     self,
                     title="No Exam Periods Loaded",
                     message="Go back and load an exam-periods file before editing dates.",
-                    on_back=self.show_program_config,
+                    on_back=self.show_scheduling_settings,
                 )
             )
             return
@@ -132,7 +251,7 @@ class SchedulixWorkflow(ctk.CTkFrame):
                 presenter=presenters[0],
                 period_presenters=presenters,
                 scheduling_presenter=SchedulingPresenter(self.cache),
-                on_back=self.show_program_config,
+                on_back=self.show_scheduling_settings,
                 on_generation_success=self.show_output_navigation,
             )
         )
