@@ -40,6 +40,7 @@ GUI, and vice versa.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 
 from application.settings_validator import SchedulingSettingsValidator
 from constraint_settings import (
@@ -67,10 +68,43 @@ class SchedulingSettingsBundle:
 
     Returned by ``SchedulingSettingsFileReader.parse`` so the caller receives
     the exact same model types used by the GUI flow (no parallel models).
+
+    Both objects are guaranteed to pass ``SchedulingSettingsValidator``
+    (SCRUM-143): ``parse`` raises ``ValueError`` before returning a bundle
+    that would fail validation. This is NOT guaranteed for the equivalent
+    objects returned by ``CacheManager.get_constraint_settings()`` /
+    ``get_ranking_settings()`` (SCRUM-144), which store whatever was last
+    set without validating it. A caller treating both sources
+    interchangeably must not assume "came from the cache" implies "already
+    valid" — SchedulingService re-validates cache settings for this reason.
     """
 
     constraint_settings: SchedulingConstraintSettings
     ranking_settings: RankingSettings
+
+
+# ---------------------------------------------------------------------------
+# Default settings-file path (SCRUM-165)
+#
+# Mirrors the DEFAULT_COURSES_PATH / DEFAULT_EXAM_PERIODS_PATH /
+# DEFAULT_PROGRAMS_PATH constants in application/schedulixApp.py. Unlike
+# those three required inputs, the settings file is optional: SchedulixApp
+# (SCRUM-166) is expected to fall back to this path, or to skip settings
+# entirely (all-disabled constraints, no ranking), when the caller supplies
+# neither a custom path nor this default.
+# ---------------------------------------------------------------------------
+
+# Resolved the same way as PROJECT_ROOT in schedulixApp.py: relative to this
+# file's location, so PyCharm and terminal runs behave the same regardless
+# of working directory.
+_PROJECT_ROOT = Path(__file__).resolve().parents[3]
+
+DEFAULT_SETTINGS_PATH = (
+    _PROJECT_ROOT
+    / "data"
+    / "examples"
+    / "SettingsExample.txt"
+)
 
 
 # ---------------------------------------------------------------------------
@@ -281,6 +315,7 @@ class SchedulingSettingsFileReader(
             criterion=criterion,
             descending=descending,
         )
+
 
 # ---------------------------------------------------------------------------
 # Small parsing helpers (module-private)

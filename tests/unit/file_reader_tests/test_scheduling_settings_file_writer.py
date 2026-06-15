@@ -109,12 +109,17 @@ class SchedulingSettingsFileWriterTests(unittest.TestCase):
             self.assertIn("ranking:", content)
 
     def test_empty_ranking_emits_placeholder_comment(self) -> None:
-        """An empty priority list does not emit ranking entries."""
+        """An empty priority list emits the placeholder comment, not a
+        ranking: entry."""
         text = SchedulingSettingsFileWriter().format(
             SchedulingConstraintSettings.default_configuration(),
             RankingSettings(priority_list=[]),
         )
         self.assertNotIn("ranking:", text)
+        self.assertIn(
+            "# (none — generation order is preserved)",
+            text,
+        )
 
 
 if __name__ == "__main__":

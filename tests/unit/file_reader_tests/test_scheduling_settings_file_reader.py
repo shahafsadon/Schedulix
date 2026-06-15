@@ -108,6 +108,25 @@ class SchedulingSettingsFileReaderTests(unittest.TestCase):
                 "mandatory_gap_days = on, -1"
             )
 
+    def test_accepts_negative_k_on_disabled_constraint(self) -> None:
+        """A negative k on a disabled constraint is accepted.
+
+        The shared SchedulingSettingsValidator (SCRUM-143) only checks k for
+        *enabled* constraints (settings_validator.py _check_constraint_settings):
+        a disabled constraint's k is never read by the generator, so the
+        validator intentionally does not constrain it. This test documents
+        that tolerant behavior explicitly, so a future change to either the
+        validator or this reader does not silently start rejecting it.
+        """
+        bundle = SchedulingSettingsFileReader().parse(
+            "mandatory_gap_days = off, -5"
+        )
+        setting = bundle.constraint_settings.constraints[
+            ThresholdConstraintType.mandatory_gap_days
+        ]
+        self.assertFalse(setting.enabled)
+        self.assertEqual(setting.k, -5)
+
     def test_rejects_unknown_constraint_name(self) -> None:
         """Typos in constraint names are reported with line context."""
         with self.assertRaises(ValueError):

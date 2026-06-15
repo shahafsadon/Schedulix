@@ -408,8 +408,8 @@ Rules:
 - Enabled tokens: `on` / `off` (also accepted: `true`/`false`, `yes`/`no`, `1`/`0`).
 - Constraint names: `mandatory_gap_days`, `any_course_gap_days`,
   `elective_conflicts_per_program`, `mandatory_span_days`, `max_exams_per_day`.
-- `k` must be a positive integer when the constraint is enabled, except
-  `elective_conflicts_per_program` which also allows `k = 0`.
+- `k` must be a positive integer (>= 1) for every enabled constraint,
+  enforced by the shared `SchedulingSettingsValidator` (SCRUM-143).
 - Ranking criteria: `min_mandatory_gap`, `average_all_gap`,
   `elective_collision_count`, `mandatory_span`, `max_exams_per_day`.
 - Ranking direction: `desc` (default) or `asc`.
