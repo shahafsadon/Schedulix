@@ -14,8 +14,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from ranking_settings import RankedExamSystem, ScheduleMetrics
+from ranking_settings import RankedExamSystem, RankingSettings, ScheduleMetrics
 from scheduling.examScheduleGenerator import ExamSystem
+from scheduling.scheduleRankingService import ScheduleRankingService
 
 # Stable display order for semesters and moedim, matching the Version 1.0 output
 # writer so the GUI shows systems in the same order as the exported file.
@@ -74,6 +75,17 @@ class MetricsSummaryView:
     elective_collision_count: int
     mandatory_span: int
     max_exams_per_day: int
+
+
+@dataclass(frozen=True)
+class RankingApplyResult:
+    """Display-ready result of applying a ranking order."""
+
+    success: bool
+    message: str
+    ranked_count: int = 0
+    elapsed_seconds: float = 0.0
+    ranked_schedules: list[RankedExamSystem] | None = None
 
 
 @dataclass(frozen=True)
@@ -267,6 +279,57 @@ class ScheduleNavigationPresenter:
                 if system is current_system:
                     self._index = index
                     return
+
+    def apply_ranking(
+        self,
+        ranking_settings: RankingSettings,
+        ranking_service: ScheduleRankingService | None = None,
+    ) -> RankingApplyResult:
+        """Rank existing generated systems without regenerating schedules."""
+        if not self._schedules:
+            return RankingApplyResult(
+                success=False,
+                message="No schedules to rank.",
+            )
+
+        service = ranking_service or ScheduleRankingService()
+
+        if self._ranked_schedules:
+            if not ranking_settings.priority_list:
+                ranked_schedules = sorted(
+                    self._ranked_schedules,
+                    key=lambda ranked_system: ranked_system.key,
+                )
+                elapsed_seconds = 0.0
+            else:
+                outcome = service.rerank(
+                    self._ranked_schedules,
+                    ranking_settings,
+                )
+                ranked_schedules = outcome.ranked_schedules
+                elapsed_seconds = outcome.elapsed_seconds
+        else:
+            outcome = service.rank_generated_schedules(
+                self._schedules,
+                ranking_settings,
+            )
+            ranked_schedules = outcome.ranked_schedules
+            elapsed_seconds = outcome.elapsed_seconds
+
+        self.apply_ranked_schedules(ranked_schedules)
+
+        if ranking_settings.priority_list:
+            message = f"Ranking applied to {len(ranked_schedules)} system(s)."
+        else:
+            message = "Ranking cleared; generation order restored."
+
+        return RankingApplyResult(
+            success=True,
+            message=message,
+            ranked_count=len(ranked_schedules),
+            elapsed_seconds=elapsed_seconds,
+            ranked_schedules=ranked_schedules,
+        )
 
     def _build_rows(self, schedule) -> list[ExamRow]:
         """Flatten one period schedule's exams into display rows.

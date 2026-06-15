@@ -110,6 +110,18 @@ class FakeButton(FakeWidget):
     pass
 
 
+class FakeOptionMenu(FakeWidget):
+    def __init__(self, master=None, values=None, **kwargs):
+        super().__init__(master, values=values or [], **kwargs)
+        self._value = (values or [""])[0] if values else ""
+
+    def set(self, value):
+        self._value = value
+
+    def get(self):
+        return self._value
+
+
 class FakeEntry(FakeWidget):
     pass
 
@@ -140,6 +152,7 @@ def make_fake_ctk() -> ModuleType:
         FakeFrame,
         FakeLabel,
         FakeButton,
+        FakeOptionMenu,
         FakeEntry,
         FakeTextbox,
         FakeToplevel,
@@ -151,6 +164,7 @@ def make_fake_ctk() -> ModuleType:
     module.CTkScrollableFrame = FakeFrame
     module.CTkLabel = FakeLabel
     module.CTkButton = FakeButton
+    module.CTkOptionMenu = FakeOptionMenu
     module.CTkEntry = FakeEntry
     module.CTkTextbox = FakeTextbox
     module.CTkToplevel = FakeToplevel
