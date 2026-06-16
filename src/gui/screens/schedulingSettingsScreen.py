@@ -1,7 +1,7 @@
 """Scheduling settings screen for Part 3 threshold constraints."""
 from __future__ import annotations
 
-from typing import Any, Callable
+from typing import Callable
 
 try:
     import customtkinter as ctk
@@ -62,16 +62,12 @@ class SchedulingSettingsScreen(ctk.CTkFrame):
         master,
         initial_settings: SchedulingConstraintSettings | None = None,
         validator: SchedulingSettingsValidator | None = None,
-        presenter: Any | None = None,
-        on_next: Callable[..., None] | None = None,
+        on_next: Callable[[SchedulingConstraintSettings], None] | None = None,
         on_back: Callable[[], None] | None = None,
     ) -> None:
         super().__init__(master, corner_radius=0, fg_color=_PAGE_BG)
-        self._presenter = presenter
         self._initial_settings = (
-            self._settings_from_presenter_rows(presenter)
-            if presenter is not None
-            else initial_settings
+            initial_settings
             or SchedulingConstraintSettings.default_configuration()
         )
         self._validator = validator or SchedulingSettingsValidator()
@@ -266,11 +262,6 @@ class SchedulingSettingsScreen(ctk.CTkFrame):
     ) -> None:
         """Enable or disable the matching k field."""
         self._sync_row_state(constraint_type)
-        if self._presenter is not None:
-            self._presenter.update_enabled(
-                constraint_type,
-                bool(self._enabled_vars[constraint_type].get()),
-            )
         self._clear_error(constraint_type)
         self._show_status(
             "Update k values for the enabled requirements before continuing.",
@@ -279,10 +270,6 @@ class SchedulingSettingsScreen(ctk.CTkFrame):
 
     def _handle_continue(self) -> None:
         """Validate the edited settings and move forward when valid."""
-        if self._presenter is not None:
-            self._handle_presenter_continue()
-            return
-
         settings = self._settings_from_inputs()
         validation = self._validator.validate_constraint_settings(settings)
         self._clear_errors()
@@ -307,50 +294,6 @@ class SchedulingSettingsScreen(ctk.CTkFrame):
         self._show_status("Settings saved.", ok=True)
         if self._on_next is not None:
             self._on_next(settings)
-
-    def _handle_presenter_continue(self) -> None:
-        """Save through the injected presenter and surface its result."""
-        self._sync_presenter_from_inputs()
-        result = self._presenter.save()
-        self._clear_errors()
-
-        if not getattr(result, "success", False):
-            for field_path, messages in getattr(result, "field_errors", {}).items():
-                constraint_type = self._constraint_from_field_path(field_path)
-                if constraint_type is not None:
-                    self._show_row_error(
-                        constraint_type,
-                        "\n".join(messages),
-                    )
-
-            self._show_status(
-                getattr(
-                    result,
-                    "message",
-                    "Fix the highlighted settings before continuing.",
-                ),
-                ok=False,
-            )
-            return
-
-        self._show_status(getattr(result, "message", "Settings saved."), ok=True)
-        if self._on_next is not None:
-            settings = getattr(result, "settings", None)
-            if settings is None:
-                self._on_next()
-            else:
-                self._on_next(settings)
-
-    def _sync_presenter_from_inputs(self) -> None:
-        for constraint_type in ThresholdConstraintType:
-            self._presenter.update_enabled(
-                constraint_type,
-                bool(self._enabled_vars[constraint_type].get()),
-            )
-            self._presenter.update_k(
-                constraint_type,
-                self._k_entries[constraint_type].get(),
-            )
 
     def _settings_from_inputs(self) -> SchedulingConstraintSettings:
         constraints: dict[ThresholdConstraintType, ThresholdConstraintSetting] = {}
@@ -439,23 +382,6 @@ class SchedulingSettingsScreen(ctk.CTkFrame):
         if setting.enabled or setting.k not in (0, None):
             return str(setting.k)
         return ""
-
-    @staticmethod
-    def _settings_from_presenter_rows(
-        presenter: Any,
-    ) -> SchedulingConstraintSettings:
-        constraints = SchedulingConstraintSettings.default_configuration()
-
-        for row in presenter.rows():
-            constraints.constraints[row.constraint_type] = ThresholdConstraintSetting(
-                enabled=bool(row.enabled),
-                k=SchedulingSettingsScreen._coerce_k_value(
-                    str(row.k_text),
-                    bool(row.enabled),
-                ),
-            )
-
-        return constraints
 
     @staticmethod
     def _constraint_from_field_path(
