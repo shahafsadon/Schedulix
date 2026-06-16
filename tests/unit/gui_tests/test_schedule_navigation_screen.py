@@ -1,7 +1,9 @@
 from unittest.mock import MagicMock
+from types import SimpleNamespace
 
 from gui.exportPresenter import ExportResult
-from gui.scheduleNavigationPresenter import ExamRow, SystemView
+from gui.scheduleNavigationPresenter import ExamRow, MetricsSummaryView, SystemView
+from ranking_settings import RankingCriterion
 
 from .gui_test_support import FakeButton, FakeLabel, load_screen_module
 
@@ -270,6 +272,171 @@ def test_constructor_includes_back_and_save_buttons_when_presenters_are_supplied
     back_buttons[0].invoke()
 
     on_back.assert_called_once()
+
+
+def test_constructor_builds_ranking_controls() -> None:
+    module, fake_ctk = load_screen_module("scheduleNavigationScreen.py")
+
+    view = SystemView(
+        1,
+        1,
+        [],
+        2026,
+        {"2026-01-05": [_exam()]},
+    )
+
+    module.ScheduleNavigationScreen(
+        fake_ctk.CTkFrame(),
+        _presenter(view),
+    )
+
+    assert [
+        button
+        for button in fake_ctk.CTkButton.created
+        if button.options.get("text") == "Apply Ranking"
+    ]
+
+    assert [
+        label
+        for label in fake_ctk.CTkLabel.created
+        if label.options.get("text") == "Ranking"
+    ]
+
+
+def test_add_ranking_criterion_prevents_duplicates() -> None:
+    module, fake_ctk = load_screen_module("scheduleNavigationScreen.py")
+
+    view = SystemView(
+        1,
+        1,
+        [],
+        2026,
+        {"2026-01-05": [_exam()]},
+    )
+    screen = module.ScheduleNavigationScreen(
+        fake_ctk.CTkFrame(),
+        _presenter(view),
+    )
+
+    label = module._RANKING_LABELS[RankingCriterion.min_mandatory_gap]
+    screen._criterion_selector.set(label)
+
+    screen._handle_add_ranking_criterion()
+    screen._handle_add_ranking_criterion()
+
+    assert screen._ranking_criteria == [
+        RankingCriterion.min_mandatory_gap,
+    ]
+    assert screen._ranking_status_label.options["text"] == (
+        "This criterion is already active."
+    )
+    assert screen._ranking_status_label.options["text_color"] == "#B00020"
+
+
+def test_ranking_criteria_can_move_and_be_removed() -> None:
+    module, fake_ctk = load_screen_module("scheduleNavigationScreen.py")
+
+    view = SystemView(
+        1,
+        1,
+        [],
+        2026,
+        {"2026-01-05": [_exam()]},
+    )
+    screen = module.ScheduleNavigationScreen(
+        fake_ctk.CTkFrame(),
+        _presenter(view),
+    )
+
+    screen._ranking_criteria = [
+        RankingCriterion.min_mandatory_gap,
+        RankingCriterion.max_exams_per_day,
+    ]
+
+    screen._handle_move_ranking_criterion(
+        RankingCriterion.max_exams_per_day,
+        -1,
+    )
+
+    assert screen._ranking_criteria == [
+        RankingCriterion.max_exams_per_day,
+        RankingCriterion.min_mandatory_gap,
+    ]
+
+    screen._handle_remove_ranking_criterion(
+        RankingCriterion.min_mandatory_gap,
+    )
+
+    assert screen._ranking_criteria == [
+        RankingCriterion.max_exams_per_day,
+    ]
+
+
+def test_apply_ranking_delegates_without_generation_and_refreshes() -> None:
+    module, _ = load_screen_module("scheduleNavigationScreen.py")
+
+    screen = object.__new__(module.ScheduleNavigationScreen)
+    screen.presenter = MagicMock()
+    screen.presenter.apply_ranking.return_value = SimpleNamespace(
+        success=True,
+        message="Ranking applied.",
+    )
+    screen._ranking_criteria = [
+        RankingCriterion.max_exams_per_day,
+        RankingCriterion.min_mandatory_gap,
+    ]
+    screen._set_ranking_status = MagicMock()
+    screen._refresh = MagicMock()
+    screen._grid_built = True
+    screen._exam_cells = {"2026-01-05": object()}
+    screen._selected_iso_date = "2026-01-05"
+
+    screen._handle_apply_ranking()
+
+    settings = screen.presenter.apply_ranking.call_args.args[0]
+    assert [
+        preference.criterion
+        for preference in settings.priority_list
+    ] == [
+        RankingCriterion.max_exams_per_day,
+        RankingCriterion.min_mandatory_gap,
+    ]
+    assert settings.priority_list[0].descending is False
+    assert settings.priority_list[1].descending is True
+    assert screen._grid_built is False
+    assert screen._exam_cells == {}
+    assert screen._selected_iso_date is None
+    screen._refresh.assert_called_once()
+
+
+def test_ranking_metric_values_are_rendered_for_current_system() -> None:
+    module, _ = load_screen_module("scheduleNavigationScreen.py")
+
+    screen = object.__new__(module.ScheduleNavigationScreen)
+    screen._ranking_metric_labels = {
+        "min_mandatory_gap": FakeLabel(),
+        "average_all_gap": FakeLabel(),
+        "elective_collision_count": FakeLabel(),
+        "mandatory_span": FakeLabel(),
+        "max_exams_per_day": FakeLabel(),
+    }
+
+    screen._refresh_ranking_metrics(
+        MetricsSummaryView(
+            schedule_id=1,
+            min_mandatory_gap=3,
+            average_all_gap=4.125,
+            elective_collision_count=2,
+            mandatory_span=8,
+            max_exams_per_day=5,
+        )
+    )
+
+    assert screen._ranking_metric_labels["min_mandatory_gap"].options["text"] == "3"
+    assert screen._ranking_metric_labels["average_all_gap"].options["text"] == "4.12"
+    assert screen._ranking_metric_labels["elective_collision_count"].options["text"] == "2"
+    assert screen._ranking_metric_labels["mandatory_span"].options["text"] == "8"
+    assert screen._ranking_metric_labels["max_exams_per_day"].options["text"] == "5"
 
 
 def test_exam_date_missing_from_grid_is_ignored_defensively() -> None:
