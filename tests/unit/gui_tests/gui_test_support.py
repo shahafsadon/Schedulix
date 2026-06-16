@@ -124,6 +124,18 @@ class FakeCheckBox(FakeButton):
     pass
 
 
+class FakeOptionMenu(FakeWidget):
+    def __init__(self, master=None, values=None, **kwargs):
+        super().__init__(master, values=values or [], **kwargs)
+        self._value = (values or [""])[0] if values else ""
+
+    def set(self, value):
+        self._value = value
+
+    def get(self):
+        return self._value
+
+
 class FakeEntry(FakeWidget):
     pass
 
@@ -156,6 +168,7 @@ def make_fake_ctk() -> ModuleType:
         FakeButton,
         FakeOptionMenu,
         FakeCheckBox,
+        FakeOptionMenu,
         FakeEntry,
         FakeTextbox,
         FakeToplevel,
