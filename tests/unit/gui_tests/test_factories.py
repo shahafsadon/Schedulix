@@ -146,13 +146,22 @@ class TestPresenterFactory(unittest.TestCase):
     def test_all_presenter_types_are_registered(self) -> None:
         """Every PresenterType member has a concrete class in the registry."""
         courses = [_make_course()]
+        from constraint_settings import SchedulingConstraintSettings
 
-        for presenter_type in PresenterType:
+        cache = MagicMock()
+        cache.get_constraint_settings.return_value = (
+            SchedulingConstraintSettings.default_configuration()
+        )
+
+        kwargs_by_type = {
+            PresenterType.PROGRAM_SELECTION: {"courses": courses},
+            PresenterType.PROGRAM_DETAILS: {"courses": courses},
+            PresenterType.SCHEDULING_SETTINGS: {"cache_manager": cache},
+        }
+
+        for presenter_type, kwargs in kwargs_by_type.items():
             try:
-                PresenterFactory.create(
-                    presenter_type,
-                    courses=courses,
-                )
+                PresenterFactory.create(presenter_type, **kwargs)
             except ValueError as exc:
                 self.fail(
                     f"PresenterType.{presenter_type.name} "
@@ -203,6 +212,10 @@ class TestViewFactory(unittest.TestCase):
             ViewType.DATE_MANAGEMENT: (
                 "gui.dateManagementScreen",
                 "DateManagementScreen",
+            ),
+            ViewType.SCHEDULING_SETTINGS: (
+                "gui.schedulingSettingsScreen",
+                "SchedulingSettingsScreen",
             ),
             ViewType.SCHEDULE_NAVIGATION: (
                 "gui.scheduleNavigationScreen",

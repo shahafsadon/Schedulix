@@ -34,6 +34,9 @@ class PresenterType(Enum):
     # Supplies grouped course details for one selected study program.
     PROGRAM_DETAILS = auto()
 
+    # Owns Part 3 threshold settings state, validation, and cache persistence.
+    SCHEDULING_SETTINGS = auto()
+
 
 class PresenterFactory:
     """
@@ -97,12 +100,14 @@ class PresenterFactory:
         # headless test environments.
         from gui.presenters.programSelectionPresenter import ProgramSelectionPresenter
         from gui.presenters.programDetailsPresenter import ProgramDetailsPresenter
+        from gui.presenters.schedulingSettingsPresenter import SchedulingSettingsPresenter
 
         # Maps each PresenterType to its concrete implementation class.
         # Extend this dict whenever a new presenter is added.
         registry: dict[PresenterType, type] = {
             PresenterType.PROGRAM_SELECTION: ProgramSelectionPresenter,
             PresenterType.PROGRAM_DETAILS:   ProgramDetailsPresenter,
+            PresenterType.SCHEDULING_SETTINGS: SchedulingSettingsPresenter,
         }
 
         cls = registry.get(presenter_type)
