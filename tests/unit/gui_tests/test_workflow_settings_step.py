@@ -47,6 +47,7 @@ def _workflow_shell(module):
     workflow.show_date_management = MagicMock()
     workflow.show_output_navigation = MagicMock()
     workflow._settings_presenter = None
+    workflow._theme_mode = "Light"
     return workflow
 
 
@@ -141,6 +142,59 @@ def test_settings_step_builds_presenter_and_screen_with_shared_cache() -> None:
     assert FakeScreen.instances[0].presenter is FakePresenter.instances[0]
     assert FakeScreen.instances[0].on_back is workflow.show_program_config
     assert FakeScreen.instances[0].on_next.__name__ == "_handle_settings_next"
+
+
+def test_settings_step_passes_theme_toggle_when_screen_accepts_it() -> None:
+    module, _ = _load_workflow_module()
+    workflow = _workflow_shell(module)
+    workflow.cache = MagicMock()
+
+    class FakePresenter:
+        def __init__(self, cache_manager):
+            self.cache_manager = cache_manager
+
+    class FakeScreen:
+        instances = []
+
+        def __init__(
+            self,
+            master,
+            presenter,
+            on_back,
+            on_next,
+            on_theme_toggle,
+            theme_button_text,
+        ):
+            self.on_theme_toggle = on_theme_toggle
+            self.theme_button_text = theme_button_text
+            FakeScreen.instances.append(self)
+
+    with _install_settings_modules(FakePresenter, FakeScreen):
+        module.SchedulixWorkflow.show_scheduling_settings(workflow)
+
+    assert FakeScreen.instances[0].on_theme_toggle.__self__ is workflow
+    assert (
+        FakeScreen.instances[0].on_theme_toggle.__func__
+        is module.SchedulixWorkflow.toggle_theme
+    )
+    assert FakeScreen.instances[0].theme_button_text.__self__ is workflow
+    assert (
+        FakeScreen.instances[0].theme_button_text.__func__
+        is module.SchedulixWorkflow.theme_button_text
+    )
+
+
+def test_workflow_theme_toggle_updates_customtkinter_mode() -> None:
+    module, fake_ctk = _load_workflow_module()
+    workflow = _workflow_shell(module)
+
+    assert module.SchedulixWorkflow.theme_button_text(workflow) == "\u263e"
+
+    result = module.SchedulixWorkflow.toggle_theme(workflow)
+
+    assert result == "Dark"
+    assert fake_ctk.get_appearance_mode() == "Dark"
+    assert module.SchedulixWorkflow.theme_button_text(workflow) == "\u2600"
 
 
 def test_settings_step_falls_back_to_message_when_components_are_missing() -> None:

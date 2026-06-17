@@ -26,6 +26,14 @@ from gui.presenters.schedulingPresenter import SchedulingPresenter
 from gui.services.uploadService import FileUploadService
 from gui.services.uploadedDataExportService import UploadedDataExportService
 from gui.presenters.uploadedDataPresenter import UploadedDataPresenter
+from gui.screens.themeToggle import (
+    THEME_BUTTON_WIDTH,
+    ThemeButtonText,
+    ThemeToggleCallback,
+    current_theme_button_text,
+    handle_theme_toggle,
+    theme_button_text_for_mode,
+)
 from scheduling.examDateHandler import ExamDateHandler
 from constraint_settings import SchedulingConstraintSettings
 
@@ -55,6 +63,7 @@ class SchedulixWorkflow(ctk.CTkFrame):
         self._screen: ctk.CTkFrame | None = None
         self._program_selection: ProgramSelectionPresenter | None = None
         self._settings_presenter: Any | None = None
+        self._theme_mode = self._current_theme_mode()
 
         self.show_upload()
 
@@ -68,6 +77,7 @@ class SchedulixWorkflow(ctk.CTkFrame):
                 data_presenter=self.data_presenter,
                 export_service=self.uploaded_export_service,
                 on_next=self.show_program_config,
+                **self._theme_kwargs(),
             )
         )
 
@@ -90,6 +100,7 @@ class SchedulixWorkflow(ctk.CTkFrame):
                 details_presenter=details_presenter,
                 on_back=self.show_upload,
                 on_next=self._handle_program_selection_next,
+                **self._theme_kwargs(),
             )
         )
 
@@ -119,6 +130,7 @@ class SchedulixWorkflow(ctk.CTkFrame):
                         "presenter changes before opening this step."
                     ),
                     on_back=self.show_program_config,
+                    **self._theme_kwargs(),
                 )
             )
             return
@@ -202,6 +214,11 @@ class SchedulixWorkflow(ctk.CTkFrame):
         else:
             kwargs["initial_settings"] = self.cache.get_constraint_settings()
 
+        if self._constructor_accepts(screen_cls, "on_theme_toggle"):
+            kwargs["on_theme_toggle"] = self.toggle_theme
+        if self._constructor_accepts(screen_cls, "theme_button_text"):
+            kwargs["theme_button_text"] = self.theme_button_text
+
         return kwargs
 
     @staticmethod
@@ -228,6 +245,7 @@ class SchedulixWorkflow(ctk.CTkFrame):
                     title="No Exam Periods Loaded",
                     message="Go back and load an exam-periods file before editing dates.",
                     on_back=self.show_scheduling_settings,
+                    **self._theme_kwargs(),
                 )
             )
             return
@@ -253,6 +271,7 @@ class SchedulixWorkflow(ctk.CTkFrame):
                 scheduling_presenter=SchedulingPresenter(self.cache),
                 on_back=self.show_scheduling_settings,
                 on_generation_success=self.show_output_navigation,
+                **self._theme_kwargs(),
             )
         )
 
@@ -273,6 +292,7 @@ class SchedulixWorkflow(ctk.CTkFrame):
                     title="No Generated Schedules",
                     message="Generate schedules before opening the output screen.",
                     on_back=self.show_date_management,
+                    **self._theme_kwargs(),
                 )
             )
             return
@@ -290,6 +310,7 @@ class SchedulixWorkflow(ctk.CTkFrame):
                 presenter=navigation_presenter,
                 export_presenter=export_presenter,
                 on_back=self.show_date_management,
+                **self._theme_kwargs(),
             )
         )
 
@@ -304,6 +325,31 @@ class SchedulixWorkflow(ctk.CTkFrame):
         if hasattr(window, "title"):
             window.title(title)
 
+    def toggle_theme(self) -> str:
+        """Switch the whole GUI between light and dark mode."""
+        self._theme_mode = "Light" if self._theme_mode == "Dark" else "Dark"
+        ctk.set_appearance_mode(self._theme_mode)
+        return self._theme_mode
+
+    def theme_button_text(self) -> str:
+        """Return the next theme action shown on every screen."""
+        return theme_button_text_for_mode(self._theme_mode)
+
+    def _theme_kwargs(self) -> dict[str, Any]:
+        """Pass the shared theme toggle to a screen."""
+        return {
+            "on_theme_toggle": self.toggle_theme,
+            "theme_button_text": self.theme_button_text,
+        }
+
+    @staticmethod
+    def _current_theme_mode() -> str:
+        """Read the active customTkinter mode when the API exists."""
+        get_mode = getattr(ctk, "get_appearance_mode", None)
+        if callable(get_mode) and get_mode() == "Dark":
+            return "Dark"
+        return "Light"
+
 
 class _MessageScreen(ctk.CTkFrame):
     """Small internal screen used between workflow checkpoints."""
@@ -314,8 +360,13 @@ class _MessageScreen(ctk.CTkFrame):
         title: str,
         message: str,
         on_back,
+        on_theme_toggle: ThemeToggleCallback | None = None,
+        theme_button_text: ThemeButtonText = None,
     ) -> None:
         super().__init__(master, corner_radius=0)
+        self._on_theme_toggle = on_theme_toggle
+        self._theme_button_text = theme_button_text
+        self._theme_button = None
         self.grid_columnconfigure(0, weight=1)
         self.grid_rowconfigure(0, weight=1)
 
@@ -341,3 +392,17 @@ class _MessageScreen(ctk.CTkFrame):
             width=100,
             command=on_back,
         ).grid(row=2, column=0, pady=(0, 24))
+
+        if self._on_theme_toggle is not None:
+            # Button text tells the user which mode the click will open.
+            self._theme_button = ctk.CTkButton(
+                body,
+                text=current_theme_button_text(self._theme_button_text),
+                width=THEME_BUTTON_WIDTH,
+                command=lambda: handle_theme_toggle(
+                    self._on_theme_toggle,
+                    self._theme_button,
+                    self._theme_button_text,
+                ),
+            )
+            self._theme_button.grid(row=3, column=0, pady=(0, 24))
