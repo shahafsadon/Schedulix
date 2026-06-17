@@ -423,7 +423,7 @@ mandatory_span_days            = off, 0
 max_exams_per_day              = on,  2
 
 # Ranking criteria (Section 3), in priority order.
-# Each line:  ranking: <criterion> [ : <direction> ]
+# Each line:  ranking: <criterion> [ : desc ]
 ranking: min_mandatory_gap
 ranking: average_all_gap : desc
 ```
@@ -433,11 +433,14 @@ Rules:
 - Enabled tokens: `on` / `off` (also accepted: `true`/`false`, `yes`/`no`, `1`/`0`).
 - Constraint names: `mandatory_gap_days`, `any_course_gap_days`,
   `elective_conflicts_per_program`, `mandatory_span_days`, `max_exams_per_day`.
-- `k` must be a positive integer (>= 1) for every enabled constraint,
-  enforced by the shared `SchedulingSettingsValidator` (SCRUM-143).
+- `k` must be positive (>= 1) for enabled gap/span/day-count constraints.
+  Requirement 2.3 (`elective_conflicts_per_program`) accepts non-negative
+  values, so `k=0` is valid there.
 - Ranking criteria: `min_mandatory_gap`, `average_all_gap`,
   `elective_collision_count`, `mandatory_span`, `max_exams_per_day`.
-- Ranking direction: `desc` (default) or `asc`.
+- Ranking direction is fixed to descending; `desc` may be written explicitly.
+- Ranking order can be changed after schedules are generated; this reorders
+  existing results without running schedule generation again.
 - Each constraint and each ranking criterion may appear at most once.
 - Omitting the file preserves Version 2.0 behavior (all constraints
   disabled, generation order preserved).

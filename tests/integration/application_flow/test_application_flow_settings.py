@@ -189,7 +189,9 @@ def test_run_without_settings_path_uses_pre_part3_defaults(tmp_path):
 
 
 def test_invalid_settings_file_raises_value_error(tmp_path):
-    """A settings file with an enabled constraint and k=0 fails the shared
+    """A settings file with an enabled positive-k constraint fails validation.
+
+    mandatory_gap_days = 0 fails the shared
     SchedulingSettingsValidator (SCRUM-143) and raises before generation.
 
     The ValueError is raised by SchedulingSettingsFileReader.parse()

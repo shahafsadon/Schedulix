@@ -5,8 +5,8 @@ format is line-oriented UTF-8 text, with one line per threshold constraint
 (in the enum's declared order) followed by one ranking line per active
 priority entry. Comments are added for human readability.
 
-This writer is the inverse of the reader: round-tripping ``parse`` and
-``write`` over the same bundle is expected to produce an equivalent bundle.
+This writer is the inverse of the reader for requirement-supported settings:
+Section 3 ranking output is always written in descending order.
 """
 from __future__ import annotations
 
@@ -81,10 +81,9 @@ class SchedulingSettingsFileWriter:
             lines.append("# (none — generation order is preserved)\n")
         else:
             for preference in ranking_settings.priority_list:
-                direction_token = "desc" if preference.descending else "asc"
                 lines.append(
                     f"ranking: {preference.criterion.value} : "
-                    f"{direction_token}\n"
+                    "desc\n"
                 )
 
         return "".join(lines)

@@ -138,7 +138,7 @@ class TestConstraintSettingsValidation:
         settings = _full_settings(
             mandatory_gap_days=_enabled(3),
             any_course_gap_days=_enabled(2),
-            elective_conflicts_per_program=_enabled(1),
+            elective_conflicts_per_program=_enabled(0),
             mandatory_span_days=_enabled(10),
             max_exams_per_day=_enabled(5),
         )
@@ -146,7 +146,7 @@ class TestConstraintSettingsValidation:
         assert result.is_valid
 
     def test_disabled_constraint_with_k_zero_is_valid(self) -> None:
-        # k=0 is only invalid for *enabled* constraints.
+        # k=0 is allowed for disabled constraints; the engine ignores them.
         settings = _full_settings(mandatory_gap_days=_disabled(0))
         result = self.validator.validate_constraint_settings(settings)
         assert result.is_valid
@@ -159,6 +159,13 @@ class TestConstraintSettingsValidation:
         assert not result.is_valid
         paths = [e.field_path for e in result.errors]
         assert any("mandatory_gap_days" in p and ".k" in p for p in paths)
+
+    def test_enabled_elective_conflicts_k_zero_is_valid(self) -> None:
+        settings = _full_settings(
+            elective_conflicts_per_program=_enabled(0)
+        )
+        result = self.validator.validate_constraint_settings(settings)
+        assert result.is_valid
 
     def test_enabled_k_negative_is_invalid(self) -> None:
         settings = _full_settings(any_course_gap_days=_enabled(-5))
@@ -272,6 +279,20 @@ class TestRankingSettingsValidation:
             )
         )
         assert result.is_valid
+
+    def test_non_descending_preference_is_invalid(self) -> None:
+        result = self.validator.validate_ranking_settings(
+            RankingSettings(
+                [
+                    RankingPreference(
+                        criterion=RankingCriterion.max_exams_per_day,
+                        descending=False,
+                    )
+                ]
+            )
+        )
+        assert not result.is_valid
+        assert any(".descending" in e.field_path for e in result.errors)
 
     # --- Duplicate criterion errors ---
 

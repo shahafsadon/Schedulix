@@ -45,19 +45,19 @@ _SELECTED_DAY_TEXT = ("#FFFFFF", "#0B1220")
 _REGULAR_DAY_TEXT = ("#A8B0BA", "#64748B")
 
 _RANKING_LABELS: dict[RankingCriterion, str] = {
-    RankingCriterion.min_mandatory_gap: "Min mandatory gap",
-    RankingCriterion.average_all_gap: "Average exam gap",
-    RankingCriterion.elective_collision_count: "Elective collisions",
-    RankingCriterion.mandatory_span: "Mandatory span",
-    RankingCriterion.max_exams_per_day: "Max exams/day",
+    RankingCriterion.min_mandatory_gap: "Min mandatory gap (descending)",
+    RankingCriterion.average_all_gap: "Average exam gap (descending)",
+    RankingCriterion.elective_collision_count: "Elective collisions (descending)",
+    RankingCriterion.mandatory_span: "Mandatory span (descending)",
+    RankingCriterion.max_exams_per_day: "Max exams/day (descending)",
 }
 
 _RANKING_DIRECTION: dict[RankingCriterion, bool] = {
     RankingCriterion.min_mandatory_gap: True,
     RankingCriterion.average_all_gap: True,
-    RankingCriterion.elective_collision_count: False,
-    RankingCriterion.mandatory_span: False,
-    RankingCriterion.max_exams_per_day: False,
+    RankingCriterion.elective_collision_count: True,
+    RankingCriterion.mandatory_span: True,
+    RankingCriterion.max_exams_per_day: True,
 }
 
 
@@ -332,7 +332,10 @@ class ScheduleNavigationScreen(ctk.CTkFrame):
 
         ctk.CTkLabel(
             panel,
-            text="Choose criteria and apply them to the generated systems.",
+            text=(
+                "Choose criteria; all sorting is descending and applies "
+                "after generation."
+            ),
             font=("Segoe UI", 11),
             text_color=_MUTED,
             anchor="w",

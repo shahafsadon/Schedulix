@@ -15,12 +15,13 @@ Validation is performed in two distinct phases, mirroring how the settings
 objects are consumed downstream:
 
 1. **Constraint validation** — checks every ``ThresholdConstraintSetting``
-   that is enabled: verifies that the threshold value ``k`` is a positive
-   integer and that the settings dict contains entries for all known
-   ``ThresholdConstraintType`` members.
+   that is enabled: verifies that the threshold value ``k`` satisfies the
+   requirement-specific lower bound and that the settings dict contains
+   entries for all known ``ThresholdConstraintType`` members.
 
 2. **Ranking validation** — checks the ``RankingSettings.priority_list`` for
-   duplicate criteria and for unknown / None entries.
+   duplicate criteria, unknown / None entries, and the Section 3 requirement
+   that every ranking criterion is sorted descending.
 
 Each individual problem is represented by a ``ValidationError`` value object
 that pinpoints the exact field and explains the issue.  All errors are
@@ -63,14 +64,14 @@ from ranking_settings import RankingCriterion, RankingSettings
 
 
 # ---------------------------------------------------------------------------
-# Minimum allowed threshold value for every enabled constraint.
-# The design document requires k >= 1 for gap/span constraints and
-# k >= 0 for count-based constraints.  A single lower bound of 1 is the
-# conservative choice adopted here; it prevents the degenerate case where
-# an "enabled" constraint has no real effect (k == 0 gap means "no gap at
-# all", which is equivalent to the constraint being disabled).
+# Minimum allowed threshold values for enabled constraints.
+# Gap/span/day-count requirements use positive k values. Req 2.3 is different:
+# it limits elective collisions, and the requirements define k as non-negative.
 # ---------------------------------------------------------------------------
-_MIN_K: int = 1
+_DEFAULT_MIN_K: int = 1
+_MIN_K_BY_CONSTRAINT: dict[ThresholdConstraintType, int] = {
+    ThresholdConstraintType.elective_conflicts_per_program: 0,
+}
 
 # Human-readable labels for each ThresholdConstraintType used in error
 # messages so the error text is immediately actionable.
@@ -384,13 +385,15 @@ class SchedulingSettingsValidator:
             )
             return errors  # Range check is meaningless without a valid type.
 
-        # Range check: k must be at least _MIN_K.
-        if k < _MIN_K:
+        min_k = _MIN_K_BY_CONSTRAINT.get(constraint_type, _DEFAULT_MIN_K)
+
+        # Range check: k must satisfy the requirement-specific lower bound.
+        if k < min_k:
             errors.append(
                 ValidationError(
                     field_path=field_path,
                     message=(
-                        f"Threshold k for '{label}' must be >= {_MIN_K} "
+                        f"Threshold k for '{label}' must be >= {min_k} "
                         f"when the constraint is enabled, got {k}."
                     ),
                 )
@@ -412,7 +415,8 @@ class SchedulingSettingsValidator:
         1. ``priority_list`` is not ``None``.
         2. Each entry in ``priority_list`` is not ``None``.
         3. Each entry's ``criterion`` is a valid ``RankingCriterion`` member.
-        4. No ``RankingCriterion`` appears more than once (duplicate check).
+        4. Each entry uses descending order.
+        5. No ``RankingCriterion`` appears more than once (duplicate check).
 
         Note: ``RankingSettings.__post_init__`` already raises ``ValueError``
         on duplicates at construction time, but this validator deliberately
@@ -466,6 +470,17 @@ class SchedulingSettingsValidator:
                     )
                 )
                 continue
+
+            if getattr(preference, "descending", None) is not True:
+                errors.append(
+                    ValidationError(
+                        field_path=f"{base_path}.descending",
+                        message=(
+                            "Ranking direction must be descending for every "
+                            "criterion per Section 3."
+                        ),
+                    )
+                )
 
             # Duplicate criterion check.
             if criterion in seen_criteria:

@@ -246,11 +246,10 @@ class SchedulingServiceTests(unittest.TestCase):
         )
 
     def test_invalid_constraint_settings_raise_value_error(self) -> None:
-        """An enabled constraint with k = 0 fails SCRUM-143 validation.
+        """A positive-threshold constraint with k = 0 fails validation.
 
-        SchedulingSettingsValidator requires k >= 1 for every enabled
-        threshold constraint. run() must surface this as a ValueError before
-        the generator is ever constructed.
+        mandatory_gap_days requires k >= 1. run() must surface this as a
+        ValueError before the generator is ever constructed.
         """
         self._set_minimal_valid_inputs()
 

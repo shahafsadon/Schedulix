@@ -401,7 +401,7 @@ def test_apply_ranking_delegates_without_generation_and_refreshes() -> None:
         RankingCriterion.max_exams_per_day,
         RankingCriterion.min_mandatory_gap,
     ]
-    assert settings.priority_list[0].descending is False
+    assert settings.priority_list[0].descending is True
     assert settings.priority_list[1].descending is True
     assert screen._grid_built is False
     assert screen._exam_cells == {}
