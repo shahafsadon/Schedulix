@@ -68,6 +68,10 @@ class OutputWriter:
         self,
         schedules: Iterable[ExamSystem],
         output_path: str | Path = DEFAULT_OUTPUT_PATH,
+        constraint_settings: SchedulingConstraintSettings | None = None,
+        ranking_settings: RankingSettings | None = None,
+        metrics_line: str | None = None,
+        include_valid_systems_footer: bool = False,
     ) -> tuple[
         Path,
         int,
@@ -80,7 +84,9 @@ class OutputWriter:
         sorting and formatting it is wasted work.
 
         Output is flushed in chunks to avoid both one enormous string and
-        hundreds of thousands of tiny Python-level writes.
+        hundreds of thousands of tiny Python-level writes. Optional settings
+        and cheap metrics-note lines let the CLI keep a readable Part 3 header
+        without calculating ranking metrics when no ranking is active.
         """
         path = Path(
             output_path
@@ -119,6 +125,13 @@ class OutputWriter:
             f"{TITLE_LINE}\n",
         ]
 
+        settings_summary = self._format_settings_summary(
+            constraint_settings,
+            ranking_settings,
+        )
+        if settings_summary is not None:
+            pending.append(f"{settings_summary}\n")
+
         pending_size = sum(
             map(
                 len,
@@ -149,6 +162,8 @@ class OutputWriter:
                         f"{TITLE_LINE}\n"
                     )
                 ]
+                if metrics_line is not None:
+                    schedule_parts.append(f"{metrics_line}\n")
 
                 current_semester: str | None = None
 
@@ -203,6 +218,11 @@ class OutputWriter:
                     pending.clear()
 
                     pending_size = 0
+
+            if include_valid_systems_footer:
+                footer = f"{TITLE_LINE}\nValid systems: {schedule_count}\n"
+                pending.append(footer)
+                pending_size += len(footer)
 
             if pending:
                 output_file.write(
@@ -448,33 +468,13 @@ class OutputWriter:
         ranking_settings: RankingSettings | None = None,
     ) -> tuple[Path, int]:
         """
-        Write ranked exam systems to disk, preserving their given order.
+        Stream ranked exam systems to disk, preserving their given order.
 
-        Unlike write_with_count(), this method takes a *list* of
-        RankedExamSystem (the output of ScheduleRankingService /
-        SchedulingService) rather than a lazy Iterable[ExamSystem]. The list
-        is written in the order it is given — it is NOT re-sorted here, so
-        the caller's ranking order (ScheduleRanker) is preserved exactly
-        (SCRUM-166 acceptance criterion: "CLI output preserves the selected
-        ranking order").
-
-        Each schedule section gains a "Metrics:" line summarizing its
-        ScheduleMetrics (SCRUM-164/142). If constraint_settings and/or
-        ranking_settings are supplied, an optional "Settings:" summary line
-        is added to the file header; passing None for both omits it,
-        matching the pre-Part-3 header exactly.
-
-        The exam-line format itself (date | course name | instructor),
-        Semester/Moed grouping, and period-section ordering are unchanged:
-        this method reuses _ordered_period_schedules and _format_period, the
-        same helpers used by write_with_count().
-
-        Unlike write_with_count(), this method builds the entire output text
-        in memory before writing it in one call (no chunked flushing). This
-        is consistent with SchedulingService.run() (SCRUM-164) already
-        materializing the full ranked_schedules list — see the SCRUM-166
-        module docstring in schedulixApp.py for the lazy-vs-materialized
-        trade-off this implies.
+        Ranking itself still requires a materialized list because sorting needs
+        the whole result set. The writer must not add a second huge memory hit,
+        so this method now uses the same bounded-buffer strategy as
+        write_with_count() instead of collecting every output line and joining
+        one giant string at the end.
 
         Returns (path, written_count), where written_count is the number of
         ranked systems written (== len(ranked_schedules)).
@@ -483,12 +483,9 @@ class OutputWriter:
         path.parent.mkdir(parents=True, exist_ok=True)
 
         period_cache: dict[int, str] = {}
-        order_cache: dict[
-            tuple[tuple[str, str], ...],
-            tuple[int, ...],
-        ] = {}
+        order_cache: dict[tuple[tuple[str, str], ...], tuple[int, ...]] = {}
 
-        lines: list[str] = [
+        pending: list[str] = [
             "Schedulix Exam Schedules\n",
             f"{TITLE_LINE}\n",
         ]
@@ -498,32 +495,49 @@ class OutputWriter:
             ranking_settings,
         )
         if settings_summary is not None:
-            lines.append(f"{settings_summary}\n")
+            pending.append(f"{settings_summary}\n")
 
-        lines.append(f"Valid systems: {len(ranked_schedules)}\n")
-        lines.append(f"{TITLE_LINE}\n")
+        pending.append(f"Valid systems: {len(ranked_schedules)}\n")
+        pending.append(f"{TITLE_LINE}\n")
 
-        for index, ranked in enumerate(ranked_schedules, start=1):
-            lines.append(f"\nSchedule {index}\n")
-            lines.append(f"{TITLE_LINE}\n")
-            lines.append(f"{self._format_metrics_line(ranked)}\n")
-
-            current_semester: str | None = None
-
-            for period_schedule in self._ordered_period_schedules(
-                ranked.exam_system.period_schedules,
-                order_cache,
-            ):
-                if period_schedule.semester != current_semester:
-                    lines.append(f"Semester: {period_schedule.semester}\n")
-                    current_semester = period_schedule.semester
-
-                lines.append(
-                    self._format_period(period_schedule, period_cache)
-                )
+        pending_size = sum(map(len, pending))
+        flush_threshold = 1024 * 1024
 
         with path.open("w", encoding="utf-8", newline="\n") as output_file:
-            output_file.write("".join(lines))
+            for index, ranked in enumerate(ranked_schedules, start=1):
+                schedule_parts = [
+                    f"\nSchedule {index}\n",
+                    f"{TITLE_LINE}\n",
+                    f"{self._format_metrics_line(ranked)}\n",
+                ]
+
+                current_semester: str | None = None
+
+                for period_schedule in self._ordered_period_schedules(
+                    ranked.exam_system.period_schedules,
+                    order_cache,
+                ):
+                    if period_schedule.semester != current_semester:
+                        schedule_parts.append(
+                            f"Semester: {period_schedule.semester}\n"
+                        )
+                        current_semester = period_schedule.semester
+
+                    schedule_parts.append(
+                        self._format_period(period_schedule, period_cache)
+                    )
+
+                schedule_text = "".join(schedule_parts)
+                pending.append(schedule_text)
+                pending_size += len(schedule_text)
+
+                if pending_size >= flush_threshold:
+                    output_file.write("".join(pending))
+                    pending.clear()
+                    pending_size = 0
+
+            if pending:
+                output_file.write("".join(pending))
 
         return path, len(ranked_schedules)
 
