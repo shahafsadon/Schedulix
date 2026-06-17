@@ -17,6 +17,13 @@ from constraint_settings import (
     ThresholdConstraintSetting,
     ThresholdConstraintType,
 )
+from gui.screens.themeToggle import (
+    THEME_BUTTON_WIDTH,
+    ThemeButtonText,
+    ThemeToggleCallback,
+    current_theme_button_text,
+    handle_theme_toggle,
+)
 
 
 _PAGE_BG = ("#F3F6FB", "#0B1220")
@@ -64,6 +71,8 @@ class SchedulingSettingsScreen(ctk.CTkFrame):
         validator: SchedulingSettingsValidator | None = None,
         on_next: Callable[[SchedulingConstraintSettings], None] | None = None,
         on_back: Callable[[], None] | None = None,
+        on_theme_toggle: ThemeToggleCallback | None = None,
+        theme_button_text: ThemeButtonText = None,
     ) -> None:
         super().__init__(master, corner_radius=0, fg_color=_PAGE_BG)
         self._initial_settings = (
@@ -73,12 +82,15 @@ class SchedulingSettingsScreen(ctk.CTkFrame):
         self._validator = validator or SchedulingSettingsValidator()
         self._on_next = on_next
         self._on_back = on_back
+        self._on_theme_toggle = on_theme_toggle
+        self._theme_button_text = theme_button_text
 
         self._enabled_vars: dict[ThresholdConstraintType, ctk.BooleanVar] = {}
         self._k_entries: dict[ThresholdConstraintType, ctk.CTkEntry] = {}
         self._error_labels: dict[ThresholdConstraintType, ctk.CTkLabel] = {}
         self._continue_button: ctk.CTkButton | None = None
         self._status_label: ctk.CTkLabel | None = None
+        self._theme_button: ctk.CTkButton | None = None
 
         self._build()
 
@@ -109,6 +121,21 @@ class SchedulingSettingsScreen(ctk.CTkFrame):
             font=("Segoe UI", 13),
             text_color=_MUTED,
         ).grid(row=1, column=0, sticky="w", pady=(2, 0))
+
+        if self._on_theme_toggle is not None:
+            # Button text tells the user which mode the click will open.
+            self._theme_button = ctk.CTkButton(
+                header,
+                text=current_theme_button_text(self._theme_button_text),
+                width=THEME_BUTTON_WIDTH,
+                fg_color="transparent",
+                border_width=1,
+                border_color=_BORDER,
+                text_color=(_PRIMARY, "#93C5FD"),
+                hover_color=("#DCE8FF", "#1E293B"),
+                command=self._handle_theme_toggle,
+            )
+            self._theme_button.grid(row=0, column=1, sticky="ne", rowspan=2)
 
     def _build_requirements(self) -> None:
         body = ctk.CTkScrollableFrame(
@@ -266,6 +293,14 @@ class SchedulingSettingsScreen(ctk.CTkFrame):
         self._show_status(
             "Update k values for the enabled requirements before continuing.",
             ok=None,
+        )
+
+    def _handle_theme_toggle(self) -> None:
+        """Switch between light and dark mode."""
+        handle_theme_toggle(
+            self._on_theme_toggle,
+            self._theme_button,
+            self._theme_button_text,
         )
 
     def _handle_continue(self) -> None:

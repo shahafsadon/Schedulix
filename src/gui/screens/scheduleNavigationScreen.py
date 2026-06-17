@@ -20,6 +20,13 @@ except ModuleNotFoundError as error:
 
 from gui.presenters.exportPresenter import ExportPresenter
 from gui.presenters.scheduleNavigationPresenter import ExamRow, ScheduleNavigationPresenter
+from gui.screens.themeToggle import (
+    THEME_BUTTON_WIDTH,
+    ThemeButtonText,
+    ThemeToggleCallback,
+    current_theme_button_text,
+    handle_theme_toggle,
+)
 from ranking_settings import RankingCriterion, RankingPreference, RankingSettings
 
 
@@ -70,11 +77,15 @@ class ScheduleNavigationScreen(ctk.CTkFrame):
         presenter: ScheduleNavigationPresenter,
         export_presenter: ExportPresenter | None = None,
         on_back: Callable[[], None] | None = None,
+        on_theme_toggle: ThemeToggleCallback | None = None,
+        theme_button_text: ThemeButtonText = None,
     ) -> None:
         super().__init__(master, corner_radius=0, fg_color=_PAGE_BG)
         self.presenter = presenter
         self._export_presenter = export_presenter
         self._on_back = on_back
+        self._on_theme_toggle = on_theme_toggle
+        self._theme_button_text = theme_button_text
 
         self._exam_cells: dict[str, ctk.CTkButton] = {}
         self._selected_iso_date: str | None = None
@@ -87,6 +98,7 @@ class ScheduleNavigationScreen(ctk.CTkFrame):
         self._criterion_selector = None
         self._apply_ranking_button = None
         self._ranking_status_label = None
+        self._theme_button: ctk.CTkButton | None = None
 
         self._build()
         self._refresh()
@@ -158,6 +170,7 @@ class ScheduleNavigationScreen(ctk.CTkFrame):
         self._next_button.grid(row=0, column=2, padx=(0, 8))
 
         self._save_button = None
+        next_action_column = 3
         if self._export_presenter is not None:
             self._save_button = ctk.CTkButton(
                 actions,
@@ -168,6 +181,26 @@ class ScheduleNavigationScreen(ctk.CTkFrame):
                 command=self._handle_save,
             )
             self._save_button.grid(row=0, column=3)
+            next_action_column = 4
+
+        if self._on_theme_toggle is not None:
+            # Button text tells the user which mode the click will open.
+            self._theme_button = ctk.CTkButton(
+                actions,
+                text=current_theme_button_text(self._theme_button_text),
+                width=THEME_BUTTON_WIDTH,
+                fg_color="transparent",
+                border_width=1,
+                border_color=_BORDER,
+                text_color=(_PRIMARY, "#93C5FD"),
+                hover_color=("#DCE8FF", "#1E293B"),
+                command=self._handle_theme_toggle,
+            )
+            self._theme_button.grid(
+                row=0,
+                column=next_action_column,
+                padx=(8, 0),
+            )
 
     def _build_metrics(self) -> None:
         """Build compact summary cards for the current system."""
@@ -462,6 +495,14 @@ class ScheduleNavigationScreen(ctk.CTkFrame):
         else:
             color = "#B00020"
         self._status_label.configure(text=result.message, text_color=color)
+
+    def _handle_theme_toggle(self) -> None:
+        """Switch between light and dark mode."""
+        handle_theme_toggle(
+            self._on_theme_toggle,
+            self._theme_button,
+            self._theme_button_text,
+        )
 
     def _handle_add_ranking_criterion(self) -> None:
         """Add the selected criterion unless it is already active."""

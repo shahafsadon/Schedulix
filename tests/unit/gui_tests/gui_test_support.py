@@ -176,6 +176,14 @@ def make_fake_ctk() -> ModuleType:
         widget_type.created = []
 
     module = ModuleType("customtkinter")
+    module._appearance_mode = "Light"
+
+    def set_appearance_mode(mode):
+        module._appearance_mode = mode
+
+    def get_appearance_mode():
+        return module._appearance_mode
+
     module.CTkFrame = FakeFrame
     module.CTkScrollableFrame = FakeFrame
     module.CTkLabel = FakeLabel
@@ -186,6 +194,8 @@ def make_fake_ctk() -> ModuleType:
     module.CTkToplevel = FakeToplevel
     module.CTkCheckBox = FakeCheckBox
     module.BooleanVar = FakeBooleanVar
+    module.set_appearance_mode = set_appearance_mode
+    module.get_appearance_mode = get_appearance_mode
 
     return module
 

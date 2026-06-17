@@ -5,7 +5,7 @@ from gui.exportPresenter import ExportResult
 from gui.scheduleNavigationPresenter import ExamRow, MetricsSummaryView, SystemView
 from ranking_settings import RankingCriterion
 
-from .gui_test_support import FakeButton, FakeLabel, load_screen_module
+from .gui_test_support import FakeButton, FakeLabel, load_screen_module, widgets_with_text
 
 
 def _exam(
@@ -272,6 +272,36 @@ def test_constructor_includes_back_and_save_buttons_when_presenters_are_supplied
     back_buttons[0].invoke()
 
     on_back.assert_called_once()
+
+
+def test_constructor_includes_dark_mode_button() -> None:
+    module, fake_ctk = load_screen_module("scheduleNavigationScreen.py")
+
+    view = SystemView(
+        1,
+        1,
+        [],
+        2026,
+        {"2026-01-05": [_exam()]},
+    )
+    theme_text = {"value": "\u263e"}
+
+    def toggle_theme():
+        theme_text["value"] = "\u2600"
+
+    module.ScheduleNavigationScreen(
+        fake_ctk.CTkFrame(),
+        _presenter(view),
+        on_theme_toggle=toggle_theme,
+        theme_button_text=lambda: theme_text["value"],
+    )
+
+    buttons = widgets_with_text(fake_ctk.CTkButton, "\u263e")
+    assert len(buttons) == 1
+
+    buttons[0].invoke()
+
+    assert buttons[0].options["text"] == "\u2600"
 
 
 def test_constructor_builds_ranking_controls() -> None:
