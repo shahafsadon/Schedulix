@@ -195,6 +195,42 @@ def test_elective_collisions_count_same_date_shared_program_pairs() -> None:
     assert metrics.max_exams_per_day == 3
 
 
+def test_elective_status_is_normalized_and_mandatory_row_wins() -> None:
+    """Elective text is normalized, but mandatory enrollment stays stricter."""
+    elective_a = course(
+        "Elective A",
+        "83210",
+        [("83101", 1, "FALL", " elective ")],
+    )
+    elective_b = course(
+        "Elective B",
+        "83211",
+        [("83101", 1, "FALL", "ELECTIVE")],
+    )
+    mixed_status = course(
+        "Mixed Status",
+        "83212",
+        [
+            ("83101", 1, "FALL", "Elective"),
+            ("83101", 1, "FALL", "Obligatory"),
+        ],
+    )
+
+    metrics = ScheduleMetricsCalculator().calculate(
+        system(
+            [
+                exam(elective_a, date(2026, 1, 1)),
+                exam(elective_b, date(2026, 1, 1)),
+                exam(mixed_status, date(2026, 1, 1)),
+            ]
+        ),
+        schedule_id=1,
+    )
+
+    assert metrics.elective_collision_count == 1
+    assert metrics.min_mandatory_gap == MISSING_METRIC_VALUE
+
+
 def test_mandatory_span_is_calculated_per_semester_and_moed_group() -> None:
     """Bet exams do not inflate the Aleph mandatory span group."""
     first = course(

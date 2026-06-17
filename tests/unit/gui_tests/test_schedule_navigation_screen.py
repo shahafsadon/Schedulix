@@ -439,6 +439,37 @@ def test_apply_ranking_delegates_without_generation_and_refreshes() -> None:
     screen._refresh.assert_called_once()
 
 
+def test_failed_apply_ranking_shows_error_without_refreshing() -> None:
+    module, _ = load_screen_module("scheduleNavigationScreen.py")
+
+    screen = object.__new__(module.ScheduleNavigationScreen)
+    screen.presenter = MagicMock()
+    screen.presenter.apply_ranking.return_value = SimpleNamespace(
+        success=False,
+        message="Ranking failed.",
+    )
+    screen._ranking_criteria = [
+        RankingCriterion.max_exams_per_day,
+    ]
+    screen._set_ranking_status = MagicMock()
+    screen._refresh = MagicMock()
+    screen._grid_built = True
+    original_cells = {"2026-01-05": object()}
+    screen._exam_cells = original_cells
+    screen._selected_iso_date = "2026-01-05"
+
+    screen._handle_apply_ranking()
+
+    screen._set_ranking_status.assert_called_once_with(
+        "Ranking failed.",
+        ok=False,
+    )
+    assert screen._grid_built is True
+    assert screen._exam_cells is original_cells
+    assert screen._selected_iso_date == "2026-01-05"
+    screen._refresh.assert_not_called()
+
+
 def test_ranking_metric_values_are_rendered_for_current_system() -> None:
     module, _ = load_screen_module("scheduleNavigationScreen.py")
 

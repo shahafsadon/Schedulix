@@ -1,0 +1,133 @@
+\documentclass[12pt]{article}
+
+\usepackage{fontspec}
+\usepackage{polyglossia}
+\setmainlanguage{hebrew}
+\setotherlanguage{english}
+\setmainfont{FreeSerif}
+\newfontfamily\hebrewfont[Script=Hebrew]{FreeSerif}
+\newfontfamily\englishfont{Latin Modern Roman}
+
+\usepackage[a4paper,margin=2.4cm]{geometry}
+\usepackage{setspace}
+\usepackage{array}
+\usepackage{longtable}
+\usepackage{enumitem}
+\usepackage{amsmath}
+
+\setstretch{1.15}
+\setlist[itemize]{itemsep=2pt,topsep=4pt}
+\newcommand{\code}[1]{\LR{\texttt{\detokenize{#1}}}}
+\newcommand{\jira}[1]{\LR{\texttt{\detokenize{#1}}}}
+
+\begin{document}
+\begin{RTL}
+
+\begin{center}
+{\Large סיכום בדיקות לשלב 3}\\[4pt]
+{\normalsize מערכת שיבוץ בחינות}
+\end{center}
+
+\section*{מטרה}
+המטרה של המסמך היא להסביר בקצרה מה נבדק בשלב 3, איזה טסטים נוספו, ומה עדיין דורש בדיקה ידנית לפני הגשה סופית. המסמך מחליף את קובץ ה־Markdown הקודם, שהיה ארוך מדי ופחות נוח לקריאה.
+
+\section*{מה כיסינו}
+בדקנו את הדרישות החדשות של שלב 3 בשלוש שכבות:
+\begin{itemize}
+    \item בדיקות יחידה למנוע האילוצים, חישוב המדדים והמיון.
+    \item בדיקות GUI ללא פתיחת חלון אמיתי, כדי לבדוק מסכים ו־presenters בצורה יציבה.
+    \item בדיקות אינטגרציה לזרימת CLI ולזרימת GUI מלאה דרך הקאש וה־presenters.
+\end{itemize}
+
+הגישה כאן הייתה לא לבדוק רק מקרה תקין אחד, אלא גם מקרים גבוליים: ערך חסר, כמה תנאים פעילים ביחד, מיון אחרי יצירה, כישלון במיון, ושמירה על התנהגות גרסה 2 כאשר כל ההגדרות החדשות כבויות.
+
+\section*{סטטוס לפי משימות Jira}
+\begin{longtable}{|p{2.8cm}|p{3.2cm}|p{8cm}|}
+\hline
+\textbf{משימה} & \textbf{סטטוס} & \textbf{מה נעשה} \\
+\hline
+\jira{SCRUM-168} & בוצע & נוצר מסמך בדיקות חדש בעברית. המסמך מסביר את הכיסוי בפועל ולא רק רשימת דרישות. \\
+\hline
+\jira{SCRUM-169} & בוצע & נוספו וחוזקו בדיקות יחידה לאילוצים, למדדים ולמיון. נבדקו גם מקרי קצה ולא רק מקרים רגילים. \\
+\hline
+\jira{SCRUM-170} & בוצע & בדיקות GUI headless מכסות Settings ו־Ranking: שורות דרישות, שדות k, שגיאות, כפתורים, הוספה ומחיקה של קריטריונים, וסדר עדיפויות. \\
+\hline
+\jira{SCRUM-171} & בוצע אוטומטית & נוספו בדיקות אינטגרציה ל־CLI ול־GUI דרך presenters. יש בדיקה שהמיון משתנה בלי להריץ יצירה מחדש. \\
+\hline
+\jira{SCRUM-172} & בוצע ברמת טסטים & קיימות בדיקות שהיצירה רצה ברקע ולא תוקעת את ה־GUI, ונוספו בדיקות שמפרידות בין יצירה לבין מיון מחדש. מומלץ עדיין לעשות הרצת GUI ידנית קצרה לפני הגשה. \\
+\hline
+\jira{SCRUM-173} & חלקי & README עודכן, הדוח עודכן, וכל הטסטים עוברים. לא יצרתי release branch, tag או PR סופי כי אלה פעולות צוות שדורשות החלטה לפני שחרור. \\
+\hline
+\end{longtable}
+
+\section*{בדיקות חשובות שנוספו}
+\begin{itemize}
+    \item בדיקה שכל \code{RankingCriterion} מתאים לשדה אמיתי בתוך \code{ScheduleMetrics}. זה מונע מצב שבו מוסיפים קריטריון חדש ושוכחים לחבר אותו למדד.
+    \item בדיקה שחישוב \code{elective_collision_count} מתמודד נכון עם רווחים ואותיות גדולות או קטנות במילה \code{Elective}.
+    \item בדיקה שאם אותו קורס מופיע גם כבחירה וגם כחובה, החובה גוברת. זה מונע ספירה שגויה של קורס חובה כהתנגשות בחירה.
+    \item בדיקה שכישלון ב־Apply Ranking מציג הודעת שגיאה ולא מרענן את המסך כאילו הכול הצליח.
+    \item בדיקת CLI עם כמה תנאי סף פעילים ביחד. כך אנחנו יודעים שהמערכת לא מתייחסת רק לתנאי הראשון.
+    \item בדיקת CLI שמוודאת שהסדר בקובץ הפלט באמת מושפע מהקריטריון שנבחר.
+    \item בדיקת GUI שמוודאת שאפשר לשמור Settings, ליצור מערכות, ואז למיין מחדש בלי לשנות את רשימת המערכות המקורית.
+\end{itemize}
+
+\section*{פקודות הרצה}
+הפקודה המלאה להרצת כל הבדיקות:
+
+\begin{LTR}
+\begin{verbatim}
+python -m pytest --basetemp=.pytest_tmp
+\end{verbatim}
+\end{LTR}
+
+אם רוצים להריץ רק את הבדיקות שהכי קשורות לשלב 3:
+
+\begin{LTR}
+\begin{verbatim}
+python -m pytest ^
+  tests\unit\scheduling_tests\test_schedule_metrics_calculator.py ^
+  tests\unit\scheduling_tests\test_schedule_ranker.py ^
+  tests\unit\gui_tests\test_schedule_navigation_screen.py ^
+  tests\integration\application_flow\test_application_flow_settings.py ^
+  tests\integration\gui_flow\test_version_2_workflows.py ^
+  --basetemp=.pytest_tmp
+\end{verbatim}
+\end{LTR}
+
+\section*{תוצאת הרצה}
+בהרצה המלאה התקבלה התוצאה:
+
+\begin{LTR}
+\begin{verbatim}
+547 passed
+\end{verbatim}
+\end{LTR}
+
+כלומר, כל בדיקות היחידה, האינטגרציה והמערכת עברו בסביבת העבודה הנוכחית.
+
+\section*{Design Patterns שהשתמשנו בהם}
+\begin{itemize}
+    \item \textbf{Strategy} -- המיון מקבל רשימת קריטריונים לפי סדר עדיפות. אותו מנגנון מיון עובד אחרת לפי ההגדרות שהמשתמש בחר.
+    \item \textbf{Value Object} -- מחלקות כמו \code{ScheduleMetrics} ו־\code{RankedExamSystem} שומרות נתונים מחושבים בלי להכניס לתוכן לוגיקת מיון.
+    \item \textbf{MVP} -- במסכי GUI יש הפרדה בין המסך לבין ה־presenter. לכן אפשר לבדוק את הלוגיקה בלי לפתוח חלון אמיתי.
+    \item \textbf{Dependency Injection} -- בטסטים אנחנו מכניסים קאש, presenters וקבצי דוגמה מבוקרים. זה מקל לבדוק בלי תלות בסביבת משתמש אמיתית.
+    \item \textbf{Stable Sorting} -- כאשר שני שיבוצים שווים במדדים, המערכת שומרת על הסדר המקורי. זה חשוב כדי שהתוצאה תהיה צפויה ולא תשתנה סתם בין הרצות.
+\end{itemize}
+
+\section*{ספריות}
+לא נוספה ספרייה חדשה בשביל הבדיקות האלה. השתמשנו ב־\code{pytest}, \code{unittest.mock}, \code{dataclasses} ובמודולים שכבר קיימים בפרויקט. לכן אין כאן תלות חיצונית חדשה שצריך להצדיק או להתקין.
+
+\section*{מה נשאר לבדיקה ידנית}
+למרות שהבדיקות האוטומטיות עברו, לפני הגשה סופית כדאי לעשות שתי בדיקות ידניות קצרות:
+\begin{itemize}
+    \item לפתוח את ה־GUI בפועל ולוודא שהמעבר בין המסכים מרגיש תקין למשתמש.
+    \item להריץ יצירה עם קבצי הדוגמה ולבדוק בעין שהפלט, המיון והייצוא נראים הגיוניים.
+\end{itemize}
+
+אלה לא מחליפות את הטסטים, אלא נותנות ביטחון אחרון שאין בעיית תצוגה או חוויית משתמש שהטסטים לא רואים.
+
+\section*{סיכום}
+מבחינת בדיקות שלב 3, הכיסוי עכשיו הרבה יותר חזק: יש בדיקות למקרי קצה, לשילוב כמה דרישות ביחד, למיון מחדש, ל־CLI, ול־GUI בלי חלון. המשימה היחידה שלא נכון לסמן כמבוצעת לגמרי על ידי בלבד היא פעולת release סופית, כי היא כוללת branch, tag ו־PR שצריכים אישור צוות.
+
+\end{RTL}
+\end{document}
