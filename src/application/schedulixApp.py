@@ -28,6 +28,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from application.cache_manager import CacheManager
+from application.settings_validator import SchedulingSettingsValidator
 from constraint_settings import SchedulingConstraintSettings
 from fileReader.baseFileReader import (
     FileReaderFactory,
@@ -38,6 +39,8 @@ from output.outputWriter import (
     OutputWriter,
 )
 from ranking_settings import RankingSettings
+from scheduling.courseFilter import CourseFilter
+from scheduling.examScheduleGenerator import ExamScheduleGenerator
 from scheduling.schedulingService import SchedulingService
 
 
@@ -158,10 +161,13 @@ class SchedulixApp:
             or OutputWriter()
         )
 
+        self._service_was_injected = scheduling_service is not None
         self._service = (
             scheduling_service
             or SchedulingService()
         )
+        self._course_filter = CourseFilter()
+        self._settings_validator = SchedulingSettingsValidator()
 
     def run(
         self,
@@ -219,6 +225,66 @@ class SchedulixApp:
             constraint_settings = bundle.constraint_settings
             ranking_settings = bundle.ranking_settings
 
+        active_constraints = [
+            constraint_type.value
+            for constraint_type, setting in constraint_settings.constraints.items()
+            if setting.enabled
+        ]
+        active_ranking = [
+            preference.criterion.value
+            for preference in ranking_settings.priority_list
+        ]
+
+        # Fast path: when no ranking criteria are active, do not send the CLI
+        # through SchedulingService. The service is correct for the GUI, but it
+        # materializes every system, calculates all metrics, stores cache state,
+        # and then writes ranked output. That is the performance regression.
+        # With no ranking, the correct production path is the optimized lazy
+        # iterator + streaming writer.
+        if not ranking_settings.priority_list and not self._service_was_injected:
+            validation_result = self._settings_validator.validate(
+                constraint_settings=constraint_settings,
+                ranking_settings=ranking_settings,
+            )
+            if not validation_result.is_valid:
+                raise ValueError(
+                    "Invalid scheduling settings:\n"
+                    + "\n".join(validation_result.error_messages)
+                )
+
+            relevant_courses = self._course_filter.filter_relevant_courses(
+                courses,
+                selected_programs,
+            )
+            generator = ExamScheduleGenerator(
+                constraint_settings=constraint_settings,
+            )
+            schedules = generator.iter_exam_systems(
+                relevant_courses,
+                exam_periods,
+            )
+
+            created_output_path, written_count = self.output_writer.write_with_count(
+                schedules,
+                output_path,
+                constraint_settings=constraint_settings,
+                ranking_settings=ranking_settings,
+                metrics_line="Metrics: not calculated (no ranking criteria active)",
+                include_valid_systems_footer=True,
+            )
+
+            return ApplicationResult(
+                selected_program_count=len(selected_programs),
+                total_course_count=len(courses),
+                relevant_course_count=len(relevant_courses),
+                exam_period_count=len(exam_periods),
+                schedule_count=written_count,
+                output_path=created_output_path,
+                valid_system_count=written_count,
+                active_constraints=active_constraints,
+                active_ranking=active_ranking,
+            )
+
         # --- Step 3: run the shared scheduling service in an isolated cache. ---
         #
         # tempfile.TemporaryDirectory() guarantees the cache file is removed
@@ -265,17 +331,7 @@ class SchedulixApp:
             )
         )
 
-        # --- Step 5: summarize active settings for the run summary (S8). ---
-        active_constraints = [
-            constraint_type.value
-            for constraint_type, setting in constraint_settings.constraints.items()
-            if setting.enabled
-        ]
-        active_ranking = [
-            preference.criterion.value
-            for preference in ranking_settings.priority_list
-        ]
-
+        # --- Step 5: return a run summary. ---
         return ApplicationResult(
             selected_program_count=len(selected_programs),
             total_course_count=len(courses),
