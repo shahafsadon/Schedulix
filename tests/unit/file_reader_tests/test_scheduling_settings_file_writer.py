@@ -49,7 +49,6 @@ def _sample_ranking_settings() -> RankingSettings:
             ),
             RankingPreference(
                 criterion=RankingCriterion.max_exams_per_day,
-                descending=False,
             ),
         ]
     )
@@ -76,7 +75,7 @@ class SchedulingSettingsFileWriterTests(unittest.TestCase):
             )
 
     def test_round_trip_preserves_ranking_settings(self) -> None:
-        """parse(write(settings)) preserves criterion order and direction."""
+        """parse(write(settings)) preserves criterion order as descending."""
         original_constraints = _sample_constraint_settings()
         original_ranking = _sample_ranking_settings()
 
@@ -107,6 +106,7 @@ class SchedulingSettingsFileWriterTests(unittest.TestCase):
             content = result_path.read_text(encoding="utf-8")
             self.assertIn("mandatory_gap_days", content)
             self.assertIn("ranking:", content)
+            self.assertNotIn(": asc", content)
 
     def test_empty_ranking_emits_placeholder_comment(self) -> None:
         """An empty priority list emits the placeholder comment, not a

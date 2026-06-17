@@ -27,13 +27,13 @@ class RankingCriterion(Enum):
                                  Higher is better.
     * elective_collision_count – Req 3.3: total number of elective-exam
                                  conflicts in the schedule.
-                                 Lower is better (rank descending = False).
+                                 Displayed in descending order.
     * mandatory_span           – Req 3.4: span in days from the earliest to
                                  the latest mandatory exam within one program.
-                                 Lower is better (rank descending = False).
+                                 Displayed in descending order.
     * max_exams_per_day        – Req 3.5: maximum number of exams placed on
                                  any single calendar day.
-                                 Lower is better (rank descending = False).
+                                 Displayed in descending order.
     """
 
     min_mandatory_gap = "min_mandatory_gap"
@@ -52,12 +52,13 @@ class RankingPreference:
     """
     Pairs one ranking criterion with an explicit sorting direction.
 
-    Keeping the direction inside the model rather than hard-coding it in the
-    sorting layer means:
+    The current Part 3 product flow uses descending order for every criterion,
+    matching Section 3 of the requirements. Keeping the direction inside the
+    model still means:
 
     * The SDD default (descending for all metrics) is honoured by default.
-    * Any future requirement to invert a criterion's direction is a one-field
-      change in configuration, not a code change in the sorting algorithm.
+    * Any future requirement to invert a criterion's direction can be handled
+      without changing the sorting algorithm.
     * Dan's sorting logic receives a self-describing contract: the same object
       that names the metric also names the direction — no parallel structure
       is needed.

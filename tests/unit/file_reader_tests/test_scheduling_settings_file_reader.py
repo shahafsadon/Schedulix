@@ -69,7 +69,7 @@ class SchedulingSettingsFileReaderTests(unittest.TestCase):
         content = (
             "ranking: min_mandatory_gap\n"
             "ranking: average_all_gap : desc\n"
-            "ranking: max_exams_per_day : asc\n"
+            "ranking: max_exams_per_day : descending\n"
         )
         bundle = SchedulingSettingsFileReader().parse(content)
 
@@ -84,15 +84,26 @@ class SchedulingSettingsFileReaderTests(unittest.TestCase):
         )
         self.assertTrue(priorities[0].descending)
         self.assertTrue(priorities[1].descending)
-        self.assertFalse(priorities[2].descending)
+        self.assertTrue(priorities[2].descending)
 
-    def test_rejects_zero_k_for_elective_conflicts(self) -> None:
-        """The shared validator (SCRUM-143) requires k >= 1 for every
-        enabled constraint, including elective_conflicts_per_program."""
+    def test_rejects_ascending_ranking_direction(self) -> None:
+        """Section 3 fixes ranking direction to descending."""
         with self.assertRaises(ValueError):
             SchedulingSettingsFileReader().parse(
-                "elective_conflicts_per_program = on, 0"
+                "ranking: max_exams_per_day : asc"
             )
+
+    def test_accepts_zero_k_for_elective_conflicts(self) -> None:
+        """Req 2.3 accepts non-negative k, so k=0 is valid."""
+        bundle = SchedulingSettingsFileReader().parse(
+            "elective_conflicts_per_program = on, 0"
+        )
+
+        setting = bundle.constraint_settings.constraints[
+            ThresholdConstraintType.elective_conflicts_per_program
+        ]
+        self.assertTrue(setting.enabled)
+        self.assertEqual(setting.k, 0)
 
     def test_rejects_zero_k_when_constraint_requires_positive(self) -> None:
         """Enabled mandatory_gap_days with k = 0 must fail validation."""

@@ -19,9 +19,9 @@ close to the existing Version 1.0 input files:
     max_exams_per_day               = on, 2
     #
     # Ranking criteria (Section 3), in priority order, one per line:
-    #   <criterion> [ : <direction> ]
+    #   <criterion> [ : desc ]
     ranking: min_mandatory_gap
-    ranking: average_all_gap : asc
+    ranking: average_all_gap : desc
 
 The parsed result is a small dataclass (``SchedulingSettingsBundle``) holding
 two objects already used elsewhere in the codebase:
@@ -115,9 +115,8 @@ DEFAULT_SETTINGS_PATH = (
 _TRUE_TOKENS = {"on", "true", "yes", "1", "enabled"}
 _FALSE_TOKENS = {"off", "false", "no", "0", "disabled"}
 
-# Ranking-direction tokens. Default is descending, matching ranking_settings.py.
+# Ranking-direction tokens. Section 3 requires descending order.
 _DESC_TOKENS = {"desc", "descending", "down", "-"}
-_ASC_TOKENS = {"asc", "ascending", "up", "+"}
 
 _RANKING_PREFIX = "ranking:"
 
@@ -278,12 +277,12 @@ class SchedulingSettingsFileReader(
         line: str,
         line_number: int,
     ) -> RankingPreference:
-        """Parse a ``<criterion> [ : <direction> ]`` ranking line."""
+        """Parse a ``<criterion> [ : desc ]`` ranking line."""
         parts = [part.strip() for part in line.split(":")]
         if len(parts) not in (1, 2) or not parts[0]:
             raise ValueError(
                 f"Line {line_number}: expected "
-                f"'ranking: <criterion> [ : <direction> ]'."
+                f"'ranking: <criterion> [ : desc ]'."
             )
 
         criterion_token = parts[0].lower()
@@ -302,13 +301,11 @@ class SchedulingSettingsFileReader(
         direction_token = parts[1].lower()
         if direction_token in _DESC_TOKENS:
             descending = True
-        elif direction_token in _ASC_TOKENS:
-            descending = False
         else:
             raise ValueError(
-                f"Line {line_number}: unknown ranking direction "
-                f"'{direction_token}'. Accepted: "
-                f"{sorted(_DESC_TOKENS | _ASC_TOKENS)}."
+                f"Line {line_number}: ranking direction must be descending "
+                f"per Section 3, got '{direction_token}'. Accepted: "
+                f"{sorted(_DESC_TOKENS)}."
             )
 
         return RankingPreference(
