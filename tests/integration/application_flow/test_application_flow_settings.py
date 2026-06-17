@@ -55,8 +55,43 @@ def _periods_two_dates(tmp_path):
     )
 
 
+def _periods_three_dates(tmp_path):
+    """A FALL Aleph period spanning three usable dates."""
+    return write_text_file(
+        tmp_path,
+        "dates.txt",
+        """
+        $$$$
+        FALL, Aleph
+        01-02-2026, 03-02-2026
+        """,
+    )
+
+
 def _programs_one(tmp_path):
     return write_text_file(tmp_path, "programs.txt", "83101")
+
+
+def _courses_two_electives_same_program(tmp_path):
+    """Two elective Exam courses, same program/year, FALL semester."""
+    return write_text_file(
+        tmp_path,
+        "courses.txt",
+        """
+        $$$$
+        Elective A
+        83130
+        Dr. Choice
+        83101,1,FALL,Elective
+        Exam
+        $$$$
+        Elective B
+        83140
+        Dr. Option
+        83101,1,FALL,Elective
+        Exam
+        """,
+    )
 
 
 def test_run_with_settings_file_applies_constraints_and_ranking(tmp_path):
@@ -164,6 +199,93 @@ def test_enabled_constraint_changes_the_set_of_valid_systems(tmp_path):
     constrained_output = constrained_output_path.read_text(encoding="utf-8")
     assert "Valid systems: 0" in constrained_output
     assert "mandatory_gap_days=2" in constrained_output
+
+
+def test_cli_flow_with_multiple_enabled_thresholds_filters_output(tmp_path):
+    """The CLI applies more than one enabled threshold in the same run."""
+    courses_path = _courses_two_electives_same_program(tmp_path)
+    periods_path = _periods_two_dates(tmp_path)
+    programs_path = _programs_one(tmp_path)
+    output_path = tmp_path / "outputs" / "multi_threshold.txt"
+
+    settings_path = write_text_file(
+        tmp_path,
+        "settings_multi.txt",
+        """
+        mandatory_gap_days = off, 0
+        any_course_gap_days = off, 0
+        elective_conflicts_per_program = on, 0
+        mandatory_span_days = off, 0
+        max_exams_per_day = on, 1
+
+        ranking: average_all_gap
+        """,
+    )
+
+    result = SchedulixApp().run(
+        courses_path=courses_path,
+        exam_periods_path=periods_path,
+        programs_path=programs_path,
+        output_path=output_path,
+        settings_path=settings_path,
+    )
+
+    assert result.valid_system_count == 2
+    assert result.active_constraints == [
+        "elective_conflicts_per_program",
+        "max_exams_per_day",
+    ]
+    assert result.active_ranking == ["average_all_gap"]
+
+    output = output_path.read_text(encoding="utf-8")
+    assert "elective_conflicts_per_program=0" in output
+    assert "max_exams_per_day=1" in output
+    assert "average_all_gap desc" in output
+    assert "Valid systems: 2" in output
+    assert output.count("Schedule ") == 2
+    assert "elective_collisions=0" in output
+    assert "max_per_day=1" in output
+
+
+def test_cli_ranking_order_is_reflected_in_exported_output(tmp_path):
+    """The first exported system follows the selected ranking order."""
+    courses_path = _courses_two_mandatory_same_program(tmp_path)
+    periods_path = _periods_three_dates(tmp_path)
+    programs_path = _programs_one(tmp_path)
+    output_path = tmp_path / "outputs" / "ranked_output.txt"
+
+    settings_path = write_text_file(
+        tmp_path,
+        "settings_ranked.txt",
+        """
+        mandatory_gap_days = off, 0
+        any_course_gap_days = off, 0
+        elective_conflicts_per_program = off, 0
+        mandatory_span_days = off, 0
+        max_exams_per_day = off, 0
+
+        ranking: min_mandatory_gap
+        """,
+    )
+
+    result = SchedulixApp().run(
+        courses_path=courses_path,
+        exam_periods_path=periods_path,
+        programs_path=programs_path,
+        output_path=output_path,
+        settings_path=settings_path,
+    )
+
+    assert result.valid_system_count > 0
+
+    output = output_path.read_text(encoding="utf-8")
+    first_schedule = output.split("Schedule 2", 1)[0]
+
+    assert "Schedule 1" in first_schedule
+    assert "Metrics: min_gap=2" in first_schedule
+    assert "01-02-2026" in first_schedule
+    assert "03-02-2026" in first_schedule
+
 
 def test_run_without_settings_path_uses_pre_part3_defaults(tmp_path):
     """Omitting settings_path produces all-disabled constraints, no

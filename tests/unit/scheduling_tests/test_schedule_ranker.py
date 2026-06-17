@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from dataclasses import fields
+
 from ranking_settings import (
     MISSING_METRIC_VALUE,
     RankedExamSystem,
@@ -82,6 +84,40 @@ def test_descending_criterion_places_larger_metric_first() -> None:
     )
 
     assert keys(ordered) == [2, 1]
+
+
+def test_every_ranking_criterion_matches_a_metric_field_and_can_sort() -> None:
+    """Each ranking criterion must point to a real metric value."""
+    metric_field_names = {
+        field.name
+        for field in fields(ScheduleMetrics)
+    }
+
+    for criterion in RankingCriterion:
+        assert criterion.value in metric_field_names
+
+        lower_metrics = {
+            current.value: 1
+            for current in RankingCriterion
+        }
+        higher_metrics = dict(lower_metrics)
+        higher_metrics[criterion.value] = 2
+
+        systems = [
+            ranked_system(1, **lower_metrics),
+            ranked_system(2, **higher_metrics),
+        ]
+
+        ordered = ScheduleRanker().rank(
+            systems,
+            RankingSettings(
+                [
+                    RankingPreference(criterion)
+                ]
+            ),
+        )
+
+        assert keys(ordered) == [2, 1]
 
 
 def test_ascending_criterion_places_smaller_metric_first() -> None:

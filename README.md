@@ -19,7 +19,7 @@ The Version 2.0 desktop app guides the user through the complete scheduling
 process:
 
 ```text
-Upload Files -> Select Programs -> Manage Exam Dates -> Generate Schedules -> Review Results
+Upload Files -> Select Programs -> Scheduling Settings -> Manage Exam Dates -> Generate Schedules -> Review Results
 ```
 
 Generated schedules are created on a background worker so the GUI remains
@@ -51,7 +51,15 @@ courses grouped by year and semester, including requirement type and evaluation
 method. After selecting the relevant programs, the user continues to review and
 edit exam dates.
 
-### 3. Manage Exam Dates
+### 3. Scheduling Settings
+
+The scheduling settings screen lets the user enable or disable the five Part 3
+threshold requirements and enter the matching `k` value for each enabled rule.
+Disabled requirements are ignored by the generator. The screen also keeps the
+flow compatible with Version 2.0: when all requirements are disabled and no
+ranking criteria are selected, generation behaves like the old flow.
+
+### 4. Manage Exam Dates
 
 ![Date management and direct generation](images/date-management-generate-screen.png)
 
@@ -62,7 +70,7 @@ period count, window length, active days, excluded days, and hidden exclusions.
 When the calendar is ready, the user clicks **Generate Exam Schedules** directly
 from this screen.
 
-### 4. Generate Schedules
+### 5. Generate Schedules
 
 The generation action runs asynchronously from the Date Management screen. While
 generation is running, calendar editing controls are disabled to prevent
@@ -71,7 +79,7 @@ the generated schedule systems are saved in the GUI cache and the app opens the
 results screen automatically. If generation fails, the user stays on Date
 Management and receives a clear error message.
 
-### 5. Review Results
+### 6. Review Results
 
 ![Generated schedules review screen](images/generated-schedules-review-screen.png)
 
@@ -124,13 +132,16 @@ Schedulix/
 |   |   |-- screens/                 # customTkinter views only
 |   |   |   |-- fileUploadScreen.py
 |   |   |   |-- programConfigScreen.py
+|   |   |   |-- schedulingSettingsScreen.py
 |   |   |   |-- dateManagementScreen.py
 |   |   |   `-- scheduleNavigationScreen.py
 |   |   |-- presenters/              # Testable MVP presenter logic
 |   |   |   |-- dateManagementPresenter.py
 |   |   |   |-- exportPresenter.py
 |   |   |   |-- programSelectionPresenter.py
+|   |   |   |-- schedulingSettingsPresenter.py
 |   |   |   |-- schedulingPresenter.py
+|   |   |   |-- scheduleNavigationPresenter.py
 |   |   |   `-- uploadedDataPresenter.py
 |   |   |-- services/                # GUI-facing data services
 |   |   |   |-- uploadService.py
@@ -406,8 +417,9 @@ This optional fourth file configures the Part 3 threshold constraints
 (Section 3). It is parsed by `SchedulingSettingsFileReader` into the same
 `SchedulingConstraintSettings` and `RankingSettings` models used by the GUI.
 
-> **Status:** This file is parsed and validated, but is not yet wired into
-> `SchedulixApp.run()`. CLI integration is tracked under SCRUM-166.
+> **Status:** This file is parsed, validated, and can be passed to
+> `SchedulixApp.run(settings_path=...)`. When no settings file is supplied,
+> the CLI flow keeps the old behavior.
 
 Format:
 
