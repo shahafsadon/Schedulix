@@ -16,6 +16,10 @@ except ModuleNotFoundError as error:
 from application.async_runner import AsyncScheduleRunner
 from gui.presenters.dateManagementPresenter import DateManagementPresenter
 from gui.presenters.schedulingPresenter import GenerationResult, SchedulingPresenter
+from scheduling.progressiveGeneration import (
+    ProgressiveRankedSnapshot,
+    ProgressiveResultState,
+)
 from gui.screens.themeToggle import (
     THEME_BUTTON_WIDTH,
     ThemeButtonText,
@@ -508,18 +512,47 @@ class DateManagementScreen(ctk.CTkFrame):
             self._show_message("Schedule generator is not available.", ok=False)
             return
 
-        accepted = self._runner.run(
-            task=self._scheduling_presenter.generate,
-            on_started=self._show_generation_started,
-            on_complete=lambda result: self.after(
-                0,
-                lambda: self._show_generation_result(result),
-            ),
-            on_error=lambda error: self.after(
-                0,
-                lambda: self._show_generation_error(error),
-            ),
+        progressive_runner = getattr(self._runner, "run_with_progress", None)
+        progressive_generate = getattr(
+            self._scheduling_presenter,
+            "generate_progressive",
+            None,
         )
+
+        if callable(progressive_runner) and callable(progressive_generate):
+            accepted = progressive_runner(
+                task=lambda token, on_progress: progressive_generate(
+                    on_snapshot=on_progress,
+                    cancellation_token=token,
+                ),
+                on_started=self._show_generation_started,
+                on_progress=lambda snapshot: self.after(
+                    0,
+                    lambda: self._show_generation_progress(snapshot),
+                ),
+                on_complete=lambda result: self.after(
+                    0,
+                    lambda: self._show_generation_result(result),
+                ),
+                on_error=lambda error: self.after(
+                    0,
+                    lambda: self._show_generation_error(error),
+                ),
+            )
+        else:
+            # Backward-compatible path used by older tests/fakes.
+            accepted = self._runner.run(
+                task=self._scheduling_presenter.generate,
+                on_started=self._show_generation_started,
+                on_complete=lambda result: self.after(
+                    0,
+                    lambda: self._show_generation_result(result),
+                ),
+                on_error=lambda error: self.after(
+                    0,
+                    lambda: self._show_generation_error(error),
+                ),
+            )
 
         if not accepted:
             self._show_message("Schedule generation is already running.", ok=False)
@@ -533,13 +566,31 @@ class DateManagementScreen(ctk.CTkFrame):
             ok=True,
         )
 
+
+    def _show_generation_progress(
+        self,
+        snapshot: ProgressiveRankedSnapshot,
+    ) -> None:
+        """Render a progressive ranking preview status update."""
+        if snapshot.state != ProgressiveResultState.PARTIAL:
+            return
+
+        self._show_message(snapshot.message, ok=True)
+
     def _show_generation_result(self, result: GenerationResult) -> None:
         """Handle the scheduler result without leaving the date screen on failure."""
         if result.success and result.schedule_count > 0:
-            self._show_message(
-                f"{result.schedule_count:,} schedule systems generated successfully.",
-                ok=True,
-            )
+            if 0 < result.displayed_count < result.schedule_count:
+                message = (
+                    f"{result.schedule_count:,} schedule systems generated. "
+                    f"Showing top {result.displayed_count:,} ranked preview."
+                )
+            else:
+                message = (
+                    f"{result.schedule_count:,} schedule systems generated successfully."
+                )
+
+            self._show_message(message, ok=True)
             if self._on_generation_success is not None:
                 self.after(900, self._on_generation_success)
             return
