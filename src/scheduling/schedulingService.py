@@ -7,7 +7,7 @@ show a ranked preview without materializing the full Cartesian product.
 """
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable, Iterator
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from time import perf_counter
 from typing import Any
@@ -21,10 +21,10 @@ from scheduling.examScheduleGenerator import ExamScheduleGenerator, ExamSystem
 from scheduling.progressiveGeneration import (
     ProgressiveCounters,
     ProgressiveGenerationOptions,
-    ProgressivePreviewBuffer,
     ProgressiveRankedSnapshot,
     ProgressiveResultState,
 )
+from scheduling.rankedResultsBuffer import RankedResultsBuffer
 from scheduling.scheduleRankingService import ScheduleRankingService
 
 
@@ -139,7 +139,10 @@ class SchedulingService:
         started_at = self._clock()
         prepared = self._prepare_inputs(cache)
         generator = self._create_generator(prepared.constraint_settings)
-        preview = ProgressivePreviewBuffer()
+        preview = RankedResultsBuffer(
+            ranking_settings=prepared.ranking_settings,
+            preview_limit=options.display_limit,
+        )
 
         if self._is_cancelled(cancellation_token):
             snapshot = self._build_snapshot(
@@ -173,14 +176,10 @@ class SchedulingService:
             if schedule_batch.is_empty:
                 continue
 
-            preview.generated_schedules += schedule_batch.size
-            preview.accepted_schedules += schedule_batch.size
-
             self._rank_batch_into_preview(
                 preview=preview,
                 schedule_batch=schedule_batch,
                 ranking_settings=prepared.ranking_settings,
-                display_limit=options.display_limit,
             )
 
             if self._is_cancelled(cancellation_token):
@@ -322,10 +321,9 @@ class SchedulingService:
 
     def _rank_batch_into_preview(
         self,
-        preview: ProgressivePreviewBuffer,
+        preview: RankedResultsBuffer,
         schedule_batch: GeneratedScheduleBatch,
         ranking_settings: RankingSettings,
-        display_limit: int,
     ) -> None:
         """Rank one generated batch and merge it into the bounded preview."""
         if schedule_batch.is_empty:
@@ -336,13 +334,12 @@ class SchedulingService:
             ranking_settings,
             starting_schedule_id=schedule_batch.starting_schedule_id,
         )
-        preview.processed_schedules += schedule_batch.size
-        preview.ranking_seconds += ranking_outcome.elapsed_seconds
-        preview.ranked_schedules = self._ranking_service.merge_ranked_preview(
-            existing_preview=preview.ranked_schedules,
-            new_ranked_batch=ranking_outcome.ranked_schedules,
-            ranking_settings=ranking_settings,
-            display_limit=display_limit,
+        preview.add_ranked_batch(
+            ranking_outcome.ranked_schedules,
+            generated_count=schedule_batch.size,
+            accepted_count=schedule_batch.size,
+            processed_count=schedule_batch.size,
+            ranking_seconds=ranking_outcome.elapsed_seconds,
         )
 
     def _finish_progressive_run(
@@ -352,7 +349,7 @@ class SchedulingService:
         on_snapshot: Callable[[ProgressiveRankedSnapshot], None] | None,
         run_id: int,
         state: ProgressiveResultState,
-        preview: ProgressivePreviewBuffer,
+        preview: RankedResultsBuffer,
         generator: Any,
         relevant_course_count: int,
         ranking_version: int,
@@ -387,7 +384,7 @@ class SchedulingService:
         self,
         run_id: int,
         state: ProgressiveResultState,
-        preview: ProgressivePreviewBuffer,
+        preview: RankedResultsBuffer,
         generator: Any,
         relevant_course_count: int,
         ranking_version: int,
@@ -452,7 +449,7 @@ class SchedulingService:
 
     @staticmethod
     def _partial_message(
-        preview: ProgressivePreviewBuffer,
+        preview: RankedResultsBuffer,
         display_limit: int,
     ) -> str:
         shown = min(len(preview.ranked_schedules), display_limit)
@@ -463,7 +460,7 @@ class SchedulingService:
 
     @staticmethod
     def _complete_message(
-        preview: ProgressivePreviewBuffer,
+        preview: RankedResultsBuffer,
         display_limit: int,
     ) -> str:
         if preview.systems_seen == 0:
