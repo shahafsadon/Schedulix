@@ -1,36 +1,29 @@
-"""Scheduling service that connects the GUI cache to the Version 1.0 engine
-(SCRUM-125), extended to honor Part 3 threshold constraints and ranking
-preferences from the cache (SCRUM-164).
+"""Scheduling service for GUI-owned in-memory data.
 
-Version 1.0 exposes its full pipeline through SchedulixApp.run(), which reads
-input files from disk, generates schedules, and writes an output file. The
-Version 2.0 GUI already holds its data in memory (inside the CacheManager) and
-must not re-read files or write an output file just to display results on
-screen.
-
-This service bridges that gap. It takes the data already stored in the cache
-(courses, exam periods, selected programs, threshold-constraint settings, and
-ranking settings), runs the same core Version 1.0 logic (course filtering +
-exam-system generation) without any file I/O, applies the active Part 3
-threshold constraints during generation, ranks the results according to the
-active ranking preferences, stores everything back into the cache, and
-returns it to the caller.
-
-It deliberately reuses the existing CourseFilter, ExamScheduleGenerator,
-ScheduleRankingService, and SchedulingSettingsValidator rather than
-duplicating any scheduling or validation logic, so the Version 2.0 results
-stay identical to Version 1.0 for the same inputs and the same validation
-rules apply regardless of which flow (GUI or CLI) triggered generation.
+The synchronous ``run()`` method is kept for compatibility with the existing
+screens/tests.  The progressive ``run_progressive()`` method adds lazy batched
+ranking on top of ``ExamScheduleGenerator.iter_exam_systems()`` so the GUI can
+show a ranked preview without materializing the full Cartesian product.
 """
 from __future__ import annotations
 
+from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass, field
+from time import perf_counter
+from typing import Any
 
 from application.cache_manager import CacheManager
 from application.settings_validator import SchedulingSettingsValidator
 from ranking_settings import RankedExamSystem, RankingSettings
 from scheduling.courseFilter import CourseFilter
 from scheduling.examScheduleGenerator import ExamScheduleGenerator, ExamSystem
+from scheduling.progressiveGeneration import (
+    ProgressiveCounters,
+    ProgressiveGenerationOptions,
+    ProgressivePreviewBuffer,
+    ProgressiveRankedSnapshot,
+    ProgressiveResultState,
+)
 from scheduling.scheduleRankingService import ScheduleRankingService
 
 
@@ -38,26 +31,9 @@ from scheduling.scheduleRankingService import ScheduleRankingService
 class SchedulingOutcome:
     """Summary of one scheduling run, returned to the presenter.
 
-    `schedules` is also stored in the cache as a side effect; it is returned
-    here too so the caller can react without a second cache read. The counts
-    let the UI show a short status line without recomputing anything.
-
-    The three candidate-evaluation counters mirror
-    ``ExamScheduleGenerator.SchedulingDiagnostics``. They count individual
-    (course, date) placement attempts during the recursive search, not
-    complete exam systems — `accepted_candidates` is generally larger than
-    `schedule_count`. They are exposed for diagnostics/debugging, but are
-    NOT a reliable signal for "a Part 3 threshold constraint caused a
-    zero-result run": the always-active base conflict rule
-    (SameDateProgramYearConflictConstraint) also contributes to
-    `pruned_candidates`, and final-system-only constraints (e.g.
-    mandatory_span_days) are not counted at all.
-
-    `any_constraint_enabled` is the field the presenter should use instead to
-    decide whether a zero-result message should point at Part 3 constraints
-    or at date availability. It reflects whether at least one
-    ThresholdConstraintType entry in the active SchedulingConstraintSettings
-    is enabled, independent of how many candidates were pruned.
+    ``schedules`` is also stored in the cache as a side effect; it is returned
+    here too so the caller can react without a second cache read. The counts let
+    the UI show a short status line without recomputing anything.
     """
 
     relevant_course_count: int
@@ -71,21 +47,19 @@ class SchedulingOutcome:
     any_constraint_enabled: bool = False
 
 
+@dataclass(frozen=True)
+class _PreparedSchedulingInput:
+    """Validated and filtered inputs for one scheduling run."""
+
+    relevant_courses: list[Any]
+    exam_periods: list[Any]
+    constraint_settings: Any
+    ranking_settings: RankingSettings
+    any_constraint_enabled: bool
+
+
 class SchedulingService:
-    """Runs the Version 1.0 scheduling core on data held in the cache.
-
-    The service is stateless apart from its injected collaborators. All input
-    comes from the CacheManager passed to run(), and all output goes back into
-    that same cache, keeping the GUI's single source of truth consistent.
-
-    Threshold-constraint settings and ranking settings are read from the
-    cache on every run() call, since they may change between runs (e.g. the
-    user adjusts a constraint in the settings screen and regenerates).
-    Settings are validated through SchedulingSettingsValidator before being
-    passed to the generator; invalid settings raise ValueError rather than
-    reaching the engine, matching the existing error-handling pattern used by
-    the missing-input checks below.
-    """
+    """Runs the scheduling core on data held in ``CacheManager``."""
 
     def __init__(
         self,
@@ -94,60 +68,177 @@ class SchedulingService:
         ranking_service: ScheduleRankingService | None = None,
         ranking_settings: RankingSettings | None = None,
         settings_validator: SchedulingSettingsValidator | None = None,
+        clock: Callable[[], float] = perf_counter,
     ) -> None:
-        """Create the service with its scheduling collaborators.
-
-        Args:
-            course_filter: reuses the Version 1.0 filter; a default is created
-                when none is supplied so application code stays simple.
-            schedule_generator: when supplied, this exact generator instance is
-                used for every run() call (useful for tests that inject a
-                fake/stub generator). When omitted (the normal production
-                path), run() builds a fresh ExamScheduleGenerator on each call,
-                configured with the constraint settings read from the cache,
-                so threshold-constraint changes take effect immediately.
-            ranking_service: reuses the Version 1.0 ranking service; defaulted
-                the same way.
-            ranking_settings: fallback ranking preferences used only if the
-                cache itself returns no ranking settings. In normal operation
-                CacheManager.get_ranking_settings() always returns a valid
-                object (empty priority list by default), so this fallback is
-                mainly useful for tests that construct the service directly.
-            settings_validator: reuses the shared SCRUM-143 validator;
-                defaulted the same way so GUI and CLI flows apply identical
-                validation rules.
-        """
-        # Reuse the real Version 1.0 components unless tests inject their own.
+        """Create the service with its scheduling collaborators."""
         self._course_filter = course_filter or CourseFilter()
         self._injected_generator = schedule_generator
         self._ranking_service = ranking_service or ScheduleRankingService()
         self._fallback_ranking_settings = ranking_settings or RankingSettings([])
         self._settings_validator = settings_validator or SchedulingSettingsValidator()
+        self._clock = clock
+        self._run_counter = 0
 
     def run(self, cache: CacheManager) -> SchedulingOutcome:
-        """Generate exam systems from the cached data and store them back.
+        """Generate all exam systems from cached data and store them back.
 
-        Reads courses, exam periods, selected programs, threshold-constraint
-        settings, and ranking settings from the cache. Validates the
-        constraint and ranking settings, keeps only the Exam courses belonging
-        to the selected programs, generates all valid exam systems under the
-        active constraints, ranks them according to the active ranking
-        preferences, writes everything back into the cache, and returns a
-        summary.
-
-        Raises:
-            ValueError: if the cache is missing courses, exam periods, or a
-                program selection — i.e. the user reached generation without
-                completing the earlier wizard steps — or if the cached
-                constraint/ranking settings fail validation.
+        This compatibility path still materializes the full list because older
+        callers expect ``SchedulingOutcome.schedules`` to contain every system.
+        New GUI preview flows should use ``run_progressive()``.
         """
+        prepared = self._prepare_inputs(cache)
+        generator = self._create_generator(prepared.constraint_settings)
+
+        schedules = generator.generate_exam_systems(
+            prepared.relevant_courses,
+            prepared.exam_periods,
+        )
+
+        ranking_outcome = self._ranking_service.rank_generated_schedules(
+            schedules,
+            prepared.ranking_settings,
+        )
+
+        cache.set_generated_schedules(schedules)
+        cache.set_ranked_schedules(ranking_outcome.ranked_schedules)
+
+        diagnostics = self._diagnostics(generator)
+        return SchedulingOutcome(
+            relevant_course_count=len(prepared.relevant_courses),
+            schedule_count=len(schedules),
+            schedules=schedules,
+            ranked_schedules=ranking_outcome.ranked_schedules,
+            ranking_seconds=ranking_outcome.elapsed_seconds,
+            generated_candidates=diagnostics.generated_candidates,
+            accepted_candidates=diagnostics.accepted_candidates,
+            pruned_candidates=diagnostics.pruned_candidates,
+            any_constraint_enabled=prepared.any_constraint_enabled,
+        )
+
+    def run_progressive(
+        self,
+        cache: CacheManager,
+        options: ProgressiveGenerationOptions | None = None,
+        on_snapshot: Callable[[ProgressiveRankedSnapshot], None] | None = None,
+        cancellation_token: Any | None = None,
+    ) -> ProgressiveRankedSnapshot:
+        """Generate and rank schedules progressively.
+
+        The method consumes ``ExamScheduleGenerator.iter_exam_systems()`` lazily,
+        ranks each completed batch, and keeps only a bounded top-N preview.  It
+        does not call the list-returning generator wrapper unless a test double
+        lacks the lazy iterator entirely.
+
+        Partial snapshots are delivered through ``on_snapshot``.  The returned
+        value is always the terminal snapshot: ``COMPLETE`` or ``CANCELLED``.
+        """
+        options = options or ProgressiveGenerationOptions()
+        run_id = self._next_run_id()
+        ranking_version = run_id
+        started_at = self._clock()
+        prepared = self._prepare_inputs(cache)
+        generator = self._create_generator(prepared.constraint_settings)
+        preview = ProgressivePreviewBuffer()
+
+        if self._is_cancelled(cancellation_token):
+            snapshot = self._build_snapshot(
+                run_id=run_id,
+                state=ProgressiveResultState.CANCELLED,
+                preview=preview,
+                generator=generator,
+                relevant_course_count=len(prepared.relevant_courses),
+                ranking_version=ranking_version,
+                started_at=started_at,
+                message="Schedule generation was cancelled before it started.",
+            )
+            self._emit(on_snapshot, snapshot)
+            return snapshot
+
+        batch: list[ExamSystem] = []
+        last_emit_at = started_at
+
+        for exam_system in self._iter_exam_systems(
+            generator,
+            prepared.relevant_courses,
+            prepared.exam_periods,
+        ):
+            if self._is_cancelled(cancellation_token):
+                return self._finish_progressive_run(
+                    cache=cache,
+                    options=options,
+                    on_snapshot=on_snapshot,
+                    run_id=run_id,
+                    state=ProgressiveResultState.CANCELLED,
+                    preview=preview,
+                    generator=generator,
+                    relevant_course_count=len(prepared.relevant_courses),
+                    ranking_version=ranking_version,
+                    started_at=started_at,
+                    message=(
+                        "Schedule generation was cancelled. Preview results "
+                        "were not saved."
+                    ),
+                )
+
+            batch.append(exam_system)
+            if len(batch) < options.batch_size:
+                continue
+
+            self._rank_batch_into_preview(
+                preview=preview,
+                batch=batch,
+                ranking_settings=prepared.ranking_settings,
+                display_limit=options.display_limit,
+            )
+            batch = []
+
+            now = self._clock()
+            if now - last_emit_at >= options.min_update_interval_seconds:
+                snapshot = self._build_snapshot(
+                    run_id=run_id,
+                    state=ProgressiveResultState.PARTIAL,
+                    preview=preview,
+                    generator=generator,
+                    relevant_course_count=len(prepared.relevant_courses),
+                    ranking_version=ranking_version,
+                    started_at=started_at,
+                    message=self._partial_message(preview, options.display_limit),
+                )
+                self._emit(on_snapshot, snapshot)
+                last_emit_at = now
+
+        if batch:
+            self._rank_batch_into_preview(
+                preview=preview,
+                batch=batch,
+                ranking_settings=prepared.ranking_settings,
+                display_limit=options.display_limit,
+            )
+
+        return self._finish_progressive_run(
+            cache=cache,
+            options=options,
+            on_snapshot=on_snapshot,
+            run_id=run_id,
+            state=ProgressiveResultState.COMPLETE,
+            preview=preview,
+            generator=generator,
+            relevant_course_count=len(prepared.relevant_courses),
+            ranking_version=ranking_version,
+            started_at=started_at,
+            message=self._complete_message(preview, options.display_limit),
+        )
+
+    # ------------------------------------------------------------------
+    # Progressive helpers
+    # ------------------------------------------------------------------
+
+    def _prepare_inputs(self, cache: CacheManager) -> _PreparedSchedulingInput:
+        """Read, validate, and filter all inputs needed by scheduling."""
         courses = cache.get_courses()
         exam_periods = cache.get_exam_periods()
         selected_programs = cache.get_selected_programs()
 
-        # Fail clearly rather than silently producing an empty result: each of
-        # these is set by an earlier wizard step, so an empty value means the
-        # user (or a bug) skipped a required step.
         if not courses:
             raise ValueError("No courses loaded. Load a courses file first.")
         if not exam_periods:
@@ -155,16 +246,11 @@ class SchedulingService:
         if not selected_programs:
             raise ValueError("No programs selected. Select at least one program.")
 
-        # Step 0: read the active Part 3 settings from the cache. CacheManager
-        # always returns a usable object (all-disabled constraints / empty
-        # ranking list when nothing was ever stored), so these are never None.
         constraint_settings = cache.get_constraint_settings()
         ranking_settings = (
             cache.get_ranking_settings() or self._fallback_ranking_settings
         )
 
-        # Validate before anything reaches the generator. Both halves are
-        # checked together so a single call surfaces every problem.
         validation_result = self._settings_validator.validate(
             constraint_settings=constraint_settings,
             ranking_settings=ranking_settings,
@@ -175,56 +261,196 @@ class SchedulingService:
                 + "\n".join(validation_result.error_messages)
             )
 
-        # Used by the presenter to decide whether a zero-result run should be
-        # explained by "constraints are too strict" or "no date fits". This
-        # is independent of the diagnostics counters below, which also count
-        # rejections from the always-active base conflict rule and do not
-        # count final-system-only constraint rejections (see SchedulingOutcome).
+        relevant_courses = self._course_filter.filter_relevant_courses(
+            courses,
+            selected_programs,
+        )
         any_constraint_enabled = any(
             setting.enabled
             for setting in constraint_settings.constraints.values()
         )
 
-        # Step 1: keep only Exam courses that belong to the selected programs.
-        # This is the exact same filtering rule used by Version 1.0.
-        relevant_courses = self._course_filter.filter_relevant_courses(
-            courses,
-            selected_programs,
-        )
-
-        # Step 2: generate every valid exam-system option (no file I/O here).
-        # When a generator was injected (tests), reuse it as-is. Otherwise
-        # build a fresh generator configured with the current constraint
-        # settings, so threshold-constraint changes take effect on the next
-        # run() without needing a new SchedulingService instance.
-        generator = self._injected_generator or ExamScheduleGenerator(
+        return _PreparedSchedulingInput(
+            relevant_courses=relevant_courses,
+            exam_periods=exam_periods,
             constraint_settings=constraint_settings,
-        )
-        schedules = generator.generate_exam_systems(
-            relevant_courses,
-            exam_periods,
-        )
-
-        # Step 3: calculate metrics once and rank the wrappers. With empty
-        # ranking settings this preserves generation order.
-        ranking_outcome = self._ranking_service.rank_generated_schedules(
-            schedules,
-            ranking_settings,
-        )
-
-        # Step 4: store raw and ranked results separately so ranking-only
-        # changes never modify the original generated systems.
-        cache.set_generated_schedules(schedules)
-        cache.set_ranked_schedules(ranking_outcome.ranked_schedules)
-
-        return SchedulingOutcome(
-            relevant_course_count=len(relevant_courses),
-            schedule_count=len(schedules),
-            schedules=schedules,
-            ranked_schedules=ranking_outcome.ranked_schedules,
-            ranking_seconds=ranking_outcome.elapsed_seconds,
-            generated_candidates=generator.diagnostics.generated_candidates,
-            accepted_candidates=generator.diagnostics.accepted_candidates,
-            pruned_candidates=generator.diagnostics.pruned_candidates,
+            ranking_settings=ranking_settings,
             any_constraint_enabled=any_constraint_enabled,
         )
+
+    def _create_generator(self, constraint_settings: Any) -> Any:
+        """Create the correct generator for the current run."""
+        return self._injected_generator or ExamScheduleGenerator(
+            constraint_settings=constraint_settings,
+        )
+
+    @staticmethod
+    def _iter_exam_systems(
+        generator: Any,
+        relevant_courses: list[Any],
+        exam_periods: list[Any],
+    ) -> Iterator[ExamSystem]:
+        """Use the lazy generator when available, with a test-double fallback."""
+        iter_method = getattr(generator, "iter_exam_systems", None)
+        if callable(iter_method):
+            yield from iter_method(relevant_courses, exam_periods)
+            return
+
+        # Compatibility fallback for old fakes.  Production ExamScheduleGenerator
+        # always exposes iter_exam_systems(), so this should not run in real GUI
+        # generation.
+        yield from generator.generate_exam_systems(relevant_courses, exam_periods)
+
+    def _rank_batch_into_preview(
+        self,
+        preview: ProgressivePreviewBuffer,
+        batch: list[ExamSystem],
+        ranking_settings: RankingSettings,
+        display_limit: int,
+    ) -> None:
+        """Rank one generated batch and merge it into the bounded preview."""
+        if not batch:
+            return
+
+        starting_schedule_id = preview.systems_seen + 1
+        ranking_outcome = self._ranking_service.rank_generated_batch(
+            batch,
+            ranking_settings,
+            starting_schedule_id=starting_schedule_id,
+        )
+        preview.systems_seen += len(batch)
+        preview.ranking_seconds += ranking_outcome.elapsed_seconds
+        preview.ranked_schedules = self._ranking_service.merge_ranked_preview(
+            existing_preview=preview.ranked_schedules,
+            new_ranked_batch=ranking_outcome.ranked_schedules,
+            ranking_settings=ranking_settings,
+            display_limit=display_limit,
+        )
+
+    def _finish_progressive_run(
+        self,
+        cache: CacheManager,
+        options: ProgressiveGenerationOptions,
+        on_snapshot: Callable[[ProgressiveRankedSnapshot], None] | None,
+        run_id: int,
+        state: ProgressiveResultState,
+        preview: ProgressivePreviewBuffer,
+        generator: Any,
+        relevant_course_count: int,
+        ranking_version: int,
+        started_at: float,
+        message: str,
+    ) -> ProgressiveRankedSnapshot:
+        """Create, optionally persist, emit, and return the terminal snapshot."""
+        snapshot = self._build_snapshot(
+            run_id=run_id,
+            state=state,
+            preview=preview,
+            generator=generator,
+            relevant_course_count=relevant_course_count,
+            ranking_version=ranking_version,
+            started_at=started_at,
+            message=message,
+        )
+
+        if state == ProgressiveResultState.COMPLETE and options.cache_final_preview:
+            # Save only the final ranked preview.  The full result set may be
+            # huge; materializing it here would undo the optimization this flow
+            # exists to protect.
+            cache.set_generated_schedules(
+                [ranked.exam_system for ranked in snapshot.ranked_schedules]
+            )
+            cache.set_ranked_schedules(snapshot.ranked_schedules)
+
+        self._emit(on_snapshot, snapshot)
+        return snapshot
+
+    def _build_snapshot(
+        self,
+        run_id: int,
+        state: ProgressiveResultState,
+        preview: ProgressivePreviewBuffer,
+        generator: Any,
+        relevant_course_count: int,
+        ranking_version: int,
+        started_at: float,
+        message: str,
+        error: str | None = None,
+    ) -> ProgressiveRankedSnapshot:
+        """Build an immutable snapshot from the current mutable state."""
+        diagnostics = self._diagnostics(generator)
+        counters = ProgressiveCounters(
+            systems_seen=preview.systems_seen,
+            displayed_count=len(preview.ranked_schedules),
+            generated_candidates=diagnostics.generated_candidates,
+            accepted_candidates=diagnostics.accepted_candidates,
+            pruned_candidates=diagnostics.pruned_candidates,
+            elapsed_seconds=self._clock() - started_at,
+            ranking_seconds=preview.ranking_seconds,
+        )
+        return ProgressiveRankedSnapshot(
+            run_id=run_id,
+            state=state,
+            ranked_schedules=list(preview.ranked_schedules),
+            counters=counters,
+            relevant_course_count=relevant_course_count,
+            ranking_version=ranking_version,
+            message=message,
+            error=error,
+        )
+
+    @staticmethod
+    def _emit(
+        callback: Callable[[ProgressiveRankedSnapshot], None] | None,
+        snapshot: ProgressiveRankedSnapshot,
+    ) -> None:
+        if callback is not None:
+            callback(snapshot)
+
+    @staticmethod
+    def _is_cancelled(cancellation_token: Any | None) -> bool:
+        return bool(getattr(cancellation_token, "is_cancelled", False))
+
+    @staticmethod
+    def _diagnostics(generator: Any) -> Any:
+        """Return generator diagnostics, tolerating simple test doubles."""
+        diagnostics = getattr(generator, "diagnostics", None)
+        if diagnostics is not None:
+            return diagnostics
+        return type(
+            "EmptySchedulingDiagnostics",
+            (),
+            {
+                "generated_candidates": 0,
+                "accepted_candidates": 0,
+                "pruned_candidates": 0,
+            },
+        )()
+
+    @staticmethod
+    def _partial_message(
+        preview: ProgressivePreviewBuffer,
+        display_limit: int,
+    ) -> str:
+        shown = min(len(preview.ranked_schedules), display_limit)
+        return (
+            f"Preview: showing top {shown:,} from "
+            f"{preview.systems_seen:,} generated so far."
+        )
+
+    @staticmethod
+    def _complete_message(
+        preview: ProgressivePreviewBuffer,
+        display_limit: int,
+    ) -> str:
+        if preview.systems_seen == 0:
+            return "No valid exam systems could be generated."
+        shown = min(len(preview.ranked_schedules), display_limit)
+        return (
+            f"Complete: showing top {shown:,} from "
+            f"{preview.systems_seen:,} generated schedule(s)."
+        )
+
+    def _next_run_id(self) -> int:
+        self._run_counter += 1
+        return self._run_counter

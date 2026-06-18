@@ -88,8 +88,14 @@ class ScheduleMetricsCalculator:
     def calculate_many(
         self,
         exam_systems: list[ExamSystem],
+        starting_schedule_id: int = 1,
     ) -> list[ScheduleMetrics]:
-        """Calculate metrics for many schedules."""
+        """Calculate metrics for many schedules.
+
+        ``starting_schedule_id`` keeps IDs stable when callers calculate
+        metrics batch-by-batch during progressive generation.  The default
+        preserves the original full-list behavior.
+        """
         return [
             self.calculate(
                 exam_system,
@@ -97,7 +103,7 @@ class ScheduleMetricsCalculator:
             )
             for index, exam_system in enumerate(
                 exam_systems,
-                start=1,
+                start=starting_schedule_id,
             )
         ]
 
