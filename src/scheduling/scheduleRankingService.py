@@ -122,7 +122,15 @@ class ScheduleRankingService:
         ranked_schedules: list[RankedExamSystem],
         ranking_settings: RankingSettings,
     ) -> ScheduleRankingOutcome:
-        """Sort existing ranked schedules again."""
+        """Sort existing ranked schedules again.
+
+        The input schedules are already processed ``RankedExamSystem`` objects,
+        which means their metrics were calculated earlier.  This method only
+        delegates to ``ScheduleRanker`` and never calls the metrics calculator or
+        schedule generator.  It is therefore safe for ranking-only setting
+        changes where the current ranked buffer should be reordered without
+        regenerating schedules.
+        """
         started_at = self._clock()
 
         ordered = self._ranker.rank(
@@ -133,6 +141,24 @@ class ScheduleRankingService:
         return ScheduleRankingOutcome(
             ranked_schedules=ordered,
             elapsed_seconds=self._clock() - started_at,
+        )
+
+    def rerank_processed_schedules(
+        self,
+        ranked_schedules: list[RankedExamSystem],
+        ranking_settings: RankingSettings,
+    ) -> ScheduleRankingOutcome:
+        """Compatibility-explicit alias for re-ranking processed results.
+
+        Newer progressive code can use this name when the call site wants to be
+        very clear that it is reordering existing ``RankedExamSystem`` wrappers,
+        not recalculating metrics and not running the generator again.  The
+        existing ``rerank`` method remains the shorter public API used by older
+        tests and callers.
+        """
+        return self.rerank(
+            ranked_schedules,
+            ranking_settings,
         )
 
     def _wrap_with_metrics(
