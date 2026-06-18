@@ -17,6 +17,14 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from enum import Enum, auto
 
+from scheduling.batchIterator import (
+    GeneratedScheduleBatch,
+    batch_exam_systems,
+    iter_batches,
+    iter_exam_system_batches,
+    iter_fixed_size_batches,
+)
+
 from ranking_settings import RankedExamSystem
 
 
@@ -60,7 +68,24 @@ class ProgressiveGenerationOptions:
 
 @dataclass(frozen=True)
 class ProgressiveCounters:
-    """Progress counters exposed to presenters and GUI screens."""
+    """Progress counters exposed to presenters and GUI screens.
+
+    ``systems_seen`` and ``displayed_count`` are kept for compatibility with the
+    previous progressive-planning patch. The explicit schedule-count fields are
+    the task-level counters requested for the batched processing layer:
+
+    * generated schedules: valid ``ExamSystem`` objects consumed from the lazy
+      generator;
+    * accepted schedules: valid generated systems accepted into the progressive
+      pipeline;
+    * processed schedules: systems whose metrics/ranking were actually
+      calculated;
+    * displayed schedules: ranked systems currently retained for the GUI
+      preview.
+
+    Candidate counters still come from ``ExamScheduleGenerator.diagnostics`` and
+    describe recursive placement attempts, not complete exam systems.
+    """
 
     systems_seen: int
     displayed_count: int
@@ -69,6 +94,57 @@ class ProgressiveCounters:
     pruned_candidates: int
     elapsed_seconds: float
     ranking_seconds: float = 0.0
+    generated_schedule_count: int | None = None
+    accepted_schedule_count: int | None = None
+    processed_schedule_count: int | None = None
+    displayed_schedule_count: int | None = None
+
+    def __post_init__(self) -> None:
+        """Fill explicit schedule counters from legacy fields when omitted."""
+        if self.generated_schedule_count is None:
+            object.__setattr__(
+                self,
+                "generated_schedule_count",
+                self.systems_seen,
+            )
+        if self.accepted_schedule_count is None:
+            object.__setattr__(
+                self,
+                "accepted_schedule_count",
+                self.generated_schedule_count,
+            )
+        if self.processed_schedule_count is None:
+            object.__setattr__(
+                self,
+                "processed_schedule_count",
+                self.systems_seen,
+            )
+        if self.displayed_schedule_count is None:
+            object.__setattr__(
+                self,
+                "displayed_schedule_count",
+                self.displayed_count,
+            )
+
+    @property
+    def generated_schedules(self) -> int:
+        """Alias for the valid schedules consumed from the generator."""
+        return int(self.generated_schedule_count or 0)
+
+    @property
+    def accepted_schedules(self) -> int:
+        """Alias for schedules accepted into the progressive pipeline."""
+        return int(self.accepted_schedule_count or 0)
+
+    @property
+    def processed_schedules(self) -> int:
+        """Alias for schedules whose metrics/ranking were processed."""
+        return int(self.processed_schedule_count or 0)
+
+    @property
+    def displayed_schedules(self) -> int:
+        """Alias for schedules currently displayed in the ranked preview."""
+        return int(self.displayed_schedule_count or 0)
 
 
 @dataclass(frozen=True)
@@ -104,5 +180,16 @@ class ProgressivePreviewBuffer:
     """Small mutable helper that keeps only the current ranked preview."""
 
     ranked_schedules: list[RankedExamSystem] = field(default_factory=list)
-    systems_seen: int = 0
+    generated_schedules: int = 0
+    accepted_schedules: int = 0
+    processed_schedules: int = 0
     ranking_seconds: float = 0.0
+
+    @property
+    def systems_seen(self) -> int:
+        """Compatibility alias for processed schedules."""
+        return self.processed_schedules
+
+    @systems_seen.setter
+    def systems_seen(self, value: int) -> None:
+        self.processed_schedules = value

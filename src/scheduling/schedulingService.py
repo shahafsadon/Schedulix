@@ -16,6 +16,7 @@ from application.cache_manager import CacheManager
 from application.settings_validator import SchedulingSettingsValidator
 from ranking_settings import RankedExamSystem, RankingSettings
 from scheduling.courseFilter import CourseFilter
+from scheduling.batchIterator import GeneratedScheduleBatch, iter_exam_system_batches
 from scheduling.examScheduleGenerator import ExamScheduleGenerator, ExamSystem
 from scheduling.progressiveGeneration import (
     ProgressiveCounters,
@@ -154,14 +155,34 @@ class SchedulingService:
             self._emit(on_snapshot, snapshot)
             return snapshot
 
-        batch: list[ExamSystem] = []
         last_emit_at = started_at
 
-        for exam_system in self._iter_exam_systems(
+        generated_systems = self._iter_exam_systems(
             generator,
             prepared.relevant_courses,
             prepared.exam_periods,
-        ):
+        )
+        batches = iter_exam_system_batches(
+            generated_systems,
+            options.batch_size,
+            starting_schedule_id=1,
+            should_stop=lambda: self._is_cancelled(cancellation_token),
+        )
+
+        for schedule_batch in batches:
+            if schedule_batch.is_empty:
+                continue
+
+            preview.generated_schedules += schedule_batch.size
+            preview.accepted_schedules += schedule_batch.size
+
+            self._rank_batch_into_preview(
+                preview=preview,
+                schedule_batch=schedule_batch,
+                ranking_settings=prepared.ranking_settings,
+                display_limit=options.display_limit,
+            )
+
             if self._is_cancelled(cancellation_token):
                 return self._finish_progressive_run(
                     cache=cache,
@@ -180,18 +201,6 @@ class SchedulingService:
                     ),
                 )
 
-            batch.append(exam_system)
-            if len(batch) < options.batch_size:
-                continue
-
-            self._rank_batch_into_preview(
-                preview=preview,
-                batch=batch,
-                ranking_settings=prepared.ranking_settings,
-                display_limit=options.display_limit,
-            )
-            batch = []
-
             now = self._clock()
             if now - last_emit_at >= options.min_update_interval_seconds:
                 snapshot = self._build_snapshot(
@@ -207,12 +216,22 @@ class SchedulingService:
                 self._emit(on_snapshot, snapshot)
                 last_emit_at = now
 
-        if batch:
-            self._rank_batch_into_preview(
+        if self._is_cancelled(cancellation_token):
+            return self._finish_progressive_run(
+                cache=cache,
+                options=options,
+                on_snapshot=on_snapshot,
+                run_id=run_id,
+                state=ProgressiveResultState.CANCELLED,
                 preview=preview,
-                batch=batch,
-                ranking_settings=prepared.ranking_settings,
-                display_limit=options.display_limit,
+                generator=generator,
+                relevant_course_count=len(prepared.relevant_courses),
+                ranking_version=ranking_version,
+                started_at=started_at,
+                message=(
+                    "Schedule generation was cancelled. Preview results "
+                    "were not saved."
+                ),
             )
 
         return self._finish_progressive_run(
@@ -304,21 +323,20 @@ class SchedulingService:
     def _rank_batch_into_preview(
         self,
         preview: ProgressivePreviewBuffer,
-        batch: list[ExamSystem],
+        schedule_batch: GeneratedScheduleBatch,
         ranking_settings: RankingSettings,
         display_limit: int,
     ) -> None:
         """Rank one generated batch and merge it into the bounded preview."""
-        if not batch:
+        if schedule_batch.is_empty:
             return
 
-        starting_schedule_id = preview.systems_seen + 1
         ranking_outcome = self._ranking_service.rank_generated_batch(
-            batch,
+            schedule_batch.schedules,
             ranking_settings,
-            starting_schedule_id=starting_schedule_id,
+            starting_schedule_id=schedule_batch.starting_schedule_id,
         )
-        preview.systems_seen += len(batch)
+        preview.processed_schedules += schedule_batch.size
         preview.ranking_seconds += ranking_outcome.elapsed_seconds
         preview.ranked_schedules = self._ranking_service.merge_ranked_preview(
             existing_preview=preview.ranked_schedules,
@@ -379,14 +397,19 @@ class SchedulingService:
     ) -> ProgressiveRankedSnapshot:
         """Build an immutable snapshot from the current mutable state."""
         diagnostics = self._diagnostics(generator)
+        displayed_count = len(preview.ranked_schedules)
         counters = ProgressiveCounters(
             systems_seen=preview.systems_seen,
-            displayed_count=len(preview.ranked_schedules),
+            displayed_count=displayed_count,
             generated_candidates=diagnostics.generated_candidates,
             accepted_candidates=diagnostics.accepted_candidates,
             pruned_candidates=diagnostics.pruned_candidates,
             elapsed_seconds=self._clock() - started_at,
             ranking_seconds=preview.ranking_seconds,
+            generated_schedule_count=preview.generated_schedules,
+            accepted_schedule_count=preview.accepted_schedules,
+            processed_schedule_count=preview.processed_schedules,
+            displayed_schedule_count=displayed_count,
         )
         return ProgressiveRankedSnapshot(
             run_id=run_id,
