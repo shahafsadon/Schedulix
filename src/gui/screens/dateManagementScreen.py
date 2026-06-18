@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import calendar
+import queue
 from datetime import date, datetime
 from typing import Callable
 
@@ -507,7 +508,15 @@ class DateManagementScreen(ctk.CTkFrame):
             on_next()
 
     def _handle_generate(self) -> None:
-        """Generate schedules directly from the final date-review step."""
+        """Generate schedules directly from the final date-review step.
+
+        Progressive path: snapshots from the background worker are placed into
+        ``self.progress_queue`` (thread-safe) and drained on the main thread by
+        ``_poll_progress`` every 50 ms, ensuring the Tkinter event loop is never
+        blocked.  Completion and errors are forwarded via ``_handle_completion``
+        and ``_handle_error``, which stop the poll before marshalling the final
+        result onto the main thread with ``self.after(0, ...)``.
+        """
         if self._scheduling_presenter is None:
             self._show_message("Schedule generator is not available.", ok=False)
             return
@@ -520,25 +529,32 @@ class DateManagementScreen(ctk.CTkFrame):
         )
 
         if callable(progressive_runner) and callable(progressive_generate):
+            # Initialise the queue before dispatch so _poll_progress can start
+            # immediately after the runner accepts the task.
+            self.progress_queue: queue.Queue = queue.Queue()
+            self._generation_in_progress = True
+
             accepted = progressive_runner(
                 task=lambda token, on_progress: progressive_generate(
                     on_snapshot=on_progress,
                     cancellation_token=token,
                 ),
                 on_started=self._show_generation_started,
-                on_progress=lambda snapshot: self.after(
-                    0,
-                    lambda: self._show_generation_progress(snapshot),
-                ),
-                on_complete=lambda result: self.after(
-                    0,
-                    lambda: self._show_generation_result(result),
-                ),
-                on_error=lambda error: self.after(
-                    0,
-                    lambda: self._show_generation_error(error),
-                ),
+                # Put the snapshot into the queue from the background thread.
+                # _poll_progress drains it on the main thread every 50 ms.
+                on_progress=lambda snapshot: self.progress_queue.put(snapshot),
+                on_complete=self._handle_completion,
+                on_error=self._handle_error,
             )
+
+            if accepted:
+                # Arm the first poll tick.  Subsequent ticks re-arm themselves
+                # inside _poll_progress as long as _generation_in_progress is True.
+                self.after(50, self._poll_progress)
+            else:
+                # Runner rejected the task (already running); reset the flag
+                # that was optimistically set above.
+                self._generation_in_progress = False
         else:
             # Backward-compatible path used by older tests/fakes.
             accepted = self._runner.run(
@@ -607,6 +623,50 @@ class DateManagementScreen(ctk.CTkFrame):
             f"Schedule generation failed unexpectedly: {type(error).__name__}.",
             ok=False,
         )
+
+    # ------------------------------------------------------------------
+    # Queue-based progress polling (SCRUM-181)
+    # ------------------------------------------------------------------
+
+    def _poll_progress(self) -> None:
+        """Drain the progress queue on the main thread and refresh the status bar.
+
+        Called every 50 ms via ``self.after`` while ``_generation_in_progress``
+        is True.  Only the *latest* snapshot in the queue is rendered per tick so
+        the UI always shows the most recent state without falling behind.
+        """
+        latest_snapshot = None
+        try:
+            while True:
+                latest_snapshot = self.progress_queue.get_nowait()
+        except queue.Empty:
+            pass
+
+        if latest_snapshot is not None:
+            self._show_generation_progress(latest_snapshot)
+
+        # Re-arm only while the background task is still running.
+        if self._generation_in_progress:
+            self.after(50, self._poll_progress)
+
+    def _handle_completion(self, result: GenerationResult) -> None:
+        """Stop the poll loop and marshal the final result onto the main thread.
+
+        Called from the background worker thread via ``on_complete``.
+        Setting ``_generation_in_progress = False`` here (before the
+        ``self.after`` fires) guarantees that ``_poll_progress`` will not
+        re-arm itself after the result handler runs.
+        """
+        self._generation_in_progress = False
+        self.after(0, lambda: self._show_generation_result(result))
+
+    def _handle_error(self, error: Exception) -> None:
+        """Stop the poll loop and marshal the error onto the main thread.
+
+        Called from the background worker thread via ``on_error``.
+        """
+        self._generation_in_progress = False
+        self.after(0, lambda: self._show_generation_error(error))
 
     def _set_editing_enabled(self, enabled: bool) -> None:
         """Enable or disable all date editing and navigation controls."""
