@@ -96,6 +96,70 @@ class ScheduleNavigationPresenter:
         self._schedules = schedules
         # Start on the first system; stays at 0 when there are no systems.
         self._index = 0
+        # Live-preview metadata (SCRUM-182).  ``_is_partial`` is True while
+        # background generation is still in progress; False once the final
+        # result has been delivered.  The counters mirror the generation
+        # service's view of how many systems have been seen and displayed.
+        self._is_partial: bool = False
+        self._systems_seen: int = 0
+        self._displayed_count: int = 0
+
+    # ------------------------------------------------------------------
+    # Live-preview update (SCRUM-182)
+    # ------------------------------------------------------------------
+
+    def update_schedules(
+        self,
+        new_schedules: list[ExamSystem],
+        is_partial: bool = False,
+        systems_seen: int = 0,
+        displayed_count: int = 0,
+    ) -> None:
+        """Replace the schedule list and update live-preview metadata.
+
+        Safe to call from the main thread at any time (e.g. from a queue
+        poll callback).  The current navigation index is clamped so the user
+        stays on the same relative position when new batches arrive.
+
+        Args:
+            new_schedules:  The updated list of ranked exam systems.
+            is_partial:     True while generation is still running.
+            systems_seen:   How many candidate systems the engine has
+                            evaluated so far (for the status banner).
+            displayed_count: How many of those are shown in this preview.
+        """
+        self._schedules = new_schedules
+        self._is_partial = is_partial
+        self._systems_seen = systems_seen
+        self._displayed_count = displayed_count
+        # Clamp the index so it stays valid after the list shrinks or grows.
+        if self._schedules:
+            self._index = min(self._index, len(self._schedules) - 1)
+        else:
+            self._index = 0
+
+    # ------------------------------------------------------------------
+    # Live-preview state queries
+    # ------------------------------------------------------------------
+
+    @property
+    def is_partial(self) -> bool:
+        """True while background generation is still running."""
+        return self._is_partial
+
+    @property
+    def systems_seen(self) -> int:
+        """Total candidate systems evaluated so far (may exceed displayed)."""
+        return self._systems_seen
+
+    @property
+    def displayed_count(self) -> int:
+        """How many of the evaluated systems are shown in the current preview."""
+        return self._displayed_count
+
+    # ------------------------------------------------------------------
+    # Original API (unchanged)
+    # ------------------------------------------------------------------
 
     def has_schedules(self) -> bool:
         """Return True when there is at least one system to display."""

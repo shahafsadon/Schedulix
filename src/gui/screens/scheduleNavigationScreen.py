@@ -3,6 +3,11 @@
 The screen keeps the existing passive MVP boundary: navigation state and
 display models come from ``ScheduleNavigationPresenter`` while the view owns
 layout, buttons, and file dialogs.
+
+SCRUM-182: ``push_live_update`` is the single public entry point for live
+batch delivery. It **must** always be called from the Tkinter main thread —
+use ``self.after(0, ...)`` in background callbacks. The status banner in the
+header clearly distinguishes the partial-preview state from the final state.
 """
 from __future__ import annotations
 
@@ -42,6 +47,11 @@ _EXAM_DAY_TEXT = ("#0F172A", "#EAF2FF")
 _SELECTED_DAY_COLOR = ("#2563EB", "#60A5FA")
 _SELECTED_DAY_TEXT = ("#FFFFFF", "#0B1220")
 _REGULAR_DAY_TEXT = ("#A8B0BA", "#64748B")
+# Status-banner colours (SCRUM-182)
+_PARTIAL_BG = ("#FEF3C7", "#3B2800")    # amber tint — generation in progress
+_PARTIAL_TEXT = ("#92400E", "#FCD34D")
+_FINAL_BG = ("#D1FAE5", "#052E16")      # green tint — generation complete
+_FINAL_TEXT = ("#065F46", "#34D399")
 
 
 class ScheduleNavigationScreen(ctk.CTkFrame):
@@ -64,6 +74,12 @@ class ScheduleNavigationScreen(ctk.CTkFrame):
         self._current_exams_by_iso_date: dict[str, list[ExamRow]] = {}
         self._grid_built = False
         self._metric_labels: dict[str, ctk.CTkLabel] = {}
+        # Banner widgets created by _build_header (SCRUM-182).
+        self._status_banner: ctk.CTkLabel | None = None
+        self._status_seen_label: ctk.CTkLabel | None = None
+        # Track which (year, month) pairs are already drawn so live updates
+        # can extend the calendar grid without rebuilding it from scratch.
+        self._built_months: set[tuple[int, int]] = set()
 
         self._build()
         self._refresh()
@@ -79,7 +95,7 @@ class ScheduleNavigationScreen(ctk.CTkFrame):
         self._build_footer()
 
     def _build_header(self) -> None:
-        """Build title, counter, and primary actions."""
+        """Build title, counter, status banner, and primary actions."""
         header = ctk.CTkFrame(self, fg_color="transparent")
         header.grid(row=0, column=0, sticky="ew", padx=24, pady=(18, 10))
         header.grid_columnconfigure(0, weight=1)
@@ -99,8 +115,31 @@ class ScheduleNavigationScreen(ctk.CTkFrame):
         )
         self._counter_label.grid(row=1, column=0, sticky="w", pady=(2, 0))
 
+        # --- Status banner row (SCRUM-182) -----------------------------------
+        banner_row = ctk.CTkFrame(header, fg_color="transparent")
+        banner_row.grid(row=2, column=0, sticky="w", pady=(6, 0))
+
+        self._status_banner = ctk.CTkLabel(
+            banner_row,
+            text="",
+            font=("Segoe UI", 11, "bold"),
+            corner_radius=6,
+            padx=10,
+            pady=4,
+        )
+        self._status_banner.grid(row=0, column=0, sticky="w")
+
+        self._status_seen_label = ctk.CTkLabel(
+            banner_row,
+            text="",
+            font=("Segoe UI", 11),
+            text_color=_MUTED,
+        )
+        self._status_seen_label.grid(row=0, column=1, sticky="w", padx=(10, 0))
+        # ---------------------------------------------------------------------
+
         actions = ctk.CTkFrame(header, fg_color="transparent")
-        actions.grid(row=0, column=1, rowspan=2, sticky="e")
+        actions.grid(row=0, column=1, rowspan=3, sticky="e")
 
         if self._on_back is not None:
             ctk.CTkButton(
@@ -304,38 +343,79 @@ class ScheduleNavigationScreen(ctk.CTkFrame):
         self.presenter.previous()
         self._refresh()
 
-    def _handle_save(self) -> None:
-        """Ask for a destination file and export the currently shown system."""
-        chosen = filedialog.asksaveasfilename(
-            parent=self.winfo_toplevel(),
-            title="Save Exam Schedule",
-            defaultextension=".txt",
-            initialfile="exam_schedules.txt",
-            filetypes=[("Text files", "*.txt"), ("All files", "*.*")],
-        )
-        result = self._export_presenter.export_current(chosen or None)
+    # ------------------------------------------------------------------
+    # Live-preview public API (SCRUM-182)
+    # ------------------------------------------------------------------
 
-        if result.success:
-            color = "#147A39"
-        elif "cancelled" in result.message.lower():
-            color = "#666666"
-        else:
-            color = "#B00020"
-        self._status_label.configure(text=result.message, text_color=color)
+    def push_live_update(
+        self,
+        schedules: list,
+        is_partial: bool = False,
+        systems_seen: int = 0,
+    ) -> None:
+        """Deliver a new ranked batch to the screen from the main thread.
+
+        This is the single external hook for live updates. It **must** always
+        be called from the Tkinter main thread — use ``self.after(0, ...)``
+        in background callbacks.
+
+        The calendar grid is only *extended* (never rebuilt from scratch) so
+        new months are appended cheaply when a later batch introduces them.
+        The user's current navigation position is preserved; the presenter
+        clamps the index automatically.
+
+        Args:
+            schedules:    The latest ranked list of ``ExamSystem`` objects.
+            is_partial:   ``True`` while generation is still running.
+            systems_seen: Total candidate systems evaluated so far.
+        """
+        displayed_count = len(schedules)
+        self.presenter.update_schedules(
+            new_schedules=schedules,
+            is_partial=is_partial,
+            systems_seen=systems_seen,
+            displayed_count=displayed_count,
+        )
+
+        # Extend the calendar grid with any months not yet drawn.
+        all_months = set(self.presenter.relevant_months())
+        new_months = all_months - self._built_months
+        if new_months:
+            for year, month in sorted(new_months):
+                self._build_month(year, month)
+                self._built_months.add((year, month))
+            # Grid is now considered built so _refresh() won't rebuild it.
+            self._grid_built = True
+
+        self._refresh()
+
+    # ------------------------------------------------------------------
+    # Internal refresh helpers
+    # ------------------------------------------------------------------
 
     def _refresh(self) -> None:
-        """Refresh counter, metrics, calendar highlights, and detail panes."""
+        """Refresh counter, metrics, calendar highlights, detail panes, and banner."""
         view = self.presenter.current_view()
         if view is None:
-            self._counter_label.configure(text="No schedules to display.")
+            # No schedules yet — show an appropriate empty-state message.
+            if self.presenter.is_partial:
+                self._counter_label.configure(
+                    text="Generating schedules\u2026 No preview available yet."
+                )
+            else:
+                self._counter_label.configure(text="No schedules to display.")
             self._prev_button.configure(state="disabled")
             self._next_button.configure(state="disabled")
             if self._save_button is not None:
                 self._save_button.configure(state="disabled")
+            self._refresh_status_banner()
             return
 
         if not self._grid_built:
-            self._build_relevant_months_grid()
+            # Initial synchronous load: build the full grid in one pass.
+            for year, month in self.presenter.relevant_months():
+                self._build_month(year, month)
+                self._built_months.add((year, month))
             self._grid_built = True
 
         self._current_exams_by_iso_date = view.exams_by_iso_date
@@ -359,6 +439,75 @@ class ScheduleNavigationScreen(ctk.CTkFrame):
         if self._save_button is not None:
             self._save_button.configure(state="normal")
 
+        self._refresh_status_banner()
+
+    def _refresh_status_banner(self) -> None:
+        """Update the header status banner to reflect partial vs. final state.
+
+        Partial state  → amber pill: "⏳  Partial Results: Best schedules found so far"
+        Final state    → green pill: "✓  Final Ranked Results"
+        Standard load  → banner hidden (no live update was used).
+        """
+        if self._status_banner is None or self._status_seen_label is None:
+            return
+
+        if self.presenter.is_partial:
+            displayed = self.presenter.displayed_count
+            seen = self.presenter.systems_seen
+            self._status_banner.configure(
+                text="\u23f3  Partial Results: Best schedules found so far",
+                fg_color=_PARTIAL_BG,
+                text_color=_PARTIAL_TEXT,
+            )
+            if seen > 0:
+                self._status_seen_label.configure(
+                    text=(
+                        f"{displayed:,} shown  \u00b7  "
+                        f"{seen:,} candidates evaluated"
+                    )
+                )
+            else:
+                self._status_seen_label.configure(text="Evaluating\u2026")
+        elif self.presenter.displayed_count > 0 or self.presenter.systems_seen > 0:
+            # A prior live update finished — show the final confirmation.
+            displayed = self.presenter.displayed_count
+            seen = self.presenter.systems_seen
+            self._status_banner.configure(
+                text="\u2713  Final Ranked Results",
+                fg_color=_FINAL_BG,
+                text_color=_FINAL_TEXT,
+            )
+            self._status_seen_label.configure(
+                text=(
+                    f"{displayed:,} shown  \u00b7  "
+                    f"{seen:,} candidates evaluated"
+                )
+            )
+        else:
+            # Standard synchronous load — no banner needed.
+            self._status_banner.configure(text="", fg_color="transparent")
+            self._status_seen_label.configure(text="")
+
+
+    def _handle_save(self) -> None:
+        """Ask for a destination file and export the currently shown system."""
+        chosen = filedialog.asksaveasfilename(
+            parent=self.winfo_toplevel(),
+            title="Save Exam Schedule",
+            defaultextension=".txt",
+            initialfile="exam_schedules.txt",
+            filetypes=[("Text files", "*.txt"), ("All files", "*.*")],
+        )
+        result = self._export_presenter.export_current(chosen or None)
+
+        if result.success:
+            color = "#147A39"
+        elif "cancelled" in result.message.lower():
+            color = "#666666"
+        else:
+            color = "#B00020"
+        self._status_label.configure(text=result.message, text_color=color)
+
     def _refresh_metrics(self, view) -> None:
         """Update summary cards from the current system view."""
         exam_count = sum(len(section.exams) for section in view.sections)
@@ -366,11 +515,6 @@ class ScheduleNavigationScreen(ctk.CTkFrame):
         self._metric_labels["days"].configure(text=str(len(view.exams_by_iso_date)))
         self._metric_labels["sections"].configure(text=str(len(view.sections)))
         self._metric_labels["months"].configure(text=str(len(self.presenter.relevant_months())))
-
-    def _build_relevant_months_grid(self) -> None:
-        """Draw only months that contain exams in at least one system."""
-        for year, month in self.presenter.relevant_months():
-            self._build_month(year, month)
 
     def _build_month(self, year: int, month: int) -> None:
         """Create one compact month card."""
