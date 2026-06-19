@@ -6,7 +6,7 @@ from gui.uploadService import UploadMode, UploadResult
 from gui.uploadedDataExportService import ExportResult
 from gui.uploadedDataPresenter import UploadedDataMetadata, UploadedDataSnapshot
 
-from .gui_test_support import FakeLabel, load_screen_module
+from .gui_test_support import FakeLabel, load_screen_module, widgets_with_text
 
 
 def _snapshot(*, complete: bool = False) -> UploadedDataSnapshot:
@@ -264,6 +264,38 @@ def test_constructor_builds_three_required_upload_rows_and_preview() -> None:
     assert screen.ready_label.options["text"] == (
         "Load all required files to continue."
     )
+
+
+def test_constructor_includes_dark_mode_button() -> None:
+    module, fake_ctk = load_screen_module("fileUploadScreen.py")
+
+    service = MagicMock()
+    service.is_ready_for_scheduling.return_value = False
+    service.get_uploaded_data.return_value = MagicMock()
+
+    presenter = MagicMock()
+    presenter.refresh.return_value = _snapshot()
+
+    theme_text = {"value": "\u263e"}
+
+    def toggle_theme():
+        theme_text["value"] = "\u2600"
+
+    module.FileUploadScreen(
+        fake_ctk.CTkFrame(),
+        upload_service=service,
+        data_presenter=presenter,
+        export_service=MagicMock(),
+        on_theme_toggle=toggle_theme,
+        theme_button_text=lambda: theme_text["value"],
+    )
+
+    buttons = widgets_with_text(fake_ctk.CTkButton, "\u263e")
+    assert len(buttons) == 1
+
+    buttons[0].invoke()
+
+    assert buttons[0].options["text"] == "\u2600"
 
 
 def test_format_snapshot_lists_loaded_rows() -> None:

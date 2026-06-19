@@ -16,6 +16,13 @@ from fileReader.baseFileReader import FileReaderType
 from gui.services.uploadService import FileUploadService, UploadMode, UploadResult
 from gui.services.uploadedDataExportService import UploadedDataExportService, ExportResult
 from gui.presenters.uploadedDataPresenter import UploadedDataPresenter, UploadedDataSnapshot
+from gui.screens.themeToggle import (
+    THEME_BUTTON_WIDTH,
+    ThemeButtonText,
+    ThemeToggleCallback,
+    current_theme_button_text,
+    handle_theme_toggle,
+)
 
 
 #this class builds the file upload screen in the GUI.
@@ -35,6 +42,8 @@ class FileUploadScreen(ctk.CTkFrame):
         data_presenter: UploadedDataPresenter | None = None,
         export_service: UploadedDataExportService | None = None,
         on_next: Callable[[], None] | None = None,
+        on_theme_toggle: ThemeToggleCallback | None = None,
+        theme_button_text: ThemeButtonText = None,
     ) -> None:
         super().__init__(master, corner_radius=0)
         #the screen talks to this service instead of calling file readers directly
@@ -49,12 +58,15 @@ class FileUploadScreen(ctk.CTkFrame):
             uploaded_data=self.upload_service.get_uploaded_data(),
         )
         self._on_next = on_next
+        self._on_theme_toggle = on_theme_toggle
+        self._theme_button_text = theme_button_text
 
         #keep labels and paths by file type so each upload row updated independently and the export func know which data to use.
         self.status_labels: dict[FileReaderType, ctk.CTkLabel] = {}
         self.preview_metric_labels: dict[str, ctk.CTkLabel] = {}
         self.selected_paths: dict[FileReaderType, Path] = {}
         self._continue_button: ctk.CTkButton | None = None
+        self._theme_button: ctk.CTkButton | None = None
 
         self._build()
 
@@ -80,6 +92,21 @@ class FileUploadScreen(ctk.CTkFrame):
         header.grid_columnconfigure(0, weight=1)
         header.grid_columnconfigure(1, weight=0)
         header.grid_columnconfigure(2, weight=1)
+
+        if self._on_theme_toggle is not None:
+            # Button text tells the user which mode the click will open.
+            self._theme_button = ctk.CTkButton(
+                header,
+                text=current_theme_button_text(self._theme_button_text),
+                width=THEME_BUTTON_WIDTH,
+                fg_color="transparent",
+                border_width=1,
+                border_color=ghost_border_color,
+                text_color=ghost_text_color,
+                hover_color=("#DCE8FF", "#1E293B"),
+                command=self._handle_theme_toggle,
+            )
+            self._theme_button.grid(row=0, column=0, sticky="nw", pady=(2, 0))
 
         #brand frame keeps the SX logo near the app title.
         brand = ctk.CTkFrame(header, fg_color="transparent")
@@ -469,6 +496,14 @@ class FileUploadScreen(ctk.CTkFrame):
         #delegate validation and parsing to the service, then show the result.
         result = self.upload_service.upload(file_type, filepath, mode)
         self._display_result(result)
+
+    def _handle_theme_toggle(self) -> None:
+        """Switch between light and dark mode."""
+        handle_theme_toggle(
+            self._on_theme_toggle,
+            self._theme_button,
+            self._theme_button_text,
+        )
 
     def _display_result(self, result: UploadResult) -> None:
         #update only the row that belongs to the uploaded file type.

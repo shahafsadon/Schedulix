@@ -30,16 +30,14 @@ from scheduling.schedulingService import SchedulingService
 
 @dataclass(frozen=True)
 class GenerationResult:
-    """Display-ready outcome of a generation attempt.
-
-    The View shows `message` directly. On success `schedule_count` drives the
-    "X systems generated" text and whether navigation to the output screen is
-    offered; on failure `success` is False and `message` holds the reason.
-    """
+    """Display-ready outcome of a generation attempt."""
 
     success: bool
     message: str
     schedule_count: int = 0
+    pruned_candidates: int = 0
+    displayed_count: int = 0
+    partial: bool = False
 
 
 class SchedulingPresenter:
@@ -138,7 +136,21 @@ class SchedulingPresenter:
     # ------------------------------------------------------------------
 
     def generate(self) -> GenerationResult:
-        """Run scheduling on the cached data and report a display-ready result.
+        """Run scheduling on cached data and report a display-ready result."""
+        try:
+            outcome = self._service.run(self._cache)
+        except ValueError as error:
+            return GenerationResult(success=False, message=str(error))
+        except Exception as error:  # noqa: BLE001 - last-resort UI guard
+            return GenerationResult(
+                success=False,
+                message=(
+                    "Schedule generation failed unexpectedly: "
+                    f"{type(error).__name__}."
+                ),
+            )
+
+        return self._result_from_full_outcome(outcome)
 
         On success, a ``ProgressiveRankedSnapshot`` with ``COMPLETE`` state is
         built, the current ``self._ranking`` is applied to sort the schedules,
@@ -153,15 +165,22 @@ class SchedulingPresenter:
         rather than an exception, so the View can simply show the message.
         """
         try:
-            outcome = self._service.run(self._cache)
+            final_snapshot = self._service.run_progressive(
+                cache=self._cache,
+                options=options,
+                on_snapshot=on_snapshot,
+                cancellation_token=cancellation_token,
+            )
         except ValueError as error:
             # Expected, user-facing problem (e.g. a wizard step was skipped).
             return GenerationResult(success=False, message=str(error))
         except Exception as error:  # noqa: BLE001 - last-resort UI guard
             return GenerationResult(
                 success=False,
-                message=f"Schedule generation failed unexpectedly: "
-                        f"{type(error).__name__}.",
+                message=(
+                    "Schedule generation failed unexpectedly: "
+                    f"{type(error).__name__}."
+                ),
             )
 
         # A valid run that yields zero systems is not an error.
@@ -170,6 +189,13 @@ class SchedulingPresenter:
                 message = (
                     "No exam courses found for the selected programs. "
                     "Try selecting different programs."
+                )
+            elif outcome.any_constraint_enabled:
+                message = (
+                    "No valid exam systems satisfy the current selection "
+                    "with the active threshold constraints. Try relaxing a "
+                    "threshold constraint, excluding fewer dates, or changing "
+                    "programs."
                 )
             else:
                 message = (
@@ -180,6 +206,7 @@ class SchedulingPresenter:
                 success=True,
                 message=message,
                 schedule_count=0,
+                pruned_candidates=outcome.pruned_candidates,
             )
 
         # Build a COMPLETE snapshot and apply the active ranking before caching.
@@ -201,4 +228,56 @@ class SchedulingPresenter:
             success=True,
             message=f"{outcome.schedule_count} exam system(s) generated.",
             schedule_count=outcome.schedule_count,
+            displayed_count=len(outcome.ranked_schedules),
+        )
+
+    @staticmethod
+    def _result_from_progressive_snapshot(
+        snapshot: ProgressiveRankedSnapshot,
+    ) -> GenerationResult:
+        """Translate a terminal progressive snapshot to GUI-facing text."""
+        if snapshot.state == ProgressiveResultState.CANCELLED:
+            return GenerationResult(
+                success=False,
+                message=snapshot.message,
+                schedule_count=snapshot.counters.systems_seen,
+                pruned_candidates=snapshot.counters.pruned_candidates,
+                displayed_count=snapshot.counters.displayed_count,
+            )
+
+        if snapshot.state == ProgressiveResultState.FAILED:
+            return GenerationResult(
+                success=False,
+                message=snapshot.message,
+                schedule_count=snapshot.counters.systems_seen,
+                pruned_candidates=snapshot.counters.pruned_candidates,
+                displayed_count=snapshot.counters.displayed_count,
+            )
+
+        if snapshot.counters.systems_seen == 0:
+            if snapshot.relevant_course_count == 0:
+                message = (
+                    "No exam courses found for the selected programs. "
+                    "Try selecting different programs."
+                )
+            else:
+                message = (
+                    "No valid exam systems could be generated for the current "
+                    "selection. Try excluding fewer dates, relaxing threshold "
+                    "constraints, or changing programs."
+                )
+            return GenerationResult(
+                success=True,
+                message=message,
+                schedule_count=0,
+                pruned_candidates=snapshot.counters.pruned_candidates,
+                displayed_count=0,
+            )
+
+        return GenerationResult(
+            success=True,
+            message=snapshot.message,
+            schedule_count=snapshot.counters.systems_seen,
+            pruned_candidates=snapshot.counters.pruned_candidates,
+            displayed_count=snapshot.counters.displayed_count,
         )

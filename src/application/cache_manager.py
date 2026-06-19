@@ -15,13 +15,26 @@ consistent with the in-memory view.
 On initialisation the manager reloads any previously-saved state from the file,
 allowing the GUI to survive restarts without re-uploading datasets.
 
+Version history
+---------------
+v1 / v2  – courses, exam_periods, selected_programs, generated_schedules,
+            ranked_schedules.  Sentinel was the string ``"CacheManager_v1"``.
+
+v3 (SCRUM-144) – adds ``constraint_settings`` and ``ranking_settings`` to the
+            persisted state.  Smart invalidation rules now guarantee that
+            threshold changes wipe generated schedules while ranking-only
+            changes do not.  Old v2 pickle files are loaded gracefully: the
+            two new fields are injected with their defaults so no crash occurs.
+
 No existing Version 1.0 files are imported or modified by this module.
 """
 
 import pickle
 from pathlib import Path
 
+from constraint_settings import SchedulingConstraintSettings
 from models import Course, ExamPeriod
+from ranking_settings import RankedExamSystem, RankingSettings
 from scheduling.examScheduleGenerator import ExamSystem
 from scheduling.rankingSettings import RankingSettings
 
@@ -43,6 +56,13 @@ class _CacheState:
 
     Keeping the state in its own class means the pickle payload is self-
     contained and does not pull in any CacheManager behaviour.
+
+    v3 additions (SCRUM-144)
+    ------------------------
+    * ``constraint_settings`` – the active ``SchedulingConstraintSettings``.
+      Defaults to all-disabled via ``SchedulingConstraintSettings.default_configuration()``.
+    * ``ranking_settings``    – the active ``RankingSettings``.
+      Defaults to an empty priority list.
     """
 
     def __init__(self) -> None:
@@ -71,18 +91,36 @@ class CacheManager:
     * Store uploaded datasets (courses, exam periods / dates).
     * Store the user-selected study program numbers.
     * Store the generated exam schedules produced by the scheduling engine.
+    * Store the active ``SchedulingConstraintSettings`` and ``RankingSettings``.
     * Persist the complete state to ``internal_data.pkl`` after every update.
     * Reload state from ``internal_data.pkl`` on creation so data survives
       application restarts.
+
+    Smart cache invalidation (SCRUM-144)
+    -------------------------------------
+    * ``set_constraint_settings`` – stores new settings and **invalidates**
+      generated schedules and ranked schedules, because a threshold change
+      means previously-generated schedules are stale.
+    * ``set_ranking_settings``    – stores new settings and **invalidates only
+      ranked schedules**, because a ranking-order change does not affect
+      whether the generated systems themselves are valid.
+
+    Backward compatibility
+    ----------------------
+    Old v2 pickle files (sentinel ``"CacheManager_v1"``) are up-migrated on
+    load: missing v3 fields are injected with their defaults.  The sentinel is
+    updated to ``"CacheManager_v3"`` the next time any mutating operation
+    persists the state.
 
     Usage
     -----
     Instantiate once at the application entry point and pass the single
     instance to every presenter or screen that needs it::
 
-        cache = CacheManager()           # loads from disk if file exists
-        cache.set_courses(courses)       # persists immediately
-        cache.get_courses()              # returns the in-RAM list
+        cache = CacheManager()                    # loads from disk if file exists
+        cache.set_courses(courses)                # persists immediately
+        cache.set_constraint_settings(settings)   # also invalidates schedules
+        cache.get_courses()                       # returns the in-RAM list
 
     Design constraints
     ------------------
@@ -104,9 +142,12 @@ class CacheManager:
         Create the manager and reload any previously persisted state.
 
         If ``internal_data.pkl`` does not exist yet, all state fields start
-        as empty lists. If the file exists but is unreadable or was written
-        by an incompatible version, the manager silently starts with an empty
-        state (the damaged file is left untouched for manual inspection).
+        as empty/default values. If the file exists but is unreadable or was
+        written by an incompatible version, the manager silently starts with a
+        clean state (the damaged file is left untouched for manual inspection).
+
+        Old v2 files are up-migrated transparently; the application will not
+        crash when the two new v3 settings fields are absent in the pickle.
         """
         self._state: _CacheState = self._load_from_disk()
 
@@ -114,8 +155,11 @@ class CacheManager:
         """
         Attempt to deserialise state from the pickle file.
 
-        Returns a fresh _CacheState if the file does not exist or cannot be
-        read.
+        Handles four cases:
+        * File absent                → fresh _CacheState.
+        * File is a current v3 file → returned after shape-check.
+        * File is an old v2 file    → up-migrated with v3 defaults.
+        * Any other error           → fresh _CacheState (fail-safe).
         """
         pkl_path = self.__class__._PKL_PATH  # respects subclass overrides
 
@@ -125,15 +169,66 @@ class CacheManager:
         try:
             with pkl_path.open("rb") as fh:
                 loaded = pickle.load(fh)
-            # Validate that the payload was written by a compatible version.
-            if isinstance(loaded, _CacheState) and loaded.sentinel == _SENTINEL:
+
+            if not isinstance(loaded, _CacheState):
+                return _CacheState()
+
+            # Current v3 file.
+            if loaded.sentinel == _SENTINEL:
+                self._ensure_current_state_shape(loaded)
                 return loaded
+
+            # Old v2 file: sentinel is the legacy string.
+            if loaded.sentinel == _SENTINEL_V2:
+                self._migrate_v2_to_v3(loaded)
+                return loaded
+
         except Exception:
             # Covers PickleError, EOFError, AttributeError, and any other
-            # deserialisation problem. Fall back to clean state.
+            # deserialisation problem.  Fall back to a clean state.
             pass
 
         return _CacheState()
+
+    @staticmethod
+    def _ensure_current_state_shape(state: _CacheState) -> None:
+        """
+        Add fields introduced after older pickle files were written.
+
+        Pickle restores the saved instance attributes exactly, so an old cache
+        can be a valid _CacheState while still missing newer fields.  This
+        method is the definitive list of all backward-compatibility patches.
+        """
+        # ranked_schedules was added between the original sentinel and v3.
+        if not hasattr(state, "ranked_schedules"):
+            state.ranked_schedules = []
+        # v3 new fields — SCRUM-144
+        if not hasattr(state, "constraint_settings"):
+            state.constraint_settings = (
+                SchedulingConstraintSettings.default_configuration()
+            )
+        if not hasattr(state, "ranking_settings"):
+            state.ranking_settings = RankingSettings(priority_list=[])
+
+    @staticmethod
+    def _migrate_v2_to_v3(state: _CacheState) -> None:
+        """
+        Up-migrate a v2 ``_CacheState`` to the v3 schema in place.
+
+        Updates the sentinel string and injects any missing v3 fields with
+        their safe defaults.  The caller is responsible for persisting the
+        migrated state on the next write.
+        """
+        state.sentinel = _SENTINEL
+
+        if not hasattr(state, "ranked_schedules"):
+            state.ranked_schedules = []
+        if not hasattr(state, "constraint_settings"):
+            state.constraint_settings = (
+                SchedulingConstraintSettings.default_configuration()
+            )
+        if not hasattr(state, "ranking_settings"):
+            state.ranking_settings = RankingSettings(priority_list=[])
 
     def _persist(self) -> None:
         """
@@ -215,6 +310,9 @@ class CacheManager:
         """
         Replace the generated-schedules list and persist to disk.
 
+        Clears ranked schedules as a side effect because the new set of raw
+        systems has not yet been sorted by any ranking criteria.
+
         Parameters
         ----------
         schedules:
@@ -222,6 +320,7 @@ class CacheManager:
             engine after the user triggers generation.
         """
         self._state.generated_schedules = list(schedules)
+        self._state.ranked_schedules = []
         self._persist()
 
     def get_generated_schedules(self) -> list[ExamSystem]:
@@ -229,16 +328,111 @@ class CacheManager:
         return self._state.generated_schedules
 
     # ------------------------------------------------------------------
+    # Ranked schedules
+    # ------------------------------------------------------------------
+
+    def set_ranked_schedules(
+        self,
+        schedules: list[RankedExamSystem],
+    ) -> None:
+        """
+        Replace the ranked-schedules list and persist to disk.
+
+        Ranked schedules wrap the original generated ExamSystem objects with
+        cached metrics and the current display order.  They are intentionally
+        stored separately from generated_schedules so ranking-only changes do
+        not mutate the generator output.
+        """
+        self._state.ranked_schedules = list(schedules)
+        self._persist()
+
+    def get_ranked_schedules(self) -> list[RankedExamSystem]:
+        """Return cached ranked schedules (empty list if not calculated yet)."""
+        return self._state.ranked_schedules
+
+    # ------------------------------------------------------------------
+    # Constraint settings  (v3 — SCRUM-144)
+    # ------------------------------------------------------------------
+
+    def set_constraint_settings(
+        self,
+        settings: SchedulingConstraintSettings,
+    ) -> None:
+        """
+        Store new constraint settings and invalidate all derived schedule data.
+
+        **Smart invalidation rule:** a threshold change means the previously-
+        generated schedules were produced under different constraints and are
+        now stale.  Both ``generated_schedules`` and ``ranked_schedules`` are
+        cleared.
+
+        Parameters
+        ----------
+        settings:
+            The new ``SchedulingConstraintSettings`` to activate.
+        """
+        self._state.constraint_settings = settings
+        # Threshold change → stale generated schedules must be wiped.
+        self._state.generated_schedules = []
+        self._state.ranked_schedules = []
+        self._persist()
+
+    def get_constraint_settings(self) -> SchedulingConstraintSettings:
+        """
+        Return the active constraint settings.
+
+        Always returns a valid object: if no settings were ever stored (e.g.
+        after loading a v2 cache file), the all-disabled default configuration
+        is returned.
+        """
+        return self._state.constraint_settings
+
+    # ------------------------------------------------------------------
+    # Ranking settings  (v3 — SCRUM-144)
+    # ------------------------------------------------------------------
+
+    def set_ranking_settings(self, settings: RankingSettings) -> None:
+        """
+        Store new ranking settings and invalidate only the ranked schedules.
+
+        **Smart invalidation rule:** a ranking-order change does not affect
+        whether the generated ``ExamSystem`` objects themselves are valid.
+        Only the cached ranking result (``ranked_schedules``) is stale and
+        must be cleared so the next display pass re-sorts correctly.
+
+        Generated schedules are intentionally left untouched.
+
+        Parameters
+        ----------
+        settings:
+            The new ``RankingSettings`` (priority list) to activate.
+        """
+        self._state.ranking_settings = settings
+        # Ranking-only change → only the ranked view is stale.
+        self._state.ranked_schedules = []
+        self._persist()
+
+    def get_ranking_settings(self) -> RankingSettings:
+        """
+        Return the active ranking settings.
+
+        Always returns a valid object: if no settings were stored (e.g. after
+        loading a v2 cache file), an empty-priority-list ``RankingSettings``
+        is returned.
+        """
+        return self._state.ranking_settings
+
+    # ------------------------------------------------------------------
     # Lifecycle
     # ------------------------------------------------------------------
 
     def clear(self) -> None:
         """
-        Reset all state to empty and delete the persistence file.
+        Reset all state to defaults and delete the persistence file.
 
         Use this when the user starts a new session or when a test needs to
         guarantee a clean slate. After this call all getters return empty
-        lists and no pickle file exists on disk.
+        lists / default settings and no pickle file exists on disk.
         """
         self._state = _CacheState()
         pkl_path = self.__class__._PKL_PATH
@@ -309,6 +503,7 @@ class CacheManager:
             The additional ``ExamSystem`` objects to append.
         """
         self._state.generated_schedules.extend(schedules)
+        self._state.ranked_schedules = []
         self._persist()
 
     # ------------------------------------------------------------------
@@ -350,11 +545,24 @@ class CacheManager:
 
     def invalidate_generated_schedules(self) -> None:
         """
-        Clear only the generated-schedules field and persist the updated state.
+        Clear generated schedules and ranked schedules, then persist.
 
-        All other fields are left untouched.
+        Ranked schedules are always invalidated together with generated
+        schedules because they are derived data: once the source list is
+        empty, the previously-sorted view is meaningless.
         """
         self._state.generated_schedules = []
+        self._state.ranked_schedules = []
+        self._persist()
+
+    def invalidate_ranked_schedules(self) -> None:
+        """
+        Clear only the ranked-schedules field and persist the updated state.
+
+        This is useful when ranking preferences change while generated systems
+        remain valid but the previous display order should be discarded.
+        """
+        self._state.ranked_schedules = []
         self._persist()
 
     # ------------------------------------------------------------------

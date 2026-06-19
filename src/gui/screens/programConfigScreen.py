@@ -27,6 +27,13 @@ except ModuleNotFoundError as error:
 
 from gui.presenters.programSelectionPresenter import ProgramSelectionPresenter
 from gui.presenters.programDetailsPresenter import ProgramDetailsPresenter, ProgramDetails
+from gui.screens.themeToggle import (
+    THEME_BUTTON_WIDTH,
+    ThemeButtonText,
+    ThemeToggleCallback,
+    current_theme_button_text,
+    handle_theme_toggle,
+)
 
 
 _PAGE_BG = ("#F3F6FB", "#0B1220")
@@ -49,6 +56,8 @@ class ProgramConfigScreen(ctk.CTkFrame):
         details_presenter: ProgramDetailsPresenter,
         on_next: Callable[[], None] | None = None,
         on_back: Callable[[], None] | None = None,
+        on_theme_toggle: ThemeToggleCallback | None = None,
+        theme_button_text: ThemeButtonText = None,
     ) -> None:
         """Create the program configuration screen.
 
@@ -58,6 +67,8 @@ class ProgramConfigScreen(ctk.CTkFrame):
             details_presenter: supplies the per-program course details.
             on_next: optional callback fired when the user confirms the selection.
             on_back: optional callback fired when the user goes back a step.
+            on_theme_toggle: optional callback that switches app colors.
+            theme_button_text: text or provider for the theme button.
         """
         super().__init__(master, corner_radius=0, fg_color=_PAGE_BG)
         # Two presenters, two responsibilities: selecting vs inspecting.
@@ -67,6 +78,9 @@ class ProgramConfigScreen(ctk.CTkFrame):
         # standalone; the wizard shell wires them in the full application.
         self._on_next = on_next
         self._on_back = on_back
+        self._on_theme_toggle = on_theme_toggle
+        self._theme_button_text = theme_button_text
+        self._theme_button: ctk.CTkButton | None = None
 
         # Per-program widget registries, keyed by program number, so each row
         # can be updated independently (revert a checkbox, expand one row, ...).
@@ -88,6 +102,7 @@ class ProgramConfigScreen(ctk.CTkFrame):
         header = ctk.CTkFrame(self, fg_color="transparent")
         header.grid(row=0, column=0, sticky="ew", padx=24, pady=(18, 12))
         header.grid_columnconfigure(0, weight=1)
+        header.grid_columnconfigure(2, weight=0)
 
         ctk.CTkLabel(
             header,
@@ -114,6 +129,21 @@ class ProgramConfigScreen(ctk.CTkFrame):
             pady=5,
         )
         self._selection_badge.grid(row=0, column=1, sticky="ne", rowspan=2)
+
+        if self._on_theme_toggle is not None:
+            # Button text tells the user which mode the click will open.
+            self._theme_button = ctk.CTkButton(
+                header,
+                text=current_theme_button_text(self._theme_button_text),
+                width=THEME_BUTTON_WIDTH,
+                fg_color="transparent",
+                border_width=1,
+                border_color=_BORDER,
+                text_color=(_PRIMARY, "#93C5FD"),
+                hover_color=("#DCE8FF", "#1E293B"),
+                command=self._handle_theme_toggle,
+            )
+            self._theme_button.grid(row=0, column=2, sticky="ne", padx=(10, 0))
 
         # Every program row lives in one scrollable column so expanding a row
         # pushes the rows below it downward, as described in section 4.2.
@@ -264,6 +294,14 @@ class ProgramConfigScreen(ctk.CTkFrame):
             return
         # Accepted: refresh the counter and the Next button's enabled state.
         self._refresh_status()
+
+    def _handle_theme_toggle(self) -> None:
+        """Switch between light and dark mode."""
+        handle_theme_toggle(
+            self._on_theme_toggle,
+            self._theme_button,
+            self._theme_button_text,
+        )
 
     def _on_toggle(self, program_number: str) -> None:
         """Expand or collapse a program row in place.

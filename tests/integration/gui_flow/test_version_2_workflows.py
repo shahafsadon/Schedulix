@@ -15,12 +15,16 @@ from unittest.mock import MagicMock, patch
 from gui.presenters.uploadedDataPresenter import UploadedDataSnapshot, UploadedDataMetadata
 
 from application.cache_manager import CacheManager
+from constraint_settings import ThresholdConstraintType
 from fileReader.baseFileReader import FileReaderType
 from gui.presenters.programDetailsPresenter import ProgramDetailsPresenter
 from gui.presenters.programSelectionPresenter import ProgramSelectionPresenter
+from gui.presenters.scheduleNavigationPresenter import ScheduleNavigationPresenter
 from gui.presenters.schedulingPresenter import SchedulingPresenter
+from gui.presenters.schedulingSettingsPresenter import SchedulingSettingsPresenter
 from gui.services.uploadService import FileUploadService
 from output.outputWriter import OutputWriter
+from ranking_settings import RankingCriterion, RankingPreference, RankingSettings
 from gui.presenters.uploadedDataPresenter import UploadedDataSnapshot, UploadedDataMetadata
 
 
@@ -260,6 +264,58 @@ def test_generation_workflow_connects_upload_selection_cache_and_scheduler(
     assert details.course_count > 0
     assert details.groups
     assert schedule_count == len(cache.get_generated_schedules())
+
+
+def test_part3_gui_flow_saves_settings_generates_and_reranks(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """Part 3 settings and ranking work through the GUI presenter boundary."""
+    service = _upload_examples()
+    cache = _new_cache(tmp_path, monkeypatch)
+    _store_uploaded_data(cache, service)
+
+    settings_presenter = SchedulingSettingsPresenter(cache)
+    settings_presenter.update_enabled(
+        ThresholdConstraintType.max_exams_per_day,
+        True,
+    )
+    settings_presenter.update_k(
+        ThresholdConstraintType.max_exams_per_day,
+        "1",
+    )
+
+    save_result = settings_presenter.save()
+
+    assert save_result.success
+    assert cache.get_constraint_settings().constraints[
+        ThresholdConstraintType.max_exams_per_day
+    ].enabled
+
+    schedule_count = _select_programs_and_generate(cache)
+    generated_before_ranking = list(cache.get_generated_schedules())
+
+    assert schedule_count > 0
+    assert cache.get_ranked_schedules()
+
+    navigation = ScheduleNavigationPresenter(
+        cache.get_ranked_schedules()
+    )
+
+    ranking_result = navigation.apply_ranking(
+        RankingSettings(
+            [
+                RankingPreference(
+                    RankingCriterion.min_mandatory_gap,
+                )
+            ]
+        )
+    )
+
+    assert ranking_result.success
+    assert ranking_result.ranked_count == schedule_count
+    assert ranking_result.ranked_schedules is not None
+    assert cache.get_generated_schedules() == generated_before_ranking
 
 
 def test_export_workflow_writes_the_generated_cache_to_a_readable_file(

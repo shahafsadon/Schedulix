@@ -154,3 +154,27 @@ def test_constructor_includes_back_button_when_callback_is_supplied() -> None:
     back_buttons[0].invoke()
 
     on_back.assert_called_once()
+
+
+def test_constructor_includes_dark_mode_button() -> None:
+    module, fake_ctk = load_screen_module("programConfigScreen.py")
+
+    theme_text = {"value": "\u263e"}
+
+    def toggle_theme():
+        theme_text["value"] = "\u2600"
+
+    module.ProgramConfigScreen(
+        fake_ctk.CTkFrame(),
+        _selection(["83101"]),
+        MagicMock(),
+        on_theme_toggle=toggle_theme,
+        theme_button_text=lambda: theme_text["value"],
+    )
+
+    buttons = widgets_with_text(fake_ctk.CTkButton, "\u263e")
+    assert len(buttons) == 1
+
+    buttons[0].invoke()
+
+    assert buttons[0].options["text"] == "\u2600"
