@@ -8,6 +8,7 @@ except ModuleNotFoundError as error:
         "Install it with: .venv\\Scripts\\python.exe -m pip install -r requirements.txt"
     ) from error
 
+from application.async_runner import AsyncScheduleRunner
 from application.cache_manager import CacheManager
 from gui.presenters.dateManagementPresenter import DateManagementPresenter
 from gui.screens.dateManagementScreen import DateManagementScreen
@@ -47,6 +48,9 @@ class SchedulixWorkflow(ctk.CTkFrame):
             cache_manager=self.cache,
             uploaded_data=self.upload_service.get_uploaded_data(),
         )
+        # The runner is shared: DateManagementScreen drives it for generation;
+        # ScheduleNavigationScreen reads is_running to gate threshold controls.
+        self._runner = AsyncScheduleRunner()
         self._screen: ctk.CTkFrame | None = None
         self._program_selection: ProgramSelectionPresenter | None = None
 
@@ -132,6 +136,7 @@ class SchedulixWorkflow(ctk.CTkFrame):
                 presenter=presenters[0],
                 period_presenters=presenters,
                 scheduling_presenter=SchedulingPresenter(self.cache),
+                runner=self._runner,
                 on_back=self.show_program_config,
                 on_generation_success=self.show_output_navigation,
             )
@@ -166,6 +171,7 @@ class SchedulixWorkflow(ctk.CTkFrame):
                 presenter=navigation_presenter,
                 export_presenter=export_presenter,
                 on_back=self.show_date_management,
+                runner=self._runner,
             )
         )
 

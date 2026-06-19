@@ -18,8 +18,10 @@ except ModuleNotFoundError as error:
         "Install it with: .venv\\Scripts\\python.exe -m pip install -r requirements.txt"
     ) from error
 
+from application.async_runner import AsyncScheduleRunner
 from gui.presenters.exportPresenter import ExportPresenter
 from gui.presenters.scheduleNavigationPresenter import ExamRow, ScheduleNavigationPresenter
+from scheduling.rankingSettings import RankingCriterion, RankingSettings
 
 
 _MONTH_NAMES = [
@@ -43,9 +45,18 @@ _SELECTED_DAY_COLOR = ("#2563EB", "#60A5FA")
 _SELECTED_DAY_TEXT = ("#FFFFFF", "#0B1220")
 _REGULAR_DAY_TEXT = ("#A8B0BA", "#64748B")
 
+# Human-readable labels for each RankingCriterion, used by combo-boxes.
+_CRITERION_LABELS: dict[str, RankingCriterion | None] = {
+    "(none)": None,
+    "Fewer exam days": RankingCriterion.FEWER_EXAM_DAYS,
+    "More date spread": RankingCriterion.MORE_SPREAD,
+    "Earlier start date": RankingCriterion.EARLIER_START,
+}
+_CRITERION_KEYS: list[str] = list(_CRITERION_LABELS.keys())
+
 
 class ScheduleNavigationScreen(ctk.CTkFrame):
-    """Review generated exam systems with calendar, details, and export."""
+    """Review generated exam systems with calendar, details, export, and ranking."""
 
     def __init__(
         self,
@@ -53,17 +64,26 @@ class ScheduleNavigationScreen(ctk.CTkFrame):
         presenter: ScheduleNavigationPresenter,
         export_presenter: ExportPresenter | None = None,
         on_back: Callable[[], None] | None = None,
+        runner: AsyncScheduleRunner | None = None,
     ) -> None:
         super().__init__(master, corner_radius=0, fg_color=_PAGE_BG)
         self.presenter = presenter
         self._export_presenter = export_presenter
         self._on_back = on_back
+        # Runner is optional; when supplied, threshold controls are disabled
+        # while generation is active so the user cannot change constraints
+        # mid-run (ranking priorities remain editable at all times).
+        self._runner: AsyncScheduleRunner | None = runner
 
         self._exam_cells: dict[str, ctk.CTkButton] = {}
         self._selected_iso_date: str | None = None
         self._current_exams_by_iso_date: dict[str, list[ExamRow]] = {}
         self._grid_built = False
         self._metric_labels: dict[str, ctk.CTkLabel] = {}
+        # Ranking combo-box variables (StringVar per slot).
+        self._ranking_vars: list[ctk.StringVar] = []
+        # Threshold-constraint widgets that must be disabled during generation.
+        self._threshold_widgets: list[ctk.CTkBaseClass] = []
 
         self._build()
         self._refresh()
@@ -76,6 +96,7 @@ class ScheduleNavigationScreen(ctk.CTkFrame):
         self._build_header()
         self._build_metrics()
         self._build_main_area()
+        self._build_ranking_panel()
         self._build_footer()
 
     def _build_header(self) -> None:
@@ -283,7 +304,7 @@ class ScheduleNavigationScreen(ctk.CTkFrame):
     def _build_footer(self) -> None:
         """Build a small export/status footer."""
         footer = ctk.CTkFrame(self, fg_color="transparent")
-        footer.grid(row=3, column=0, sticky="ew", padx=24, pady=(0, 16))
+        footer.grid(row=4, column=0, sticky="ew", padx=24, pady=(0, 16))
         footer.grid_columnconfigure(0, weight=1)
 
         self._status_label = ctk.CTkLabel(
@@ -293,6 +314,208 @@ class ScheduleNavigationScreen(ctk.CTkFrame):
             anchor="w",
         )
         self._status_label.grid(row=0, column=0, sticky="ew")
+
+    # ------------------------------------------------------------------
+    # Ranking panel
+    # ------------------------------------------------------------------
+
+    def _build_ranking_panel(self) -> None:
+        """Build the Rankings & Filters sidebar below the main area.
+
+        Layout
+        ------
+        The panel occupies row=3, full width, below the main calendar/details
+        row. It is divided into two sections side by side:
+
+        1. **Ranking Priorities** (left) — three priority combo-boxes, each
+           offering the available ``RankingCriterion`` options plus "(none)".
+           These are **always enabled**, even while generation is active.
+
+        2. **Threshold Constraints** (right) — placeholder area for future
+           min/max constraints. These controls are **disabled** while the
+           background runner is active and re-enabled once it goes idle.
+        """
+        panel = ctk.CTkFrame(
+            self,
+            fg_color=_SURFACE,
+            border_width=1,
+            border_color=_BORDER,
+            corner_radius=8,
+        )
+        panel.grid(row=3, column=0, sticky="ew", padx=24, pady=(0, 8))
+        panel.grid_columnconfigure(0, weight=1)
+        panel.grid_columnconfigure(1, weight=1)
+
+        # ---- Left: Ranking Priorities ----
+        rank_frame = ctk.CTkFrame(panel, fg_color="transparent")
+        rank_frame.grid(row=0, column=0, sticky="nsew", padx=(16, 8), pady=(14, 14))
+
+        ctk.CTkLabel(
+            rank_frame,
+            text="\u2630  Ranking Priorities",
+            font=("Segoe UI", 13, "bold"),
+            text_color=_TEXT,
+            anchor="w",
+        ).grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, 6))
+
+        ctk.CTkLabel(
+            rank_frame,
+            text="Sort generated systems by (highest priority first). "
+                 "Changes apply instantly without restarting generation.",
+            font=("Segoe UI", 10),
+            text_color=_MUTED,
+            anchor="w",
+            wraplength=340,
+            justify="left",
+        ).grid(row=1, column=0, columnspan=2, sticky="w", pady=(0, 10))
+
+        priority_labels = ["1st priority", "2nd priority", "3rd priority"]
+        for slot_index, slot_label in enumerate(priority_labels):
+            ctk.CTkLabel(
+                rank_frame,
+                text=slot_label,
+                font=("Segoe UI", 11),
+                text_color=_MUTED,
+                anchor="w",
+            ).grid(row=2 + slot_index * 2, column=0, sticky="w", pady=(0, 2))
+
+            var = ctk.StringVar(value=_CRITERION_KEYS[0])  # default: "(none)"
+            self._ranking_vars.append(var)
+
+            combo = ctk.CTkOptionMenu(
+                rank_frame,
+                variable=var,
+                values=_CRITERION_KEYS,
+                width=220,
+                fg_color=_PRIMARY,
+                button_color="#1E40AF",
+                button_hover_color=_PRIMARY_HOVER,
+                # Each change immediately re-ranks the buffer.
+                command=lambda _val, _idx=slot_index: self._handle_ranking_change(),
+            )
+            combo.grid(row=3 + slot_index * 2, column=0, sticky="w", pady=(0, 8))
+
+        # ---- Right: Threshold Constraints ----
+        thresh_frame = ctk.CTkFrame(
+            panel,
+            fg_color=_SUBTLE_SURFACE,
+            border_width=1,
+            border_color=_BORDER,
+            corner_radius=8,
+        )
+        thresh_frame.grid(row=0, column=1, sticky="nsew", padx=(8, 16), pady=(14, 14))
+        thresh_frame.grid_columnconfigure(0, weight=1)
+
+        ctk.CTkLabel(
+            thresh_frame,
+            text="\u26a0\ufe0f  Threshold Constraints",
+            font=("Segoe UI", 13, "bold"),
+            text_color=_TEXT,
+            anchor="w",
+        ).grid(row=0, column=0, sticky="w", padx=14, pady=(12, 4))
+
+        self._threshold_status_label = ctk.CTkLabel(
+            thresh_frame,
+            text="Threshold controls are disabled during active generation.",
+            font=("Segoe UI", 10),
+            text_color=_MUTED,
+            anchor="w",
+            wraplength=280,
+            justify="left",
+        )
+        self._threshold_status_label.grid(row=1, column=0, sticky="w", padx=14, pady=(0, 6))
+
+        # Max exam days constraint
+        ctk.CTkLabel(
+            thresh_frame,
+            text="Max exam days",
+            font=("Segoe UI", 11),
+            text_color=_MUTED,
+            anchor="w",
+        ).grid(row=2, column=0, sticky="w", padx=14, pady=(4, 2))
+        self._max_exam_days_entry = ctk.CTkEntry(
+            thresh_frame,
+            placeholder_text="e.g. 20",
+            width=120,
+            state="disabled",
+        )
+        self._max_exam_days_entry.grid(row=3, column=0, sticky="w", padx=14, pady=(0, 8))
+        self._threshold_widgets.append(self._max_exam_days_entry)
+
+        # Min date spread constraint
+        ctk.CTkLabel(
+            thresh_frame,
+            text="Min date spread (days)",
+            font=("Segoe UI", 11),
+            text_color=_MUTED,
+            anchor="w",
+        ).grid(row=4, column=0, sticky="w", padx=14, pady=(4, 2))
+        self._min_spread_entry = ctk.CTkEntry(
+            thresh_frame,
+            placeholder_text="e.g. 30",
+            width=120,
+            state="disabled",
+        )
+        self._min_spread_entry.grid(row=5, column=0, sticky="w", padx=14, pady=(0, 12))
+        self._threshold_widgets.append(self._min_spread_entry)
+
+        # Perform an immediate state sync so the controls reflect
+        # whether the runner is already active when the screen opens.
+        self._refresh_threshold_state()
+
+    # ------------------------------------------------------------------
+    # Ranking handler
+    # ------------------------------------------------------------------
+
+    def _handle_ranking_change(self) -> None:
+        """Read ranking combo-boxes, rebuild RankingSettings, re-rank buffer.
+
+        Called from any combo-box ``command`` callback (always on the Tkinter
+        main thread).  The following cleaning steps are applied to the raw
+        combo-box values before forwarding to the presenter:
+
+        * Blank / "(none)" entries are mapped to ``None`` and skipped.
+        * Duplicate criteria are removed (first occurrence wins) by
+          ``RankingSettings.build()``.
+        * The resulting ``RankingSettings`` is applied immediately;
+          no generation restart occurs.
+        """
+        raw_criteria: list[RankingCriterion | None] = [
+            _CRITERION_LABELS.get(var.get())  # None for "(none)" entries
+            for var in self._ranking_vars
+        ]
+        settings = RankingSettings.build(
+            [c for c in raw_criteria if c is not None]
+        )
+        self.presenter.apply_ranking(settings)
+        self._refresh()
+
+    # ------------------------------------------------------------------
+    # Threshold state management
+    # ------------------------------------------------------------------
+
+    def _refresh_threshold_state(self) -> None:
+        """Enable or disable threshold controls based on runner activity.
+
+        Threshold constraints must not be changed while the background
+        worker is active because the complete schedule set is not yet
+        available.  Ranking priorities, by contrast, operate on whatever
+        is already in the buffer and are always left enabled.
+
+        If no runner was supplied, the controls are always enabled.
+        """
+        generation_active = (
+            self._runner is not None and self._runner.is_running
+        )
+        state = "disabled" if generation_active else "normal"
+        hint = (
+            "Threshold controls are disabled during active generation."
+            if generation_active
+            else "Set optional constraints to filter displayed systems."
+        )
+        self._threshold_status_label.configure(text=hint)
+        for widget in self._threshold_widgets:
+            widget.configure(state=state)
 
     def _handle_next(self) -> None:
         """Advance to the next system and repaint the review."""
@@ -325,6 +548,9 @@ class ScheduleNavigationScreen(ctk.CTkFrame):
 
     def _refresh(self) -> None:
         """Refresh counter, metrics, calendar highlights, and detail panes."""
+        # Always sync threshold controls with the runner's live state.
+        self._refresh_threshold_state()
+
         view = self.presenter.current_view()
         if view is None:
             self._counter_label.configure(text="No schedules to display.")

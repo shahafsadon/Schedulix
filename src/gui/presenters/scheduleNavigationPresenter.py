@@ -15,6 +15,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from scheduling.examScheduleGenerator import ExamSystem
+from scheduling.rankingSettings import RankingSettings
 
 # Stable display order for semesters and moedim, matching the Version 1.0 output
 # writer so the GUI shows systems in the same order as the exported file.
@@ -96,6 +97,46 @@ class ScheduleNavigationPresenter:
         self._schedules = schedules
         # Start on the first system; stays at 0 when there are no systems.
         self._index = 0
+        # Active ranking; default is no-op (preserve generation order).
+        self._ranking_settings: RankingSettings = RankingSettings.default()
+
+    # ------------------------------------------------------------------
+    # Ranking — safe to call from the Tkinter main thread at any time
+    # ------------------------------------------------------------------
+
+    def apply_ranking(self, settings: RankingSettings) -> None:
+        """Re-rank the current buffer and reset the display index to 0.
+
+        This method is the *only* entry-point for changing the ranking order.
+        It must always be called from the Tkinter main thread (via a UI event
+        callback) so no additional locking is required.
+
+        Behaviour
+        ---------
+        * ``settings.is_noop()`` — the buffer is restored to its *current*
+          ordering unchanged; only the index is reset.
+        * Non-empty criteria — the buffer is sorted in-place using the
+          composite sort key defined by ``settings.sort_key``.
+        * The navigation index is always reset to 0 so the view shows the
+          top-ranked system immediately after the change.
+
+        Generation is **never** restarted or interrupted.
+
+        Args:
+            settings: the new ranking specification to apply.
+        """
+        self._ranking_settings = settings
+        if not settings.is_noop():
+            self._schedules = sorted(self._schedules, key=settings.sort_key)
+        self._index = 0
+
+    def current_ranking(self) -> RankingSettings:
+        """Return the currently active ranking settings."""
+        return self._ranking_settings
+
+    # ------------------------------------------------------------------
+    # Navigation queries
+    # ------------------------------------------------------------------
 
     def has_schedules(self) -> bool:
         """Return True when there is at least one system to display."""
