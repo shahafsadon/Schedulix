@@ -13,8 +13,10 @@ directly. It does not generate schedules and does not write files.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Callable
 
 from scheduling.examScheduleGenerator import ExamSystem
+from scheduling.rankingSettings import RankingSettings
 
 # Stable display order for semesters and moedim, matching the Version 1.0 output
 # writer so the GUI shows systems in the same order as the exported file.
@@ -86,16 +88,69 @@ _DATE_FORMAT = "%d-%m-%Y"
 class ScheduleNavigationPresenter:
     """Owns the current-system index and builds display-ready system views."""
 
-    def __init__(self, schedules: list[ExamSystem]) -> None:
+    def __init__(
+        self,
+        schedules: list[ExamSystem],
+        initial_ranking: RankingSettings | None = None,
+        on_ranking_changed: Callable[[RankingSettings], None] | None = None,
+    ) -> None:
         """Create the presenter over the list of generated exam systems.
 
         Args:
             schedules: the exam systems produced by SCRUM-125 (typically read
                 from the cache via get_generated_schedules()). May be empty.
+            initial_ranking: the ``RankingSettings`` to initialise the display
+                order with.  Defaults to the no-op (generation order).
+            on_ranking_changed: optional callback fired whenever
+                ``apply_ranking()`` changes the active ranking.  Use this to
+                let the orchestration layer (``SchedulingPresenter``) persist
+                the new order to the cache without coupling this class to any
+                cache or service.
         """
         self._schedules = schedules
         # Start on the first system; stays at 0 when there are no systems.
         self._index = 0
+        # Active ranking — defaults to no-op (preserve generation order).
+        self._ranking_settings: RankingSettings = (
+            initial_ranking if initial_ranking is not None else RankingSettings.default()
+        )
+        self._on_ranking_changed = on_ranking_changed
+
+    # ------------------------------------------------------------------
+    # Ranking — safe to call from the Tkinter main thread at any time
+    # ------------------------------------------------------------------
+
+    def apply_ranking(self, settings: RankingSettings) -> None:
+        """Re-rank the current buffer, reset the index, and notify the orchestrator.
+
+        This is the entry-point for any ranking change originating in the UI.
+        It must always be called from the Tkinter main thread (via a UI event
+        callback) so no additional locking is required.
+
+        After sorting the in-memory buffer it fires ``on_ranking_changed`` (if
+        one was supplied at construction) so the orchestration layer can
+        persist the new ranking to the cache without this class knowing about
+        ``CacheManager`` or ``SchedulingPresenter``.
+
+        Generation is **never** restarted or interrupted.
+
+        Args:
+            settings: the new ranking specification to apply.
+        """
+        self._ranking_settings = settings
+        if not settings.is_noop():
+            self._schedules = sorted(self._schedules, key=settings.sort_key)
+        self._index = 0
+        if self._on_ranking_changed is not None:
+            self._on_ranking_changed(settings)
+
+    def current_ranking(self) -> RankingSettings:
+        """Return the currently active ranking settings."""
+        return self._ranking_settings
+
+    # ------------------------------------------------------------------
+    # Navigation queries
+    # ------------------------------------------------------------------
 
     def has_schedules(self) -> bool:
         """Return True when there is at least one system to display."""

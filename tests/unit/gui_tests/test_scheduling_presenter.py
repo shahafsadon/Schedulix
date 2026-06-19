@@ -7,6 +7,7 @@ isolation from the real scheduling engine.
 import sys
 import unittest
 from pathlib import Path
+from unittest.mock import MagicMock
 
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -14,6 +15,7 @@ SRC = ROOT / "src"
 
 sys.path.insert(0, str(SRC))
 
+from application.cache_manager import CacheManager
 from gui.presenters.schedulingPresenter import SchedulingPresenter
 from scheduling.schedulingService import SchedulingOutcome
 
@@ -46,7 +48,10 @@ class SchedulingPresenterTests(unittest.TestCase):
                 schedules=[object()] * 5,
             )
         )
-        presenter = SchedulingPresenter(cache=object(), service=service)
+        # Use MagicMock so generate() can call set_generated_schedules() /
+        # set_ranking_settings() without AttributeError.
+        cache = MagicMock(spec=CacheManager)
+        presenter = SchedulingPresenter(cache=cache, service=service)
         result = presenter.generate()
         self.assertTrue(result.success)
         self.assertEqual(result.schedule_count, 5)

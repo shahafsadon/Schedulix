@@ -23,6 +23,7 @@ from pathlib import Path
 
 from models import Course, ExamPeriod
 from scheduling.examScheduleGenerator import ExamSystem
+from scheduling.rankingSettings import RankingSettings
 
 
 # ---------------------------------------------------------------------------
@@ -31,7 +32,9 @@ from scheduling.examScheduleGenerator import ExamSystem
 
 # _SENTINEL is stored inside the pickle so we can detect a corrupted or
 # incompatible file and fall back to a clean state gracefully.
-_SENTINEL = "CacheManager_v1"
+# Bump the version string whenever _CacheState gains or loses a field so that
+# stale pickle files are discarded rather than causing AttributeError crashes.
+_SENTINEL = "CacheManager_v2"
 
 
 class _CacheState:
@@ -48,6 +51,10 @@ class _CacheState:
         self.exam_periods: list[ExamPeriod] = []
         self.selected_programs: list[str] = []
         self.generated_schedules: list[ExamSystem] = []
+        # The RankingSettings that were applied when the schedules were last
+        # persisted.  Defaults to the no-op (generation order) so that a
+        # fresh session presents schedules in the order they were produced.
+        self.ranking_settings: RankingSettings = RankingSettings.default()
 
 
 # ---------------------------------------------------------------------------
@@ -348,4 +355,43 @@ class CacheManager:
         All other fields are left untouched.
         """
         self._state.generated_schedules = []
+        self._persist()
+
+    # ------------------------------------------------------------------
+    # Ranking settings
+    # ------------------------------------------------------------------
+
+    def set_ranking_settings(self, settings: RankingSettings) -> None:
+        """
+        Persist the ``RankingSettings`` used for the current schedule list.
+
+        This should only be called with a ``COMPLETE`` snapshot so that the
+        on-disk state is always consistent with the persisted schedule list.
+
+        Parameters
+        ----------
+        settings:
+            The ranking specification that was applied when the schedules
+            were last sorted and written to the cache.
+        """
+        self._state.ranking_settings = settings
+        self._persist()
+
+    def get_ranking_settings(self) -> RankingSettings:
+        """Return the ranking settings stored alongside the schedule list.
+
+        Returns ``RankingSettings.default()`` (no-op) when no settings have
+        been saved yet, matching the convention used by ``_CacheState``.
+        """
+        return self._state.ranking_settings
+
+    def invalidate_ranking_settings(self) -> None:
+        """
+        Reset ranking settings to the no-op default and persist.
+
+        Call this when the schedule list is invalidated (e.g. because
+        threshold constraints changed) so that the cache does not hold a
+        ranking that no longer corresponds to any stored schedules.
+        """
+        self._state.ranking_settings = RankingSettings.default()
         self._persist()

@@ -1,21 +1,30 @@
 """Presenter for triggering schedule generation (SCRUM-125).
 
-This presenter sits between the "Schedule" action in the GUI and the
-SchedulingService. Following the MVP pattern it contains no customTkinter code:
-the View calls generate() when the user clicks the button, and the presenter
-returns a small, display-ready result (or an error message) for the View to show.
+After SCRUM-184 this presenter also acts as the orchestration hub for
+smart invalidation and cache persistence:
 
-The presenter is intentionally thin. The real work — filtering courses and
-generating exam systems from the cached data — lives in SchedulingService, which
-reuses the Version 1.0 engine. Keeping that logic out of the presenter means it
-can be swapped or run on a background thread later (SCRUM-115) without touching
-this class.
+* ``generate()`` — runs the generation engine and, on success, writes a
+  COMPLETE ``ProgressiveRankedSnapshot`` to the cache (schedules + ranking).
+  Only COMPLETE snapshots reach the cache; PARTIAL states stay in-memory.
+
+* ``rerank_cached()`` — re-sorts the already-cached schedule list using a
+  new ``RankingSettings`` and re-saves it without touching the engine.
+  This is the "ranking-only change" fast path: no regeneration required.
+
+* ``invalidate_for_threshold_change()`` — clears the schedule cache and
+  resets the ranking so that the next ``generate()`` call starts fresh.
+  This is the "threshold constraint change" slow path.
+
+Following the MVP pattern this class contains no customTkinter code.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Callable
 
 from application.cache_manager import CacheManager
+from scheduling.progressiveSnapshot import ProgressiveRankedSnapshot, SnapshotState
+from scheduling.rankingSettings import RankingSettings
 from scheduling.schedulingService import SchedulingService
 
 
@@ -34,12 +43,19 @@ class GenerationResult:
 
 
 class SchedulingPresenter:
-    """Drives the schedule-generation step of the wizard."""
+    """Drives the schedule-generation step of the wizard.
+
+    This presenter is the single point of truth for schedule caching.  All
+    writes to ``cache.set_generated_schedules()`` and
+    ``cache.set_ranking_settings()`` go through this class so the PARTIAL /
+    COMPLETE invariant is enforced in one place.
+    """
 
     def __init__(
         self,
         cache: CacheManager,
         service: SchedulingService | None = None,
+        initial_ranking: RankingSettings | None = None,
     ) -> None:
         """Create the presenter with the shared cache and a scheduling service.
 
@@ -48,13 +64,89 @@ class SchedulingPresenter:
                 and receiving the generated schedules (Dependency Injection).
             service: the scheduling service to run; a default is created when
                 none is supplied, while tests can inject a fake.
+            initial_ranking: the ``RankingSettings`` to apply when generation
+                finishes.  Defaults to the no-op (generation order) when not
+                supplied.  Pass the value loaded from the cache on app startup
+                so the previous session's ordering is restored.
         """
         self._cache = cache
-        # Default to the real service so application code stays simple.
         self._service = service or SchedulingService()
+        # The active ranking.  Updated by apply_ranking() and rerank_cached().
+        self._ranking: RankingSettings = (
+            initial_ranking if initial_ranking is not None else RankingSettings.default()
+        )
+        # In-flight partial snapshot; None when no generation is running.
+        self._partial_snapshot: ProgressiveRankedSnapshot | None = None
+
+    # ------------------------------------------------------------------
+    # Public: ranking
+    # ------------------------------------------------------------------
+
+    @property
+    def ranking(self) -> RankingSettings:
+        """Return the currently active ranking settings."""
+        return self._ranking
+
+    def rerank_cached(self, settings: RankingSettings) -> bool:
+        """Re-sort the cached schedule list and persist the new ordering.
+
+        This is the **fast path** for a ranking-only change: the generation
+        engine is never called.  The existing schedule list is loaded from the
+        cache, sorted with ``settings.sort_key``, and written back alongside
+        the new ``settings``.
+
+        Parameters
+        ----------
+        settings:
+            The new ranking specification to apply.
+
+        Returns
+        -------
+        bool
+            ``True`` if there were cached schedules to re-sort.
+            ``False`` if the cache was empty (nothing to do).
+        """
+        schedules = self._cache.get_generated_schedules()
+        if not schedules:
+            self._ranking = settings
+            return False
+
+        snapshot = ProgressiveRankedSnapshot.complete(schedules, settings)
+        # with_ranking() returns a new COMPLETE snapshot with the sorted list.
+        ranked = snapshot.with_ranking(settings)
+        # INVARIANT: only write COMPLETE snapshots to the cache.
+        assert ranked.is_complete, "rerank_cached must only produce COMPLETE snapshots"
+        self._cache.set_generated_schedules(ranked.schedules)
+        self._cache.set_ranking_settings(ranked.ranking_settings)
+        self._ranking = settings
+        return True
+
+    def invalidate_for_threshold_change(self) -> None:
+        """Clear the cached schedules and ranking when threshold constraints change.
+
+        After this call the cache holds no schedules and the ranking reverts to
+        the no-op default.  The caller must trigger a new ``generate()`` run
+        to repopulate the cache.
+        """
+        self._cache.invalidate_generated_schedules()
+        self._cache.invalidate_ranking_settings()
+        self._ranking = RankingSettings.default()
+        self._partial_snapshot = None
+
+    # ------------------------------------------------------------------
+    # Public: generation
+    # ------------------------------------------------------------------
 
     def generate(self) -> GenerationResult:
         """Run scheduling on the cached data and report a display-ready result.
+
+        On success, a ``ProgressiveRankedSnapshot`` with ``COMPLETE`` state is
+        built, the current ``self._ranking`` is applied to sort the schedules,
+        and both the sorted schedules and the settings are written to the cache.
+
+        PARTIAL snapshots are kept in ``self._partial_snapshot`` during the run
+        (intended for future progressive streaming) but are **never** written to
+        the cache.
 
         Translates the service outcome into user-facing text. Missing inputs
         (raised as ValueError by the service) become a friendly failure result
@@ -63,33 +155,23 @@ class SchedulingPresenter:
         try:
             outcome = self._service.run(self._cache)
         except ValueError as error:
-            # Expected, user-facing problem (e.g. a wizard step was skipped):
-            # the message is already meaningful, so show it as-is.
+            # Expected, user-facing problem (e.g. a wizard step was skipped).
             return GenerationResult(success=False, message=str(error))
         except Exception as error:  # noqa: BLE001 - last-resort UI guard
-            # Unexpected failure (e.g. the generator running out of memory on a
-            # huge dataset). We must not let it crash the GUI, so we surface a
-            # generic message while still including the error type for debugging.
-            # A proper background-thread error channel will arrive with SCRUM-115.
             return GenerationResult(
                 success=False,
                 message=f"Schedule generation failed unexpectedly: "
                         f"{type(error).__name__}.",
             )
 
-        # A valid run that yields zero systems is not an error, but the reason
-        # matters for the advice we give the user:
+        # A valid run that yields zero systems is not an error.
         if outcome.schedule_count == 0:
             if outcome.relevant_course_count == 0:
-                # The selected programs simply have no Exam courses to schedule;
-                # excluding fewer dates would not help here.
                 message = (
                     "No exam courses found for the selected programs. "
                     "Try selecting different programs."
                 )
             else:
-                # There are courses, but no conflict-free arrangement fits the
-                # available dates, so suggest loosening the date constraints.
                 message = (
                     "No valid exam systems could be generated for the current "
                     "selection. Try excluding fewer dates or changing programs."
@@ -99,6 +181,21 @@ class SchedulingPresenter:
                 message=message,
                 schedule_count=0,
             )
+
+        # Build a COMPLETE snapshot and apply the active ranking before caching.
+        # The service already wrote the unranked list to the cache inside
+        # SchedulingService.run(); we overwrite it now with the ranked version.
+        snapshot = ProgressiveRankedSnapshot.complete(outcome.schedules, self._ranking)
+        if not self._ranking.is_noop():
+            snapshot = snapshot.with_ranking(self._ranking)
+
+        # INVARIANT: only COMPLETE snapshots reach the cache.
+        assert snapshot.is_complete, "generate() must only persist COMPLETE snapshots"
+        self._cache.set_generated_schedules(snapshot.schedules)
+        self._cache.set_ranking_settings(snapshot.ranking_settings)
+
+        # Clear any leftover partial snapshot from a previous interrupted run.
+        self._partial_snapshot = None
 
         return GenerationResult(
             success=True,

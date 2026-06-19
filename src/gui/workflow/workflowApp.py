@@ -8,6 +8,7 @@ except ModuleNotFoundError as error:
         "Install it with: .venv\\Scripts\\python.exe -m pip install -r requirements.txt"
     ) from error
 
+from application.async_runner import AsyncScheduleRunner
 from application.cache_manager import CacheManager
 from gui.presenters.dateManagementPresenter import DateManagementPresenter
 from gui.screens.dateManagementScreen import DateManagementScreen
@@ -46,6 +47,15 @@ class SchedulixWorkflow(ctk.CTkFrame):
         self.uploaded_export_service = UploadedDataExportService(
             cache_manager=self.cache,
             uploaded_data=self.upload_service.get_uploaded_data(),
+        )
+        # Shared runner: DateManagementScreen drives it for generation;
+        # ScheduleNavigationScreen reads is_running to gate threshold controls.
+        self._runner = AsyncScheduleRunner()
+        # Shared SchedulingPresenter so rerank_cached() and generate() operate
+        # on the same state. Loaded with the ranking persisted from last session.
+        self._scheduling_presenter = SchedulingPresenter(
+            cache=self.cache,
+            initial_ranking=self.cache.get_ranking_settings(),
         )
         self._screen: ctk.CTkFrame | None = None
         self._program_selection: ProgramSelectionPresenter | None = None
@@ -131,7 +141,8 @@ class SchedulixWorkflow(ctk.CTkFrame):
                 self,
                 presenter=presenters[0],
                 period_presenters=presenters,
-                scheduling_presenter=SchedulingPresenter(self.cache),
+                scheduling_presenter=self._scheduling_presenter,
+                runner=self._runner,
                 on_back=self.show_program_config,
                 on_generation_success=self.show_output_navigation,
             )
@@ -157,7 +168,14 @@ class SchedulixWorkflow(ctk.CTkFrame):
             )
             return
 
-        navigation_presenter = ScheduleNavigationPresenter(schedules)
+        # Restore the cached ranking so the output screen opens in the same
+        # order the user last applied (or generation order on first run).
+        cached_ranking = self.cache.get_ranking_settings()
+        navigation_presenter = ScheduleNavigationPresenter(
+            schedules,
+            initial_ranking=cached_ranking,
+            on_ranking_changed=self._scheduling_presenter.rerank_cached,
+        )
         export_presenter = ExportPresenter(navigation_presenter)
 
         self._set_screen(
@@ -166,6 +184,7 @@ class SchedulixWorkflow(ctk.CTkFrame):
                 presenter=navigation_presenter,
                 export_presenter=export_presenter,
                 on_back=self.show_date_management,
+                runner=self._runner,
             )
         )
 
