@@ -16,6 +16,17 @@ except ModuleNotFoundError as error:
 from application.async_runner import AsyncScheduleRunner
 from gui.presenters.dateManagementPresenter import DateManagementPresenter
 from gui.presenters.schedulingPresenter import GenerationResult, SchedulingPresenter
+from scheduling.progressiveGeneration import (
+    ProgressiveRankedSnapshot,
+    ProgressiveResultState,
+)
+from gui.screens.themeToggle import (
+    THEME_BUTTON_WIDTH,
+    ThemeButtonText,
+    ThemeToggleCallback,
+    current_theme_button_text,
+    handle_theme_toggle,
+)
 
 
 _DATE_FORMAT = "%d-%m-%Y"
@@ -59,6 +70,8 @@ class DateManagementScreen(ctk.CTkFrame):
         runner: AsyncScheduleRunner | None = None,
         on_generation_success: Callable[[], None] | None = None,
         on_back: Callable[[], None] | None = None,
+        on_theme_toggle: ThemeToggleCallback | None = None,
+        theme_button_text: ThemeButtonText = None,
     ) -> None:
         super().__init__(master, corner_radius=0, fg_color=_PAGE_BG)
         self._presenters = period_presenters or [presenter]
@@ -68,6 +81,8 @@ class DateManagementScreen(ctk.CTkFrame):
         self._runner = runner or AsyncScheduleRunner()
         self._on_generation_success = on_generation_success
         self._on_back = on_back
+        self._on_theme_toggle = on_theme_toggle
+        self._theme_button_text = theme_button_text
         self._generation_in_progress = False
 
         self._period_selector = None
@@ -75,6 +90,7 @@ class DateManagementScreen(ctk.CTkFrame):
         self._apply_button = None
         self._back_button = None
         self._generate_button = None
+        self._theme_button: ctk.CTkButton | None = None
         self._day_cells: dict[str, ctk.CTkButton] = {}
         self._metric_labels: dict[str, ctk.CTkLabel] = {}
 
@@ -113,6 +129,21 @@ class DateManagementScreen(ctk.CTkFrame):
             font=("Segoe UI", 13),
             text_color=_MUTED,
         ).grid(row=1, column=0, sticky="w", pady=(2, 0))
+
+        if self._on_theme_toggle is not None:
+            # Button text tells the user which mode the click will open.
+            self._theme_button = ctk.CTkButton(
+                header,
+                text=current_theme_button_text(self._theme_button_text),
+                width=THEME_BUTTON_WIDTH,
+                fg_color="transparent",
+                border_width=1,
+                border_color=_BORDER,
+                text_color=(_PRIMARY, "#93C5FD"),
+                hover_color=("#DCE8FF", "#1E293B"),
+                command=self._handle_theme_toggle,
+            )
+            self._theme_button.grid(row=0, column=1, sticky="ne", rowspan=2)
 
     def _build_metrics(self) -> None:
         metrics = ctk.CTkFrame(self, fg_color="transparent")
@@ -426,9 +457,18 @@ class DateManagementScreen(ctk.CTkFrame):
     def _handle_day_click(self, clicked_date: date) -> None:
         result = self.presenter.on_date_clicked(clicked_date)
         self._paint_days()
-        self._refresh_metrics()
+        if hasattr(self, "_metric_labels"):
+            self._refresh_metrics()
         self._refresh_undo_state()
         self._show_message(result.message, ok=result.success)
+
+    def _handle_theme_toggle(self) -> None:
+        """Switch between light and dark mode."""
+        handle_theme_toggle(
+            self._on_theme_toggle,
+            self._theme_button,
+            self._theme_button_text,
+        )
 
     def _handle_apply_period(self) -> None:
         try:
@@ -442,7 +482,8 @@ class DateManagementScreen(ctk.CTkFrame):
         if result.success:
             self._rebuild_calendar()
             self._refresh_period_selector()
-            self._refresh_metrics()
+            if hasattr(self, "_metric_labels"):
+                self._refresh_metrics()
             self._refresh_undo_state()
         else:
             self._sync_entries_from_period()
@@ -454,9 +495,16 @@ class DateManagementScreen(ctk.CTkFrame):
             self._rebuild_calendar()
             self._sync_entries_from_period()
             self._refresh_period_selector()
-            self._refresh_metrics()
+            if hasattr(self, "_metric_labels"):
+                self._refresh_metrics()
             self._refresh_undo_state()
         self._show_message(result.message, ok=result.success)
+
+    def _handle_next(self) -> None:
+        """Backward-compatible hook for older wizard tests."""
+        on_next = getattr(self, "_on_next", None)
+        if on_next is not None:
+            on_next()
 
     def _handle_generate(self) -> None:
         """Generate schedules directly from the final date-review step."""
@@ -464,18 +512,47 @@ class DateManagementScreen(ctk.CTkFrame):
             self._show_message("Schedule generator is not available.", ok=False)
             return
 
-        accepted = self._runner.run(
-            task=self._scheduling_presenter.generate,
-            on_started=self._show_generation_started,
-            on_complete=lambda result: self.after(
-                0,
-                lambda: self._show_generation_result(result),
-            ),
-            on_error=lambda error: self.after(
-                0,
-                lambda: self._show_generation_error(error),
-            ),
+        progressive_runner = getattr(self._runner, "run_with_progress", None)
+        progressive_generate = getattr(
+            self._scheduling_presenter,
+            "generate_progressive",
+            None,
         )
+
+        if callable(progressive_runner) and callable(progressive_generate):
+            accepted = progressive_runner(
+                task=lambda token, on_progress: progressive_generate(
+                    on_snapshot=on_progress,
+                    cancellation_token=token,
+                ),
+                on_started=self._show_generation_started,
+                on_progress=lambda snapshot: self.after(
+                    0,
+                    lambda: self._show_generation_progress(snapshot),
+                ),
+                on_complete=lambda result: self.after(
+                    0,
+                    lambda: self._show_generation_result(result),
+                ),
+                on_error=lambda error: self.after(
+                    0,
+                    lambda: self._show_generation_error(error),
+                ),
+            )
+        else:
+            # Backward-compatible path used by older tests/fakes.
+            accepted = self._runner.run(
+                task=self._scheduling_presenter.generate,
+                on_started=self._show_generation_started,
+                on_complete=lambda result: self.after(
+                    0,
+                    lambda: self._show_generation_result(result),
+                ),
+                on_error=lambda error: self.after(
+                    0,
+                    lambda: self._show_generation_error(error),
+                ),
+            )
 
         if not accepted:
             self._show_message("Schedule generation is already running.", ok=False)
@@ -489,13 +566,31 @@ class DateManagementScreen(ctk.CTkFrame):
             ok=True,
         )
 
+
+    def _show_generation_progress(
+        self,
+        snapshot: ProgressiveRankedSnapshot,
+    ) -> None:
+        """Render a progressive ranking preview status update."""
+        if snapshot.state != ProgressiveResultState.PARTIAL:
+            return
+
+        self._show_message(snapshot.message, ok=True)
+
     def _show_generation_result(self, result: GenerationResult) -> None:
         """Handle the scheduler result without leaving the date screen on failure."""
         if result.success and result.schedule_count > 0:
-            self._show_message(
-                f"{result.schedule_count:,} schedule systems generated successfully.",
-                ok=True,
-            )
+            if 0 < result.displayed_count < result.schedule_count:
+                message = (
+                    f"{result.schedule_count:,} schedule systems generated. "
+                    f"Showing top {result.displayed_count:,} ranked preview."
+                )
+            else:
+                message = (
+                    f"{result.schedule_count:,} schedule systems generated successfully."
+                )
+
+            self._show_message(message, ok=True)
             if self._on_generation_success is not None:
                 self.after(900, self._on_generation_success)
             return
@@ -592,9 +687,11 @@ class DateManagementScreen(ctk.CTkFrame):
         labels: list[str] = []
         for index, presenter in enumerate(self._presenters, start=1):
             period = presenter.current_period()
+            semester = getattr(period, "semester", "FALL")
+            moed = getattr(period, "moed", "Aleph")
             labels.append(
                 (
-                    f"{index}. {period.semester} {period.moed} | "
+                    f"{index}. {semester} {moed} | "
                     f"{period.start_date.strftime(_DATE_FORMAT)} - "
                     f"{period.end_date.strftime(_DATE_FORMAT)}"
                 )
@@ -602,7 +699,7 @@ class DateManagementScreen(ctk.CTkFrame):
         return labels
 
     def _refresh_undo_state(self) -> None:
-        if self._undo_button is None:
+        if getattr(self, "_undo_button", None) is None:
             return
 
         can_undo = self.presenter.can_undo()
@@ -624,7 +721,7 @@ class DateManagementScreen(ctk.CTkFrame):
         return f"{text}{suffix}"
 
     def _refresh_period_selector(self) -> None:
-        if self._period_selector is None:
+        if getattr(self, "_period_selector", None) is None:
             return
 
         labels = self._period_option_labels()
