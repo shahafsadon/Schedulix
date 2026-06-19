@@ -15,6 +15,13 @@ SRC = ROOT / "src"
 sys.path.insert(0, str(SRC))
 
 from models import Course, ProgramEnrollment
+from ranking_settings import (
+    RankedExamSystem,
+    RankingCriterion,
+    RankingPreference,
+    RankingSettings,
+    ScheduleMetrics,
+)
 from scheduling.examConflictDetector import ScheduledExam
 from scheduling.examScheduleGenerator import ExamSchedule, ExamSystem
 from gui.presenters.scheduleNavigationPresenter import ScheduleNavigationPresenter
@@ -42,6 +49,22 @@ def make_system(semester="FALL", moed="Aleph", exams=None):
                 scheduled_exams=exams or [],
             )
         ]
+    )
+
+
+def make_ranked(system, key, min_gap=0):
+    """Wrap an ExamSystem with simple metrics for navigation tests."""
+    return RankedExamSystem(
+        exam_system=system,
+        metrics=ScheduleMetrics(
+            schedule_id=key,
+            min_mandatory_gap=min_gap,
+            average_all_gap=0,
+            elective_collision_count=0,
+            mandatory_span=0,
+            max_exams_per_day=1,
+        ),
+        key=key,
     )
 
 
@@ -211,6 +234,105 @@ class ScheduleNavigationPresenterTests(unittest.TestCase):
     def test_relevant_months_empty_when_no_schedules(self) -> None:
         """With no systems there are no months to draw."""
         self.assertEqual(ScheduleNavigationPresenter([]).relevant_months(), [])
+
+    def test_ranked_input_exposes_metrics_summary(self) -> None:
+        """Ranked wrappers let the view display calculated metric values."""
+        system = make_system(
+            exams=[make_exam("A", "83001", date(2026, 1, 1))]
+        )
+        presenter = ScheduleNavigationPresenter(
+            [
+                make_ranked(system, key=4, min_gap=7)
+            ]
+        )
+
+        metrics = presenter.current_view().metrics_summary
+
+        self.assertIsNotNone(metrics)
+        self.assertEqual(metrics.schedule_id, 4)
+        self.assertEqual(metrics.min_mandatory_gap, 7)
+
+    def test_apply_ranked_schedules_preserves_current_system_when_possible(self) -> None:
+        """Re-ranking keeps the selected system even when its position changes."""
+        first = make_system(exams=[make_exam("First", "83001", date(2026, 1, 1))])
+        second = make_system(exams=[make_exam("Second", "83002", date(2026, 1, 2))])
+        first_ranked = make_ranked(first, key=1)
+        second_ranked = make_ranked(second, key=2)
+        presenter = ScheduleNavigationPresenter([first_ranked, second_ranked])
+        presenter.next()
+
+        presenter.apply_ranked_schedules([second_ranked, first_ranked])
+
+        self.assertIs(presenter.current_system(), second)
+        self.assertEqual(presenter.position(), 1)
+
+    def test_apply_ranking_reorders_existing_ranked_systems_without_generation(self) -> None:
+        """Ranking controls should use existing metrics, not regenerate schedules."""
+        first = make_system(exams=[make_exam("First", "83001", date(2026, 1, 1))])
+        second = make_system(exams=[make_exam("Second", "83002", date(2026, 1, 2))])
+        first_ranked = make_ranked(first, key=1, min_gap=2)
+        second_ranked = make_ranked(second, key=2, min_gap=9)
+
+        class FakeRankingService:
+            def __init__(self):
+                self.rank_generated_schedules_called = False
+
+            def rank_generated_schedules(self, *_args):
+                self.rank_generated_schedules_called = True
+                raise AssertionError("generation-order metrics should not recalculate")
+
+            def rerank(self, ranked_schedules, ranking_settings):
+                from scheduling.scheduleRankingService import ScheduleRankingOutcome
+                from scheduling.scheduleRanker import ScheduleRanker
+
+                return ScheduleRankingOutcome(
+                    ranked_schedules=ScheduleRanker().rank(
+                        ranked_schedules,
+                        ranking_settings,
+                    ),
+                    elapsed_seconds=0.25,
+                )
+
+        service = FakeRankingService()
+        presenter = ScheduleNavigationPresenter([first_ranked, second_ranked])
+
+        result = presenter.apply_ranking(
+            RankingSettings(
+                [
+                    RankingPreference(
+                        RankingCriterion.min_mandatory_gap,
+                    )
+                ]
+            ),
+            ranking_service=service,
+        )
+
+        self.assertTrue(result.success)
+        self.assertFalse(service.rank_generated_schedules_called)
+        self.assertIs(presenter.current_system(), first)
+        self.assertEqual(presenter.position(), 2)
+
+        presenter.previous()
+
+        self.assertIs(presenter.current_system(), second)
+
+    def test_apply_empty_ranking_restores_generation_order_by_key(self) -> None:
+        """Removing all criteria restores the original generated order."""
+        first = make_system(exams=[make_exam("First", "83001", date(2026, 1, 1))])
+        second = make_system(exams=[make_exam("Second", "83002", date(2026, 1, 2))])
+        first_ranked = make_ranked(first, key=1)
+        second_ranked = make_ranked(second, key=2)
+        presenter = ScheduleNavigationPresenter([second_ranked, first_ranked])
+
+        result = presenter.apply_ranking(RankingSettings([]))
+
+        self.assertTrue(result.success)
+        self.assertIs(presenter.current_system(), second)
+        self.assertEqual(presenter.position(), 2)
+
+        presenter.previous()
+
+        self.assertIs(presenter.current_system(), first)
 
 if __name__ == "__main__":
     unittest.main()

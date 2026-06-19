@@ -40,6 +40,9 @@ class ViewType(Enum):
     # Third wizard step: manage exam dates (exclude/activate days, edit window).
     DATE_MANAGEMENT = auto()
 
+    # Optional Part 3 step: configure threshold requirements before generation.
+    SCHEDULING_SETTINGS = auto()
+
     # Fourth wizard step: navigate and visualize generated exam schedules.
     SCHEDULE_NAVIGATION = auto()
 
@@ -121,10 +124,17 @@ class ViewFactory:
         # can be checked (and a ValueError raised) BEFORE importing customtkinter
         # or any concrete screen — keeping headless tests safe.
         _registry: dict[ViewType, tuple[str, str]] = {
-            ViewType.FILE_UPLOAD:    ("gui.screens.fileUploadScreen",   "FileUploadScreen"),
-            ViewType.PROGRAM_CONFIG: ("gui.screens.programConfigScreen", "ProgramConfigScreen"),
-            ViewType.DATE_MANAGEMENT: ("gui.screens.dateManagementScreen", "DateManagementScreen"),
-            ViewType.SCHEDULE_NAVIGATION: ("gui.screens.scheduleNavigationScreen", "ScheduleNavigationScreen"),
+            ViewType.FILE_UPLOAD: ("gui.fileUploadScreen", "FileUploadScreen"),
+            ViewType.PROGRAM_CONFIG: ("gui.programConfigScreen", "ProgramConfigScreen"),
+            ViewType.DATE_MANAGEMENT: ("gui.dateManagementScreen", "DateManagementScreen"),
+            ViewType.SCHEDULING_SETTINGS: (
+                "gui.schedulingSettingsScreen",
+                "SchedulingSettingsScreen",
+            ),
+            ViewType.SCHEDULE_NAVIGATION: (
+                "gui.scheduleNavigationScreen",
+                "ScheduleNavigationScreen",
+            ),
         }
 
         entry = _registry.get(view_type)

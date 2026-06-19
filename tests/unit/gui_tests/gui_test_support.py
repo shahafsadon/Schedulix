@@ -110,6 +110,32 @@ class FakeButton(FakeWidget):
     pass
 
 
+class FakeOptionMenu(FakeWidget):
+    def __init__(self, master=None, values=None, **kwargs):
+        super().__init__(master, values=values or [], **kwargs)
+        self._value = (values or [""])[0] if values else ""
+
+    def set(self, value):
+        self._value = value
+
+    def get(self):
+        return self._value
+class FakeCheckBox(FakeButton):
+    pass
+
+
+class FakeOptionMenu(FakeWidget):
+    def __init__(self, master=None, values=None, **kwargs):
+        super().__init__(master, values=values or [], **kwargs)
+        self._value = (values or [""])[0] if values else ""
+
+    def set(self, value):
+        self._value = value
+
+    def get(self):
+        return self._value
+
+
 class FakeEntry(FakeWidget):
     pass
 
@@ -140,6 +166,9 @@ def make_fake_ctk() -> ModuleType:
         FakeFrame,
         FakeLabel,
         FakeButton,
+        FakeOptionMenu,
+        FakeCheckBox,
+        FakeOptionMenu,
         FakeEntry,
         FakeTextbox,
         FakeToplevel,
@@ -147,15 +176,26 @@ def make_fake_ctk() -> ModuleType:
         widget_type.created = []
 
     module = ModuleType("customtkinter")
+    module._appearance_mode = "Light"
+
+    def set_appearance_mode(mode):
+        module._appearance_mode = mode
+
+    def get_appearance_mode():
+        return module._appearance_mode
+
     module.CTkFrame = FakeFrame
     module.CTkScrollableFrame = FakeFrame
     module.CTkLabel = FakeLabel
     module.CTkButton = FakeButton
+    module.CTkOptionMenu = FakeOptionMenu
     module.CTkEntry = FakeEntry
     module.CTkTextbox = FakeTextbox
     module.CTkToplevel = FakeToplevel
-    module.CTkCheckBox = FakeButton
+    module.CTkCheckBox = FakeCheckBox
     module.BooleanVar = FakeBooleanVar
+    module.set_appearance_mode = set_appearance_mode
+    module.get_appearance_mode = get_appearance_mode
 
     return module
 

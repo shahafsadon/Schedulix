@@ -13,6 +13,7 @@ from fileReader.fileTypeReaders.examPeriodsReader import ExamPeriodsFileReader
 from fileReader.fileTypeReaders.programReader import ProgramsFileReader
 from scheduling.courseFilter import CourseFilter
 from scheduling.examConflictDetector import ExamConflictDetector
+from scheduling.examScheduleGenerator import ExamScheduleGenerator
 
 
 DATE_LINE_PATTERN = re.compile(r"^\d{2}-\d{2}-\d{4} \| .+ \| .+$")
@@ -154,7 +155,7 @@ def test_full_system_generated_schedules_have_no_conflicts(tmp_path):
         selected_programs,
     )
 
-    schedules = SchedulixApp().schedule_generator.generate_exam_systems(
+    schedules = ExamScheduleGenerator().generate_exam_systems(
         relevant_courses,
         exam_periods,
     )

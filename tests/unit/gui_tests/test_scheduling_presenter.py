@@ -81,6 +81,59 @@ class SchedulingPresenterTests(unittest.TestCase):
         # Message must mention programs, not date exclusions, in this case.
         self.assertIn("programs", result.message)
         self.assertNotIn("excluding", result.message)
+    
+    def test_zero_with_constraint_enabled_has_constraint_focused_message(self) -> None:
+        """Zero systems while a Part 3 threshold constraint is active points
+        at constraints, regardless of the raw pruned_candidates count.
+
+        any_constraint_enabled — not pruned_candidates — drives this branch,
+        since pruned_candidates is also incremented by the always-active
+        base conflict rule and is therefore not a reliable signal on its own
+        (SCRUM-164 audit finding).
+        """
+        service = _FakeService(
+            outcome=SchedulingOutcome(
+                relevant_course_count=2,
+                schedule_count=0,
+                schedules=[],
+                generated_candidates=10,
+                accepted_candidates=0,
+                pruned_candidates=10,
+                any_constraint_enabled=True,
+            )
+        )
+        presenter = SchedulingPresenter(cache=object(), service=service)
+        result = presenter.generate()
+
+        self.assertTrue(result.success)
+        self.assertEqual(result.schedule_count, 0)
+        self.assertIn("constraint", result.message.lower())
+
+    def test_zero_without_constraint_enabled_keeps_date_focused_message(self) -> None:
+        """Zero systems with no Part 3 constraint active keeps the original
+        date-focused message, even if pruned_candidates > 0.
+
+        This is the regression guard for the audit finding: a pure V1.0/V2.0
+        conflict (base rule only, no Part 3 constraint enabled) must NOT
+        produce the "relax a threshold constraint" message.
+        """
+        service = _FakeService(
+            outcome=SchedulingOutcome(
+                relevant_course_count=2,
+                schedule_count=0,
+                schedules=[],
+                generated_candidates=2,
+                accepted_candidates=0,
+                pruned_candidates=2,
+                any_constraint_enabled=False,
+            )
+        )
+        presenter = SchedulingPresenter(cache=object(), service=service)
+        result = presenter.generate()
+
+        self.assertTrue(result.success)
+        self.assertIn("excluding", result.message)
+        self.assertNotIn("constraint", result.message.lower())
 
     def test_unexpected_exception_becomes_failure_not_crash(self) -> None:
         """A non-ValueError from the service is caught, not propagated."""
