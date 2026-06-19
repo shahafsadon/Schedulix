@@ -3,6 +3,15 @@ from __future__ import annotations
 from collections.abc import Iterable, Iterator
 from pathlib import Path
 
+from constraint_settings import (
+    SchedulingConstraintSettings,
+    ThresholdConstraintType,
+)
+from ranking_settings import (
+    MISSING_METRIC_VALUE,
+    RankedExamSystem,
+    RankingSettings,
+)
 from scheduling.examScheduleGenerator import (
     ExamSchedule,
     ExamSystem,
@@ -20,6 +29,11 @@ DATE_FORMAT = "%d-%m-%Y"
 TITLE_LINE = (
     "========================================"
 )
+
+# Display placeholder for ScheduleMetrics fields whose real value is
+# MISSING_METRIC_VALUE (-1, see ranking_settings.py). Showing "n/a" is more
+# readable in a text report than a raw -1.
+MISSING_METRIC_DISPLAY = "n/a"
 
 SEMESTER_ORDER = {
     "FALL": 0,
@@ -54,6 +68,10 @@ class OutputWriter:
         self,
         schedules: Iterable[ExamSystem],
         output_path: str | Path = DEFAULT_OUTPUT_PATH,
+        constraint_settings: SchedulingConstraintSettings | None = None,
+        ranking_settings: RankingSettings | None = None,
+        metrics_line: str | None = None,
+        include_valid_systems_footer: bool = False,
     ) -> tuple[
         Path,
         int,
@@ -66,7 +84,9 @@ class OutputWriter:
         sorting and formatting it is wasted work.
 
         Output is flushed in chunks to avoid both one enormous string and
-        hundreds of thousands of tiny Python-level writes.
+        hundreds of thousands of tiny Python-level writes. Optional settings
+        and cheap metrics-note lines let the CLI keep a readable Part 3 header
+        without calculating ranking metrics when no ranking is active.
         """
         path = Path(
             output_path
@@ -105,6 +125,13 @@ class OutputWriter:
             f"{TITLE_LINE}\n",
         ]
 
+        settings_summary = self._format_settings_summary(
+            constraint_settings,
+            ranking_settings,
+        )
+        if settings_summary is not None:
+            pending.append(f"{settings_summary}\n")
+
         pending_size = sum(
             map(
                 len,
@@ -135,6 +162,8 @@ class OutputWriter:
                         f"{TITLE_LINE}\n"
                     )
                 ]
+                if metrics_line is not None:
+                    schedule_parts.append(f"{metrics_line}\n")
 
                 current_semester: str | None = None
 
@@ -189,6 +218,11 @@ class OutputWriter:
                     pending.clear()
 
                     pending_size = 0
+
+            if include_valid_systems_footer:
+                footer = f"{TITLE_LINE}\nValid systems: {schedule_count}\n"
+                pending.append(footer)
+                pending_size += len(footer)
 
             if pending:
                 output_file.write(
@@ -421,3 +455,164 @@ class OutputWriter:
             schedule.semester,
             schedule.moed,
         )
+    
+    # ------------------------------------------------------------------
+    # Ranked output (SCRUM-166)
+    # ------------------------------------------------------------------
+
+    def write_ranked_with_count(
+        self,
+        ranked_schedules: list[RankedExamSystem],
+        output_path: str | Path = DEFAULT_OUTPUT_PATH,
+        constraint_settings: SchedulingConstraintSettings | None = None,
+        ranking_settings: RankingSettings | None = None,
+    ) -> tuple[Path, int]:
+        """
+        Stream ranked exam systems to disk, preserving their given order.
+
+        Ranking itself still requires a materialized list because sorting needs
+        the whole result set. The writer must not add a second huge memory hit,
+        so this method now uses the same bounded-buffer strategy as
+        write_with_count() instead of collecting every output line and joining
+        one giant string at the end.
+
+        Returns (path, written_count), where written_count is the number of
+        ranked systems written (== len(ranked_schedules)).
+        """
+        path = Path(output_path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+
+        period_cache: dict[int, str] = {}
+        order_cache: dict[tuple[tuple[str, str], ...], tuple[int, ...]] = {}
+
+        pending: list[str] = [
+            "Schedulix Exam Schedules\n",
+            f"{TITLE_LINE}\n",
+        ]
+
+        settings_summary = self._format_settings_summary(
+            constraint_settings,
+            ranking_settings,
+        )
+        if settings_summary is not None:
+            pending.append(f"{settings_summary}\n")
+
+        pending.append(f"Valid systems: {len(ranked_schedules)}\n")
+        pending.append(f"{TITLE_LINE}\n")
+
+        pending_size = sum(map(len, pending))
+        flush_threshold = 1024 * 1024
+
+        with path.open("w", encoding="utf-8", newline="\n") as output_file:
+            for index, ranked in enumerate(ranked_schedules, start=1):
+                schedule_parts = [
+                    f"\nSchedule {index}\n",
+                    f"{TITLE_LINE}\n",
+                    f"{self._format_metrics_line(ranked)}\n",
+                ]
+
+                current_semester: str | None = None
+
+                for period_schedule in self._ordered_period_schedules(
+                    ranked.exam_system.period_schedules,
+                    order_cache,
+                ):
+                    if period_schedule.semester != current_semester:
+                        schedule_parts.append(
+                            f"Semester: {period_schedule.semester}\n"
+                        )
+                        current_semester = period_schedule.semester
+
+                    schedule_parts.append(
+                        self._format_period(period_schedule, period_cache)
+                    )
+
+                schedule_text = "".join(schedule_parts)
+                pending.append(schedule_text)
+                pending_size += len(schedule_text)
+
+                if pending_size >= flush_threshold:
+                    output_file.write("".join(pending))
+                    pending.clear()
+                    pending_size = 0
+
+            if pending:
+                output_file.write("".join(pending))
+
+        return path, len(ranked_schedules)
+
+    @staticmethod
+    def _format_metrics_line(ranked: RankedExamSystem) -> str:
+        """Format one compact "Metrics:" line from a RankedExamSystem.
+
+        Mirrors the five ScheduleMetrics fields (ranking_settings.py). Any
+        field equal to MISSING_METRIC_VALUE (-1) is shown as
+        MISSING_METRIC_DISPLAY ("n/a") instead of a raw -1, since -1 is an
+        internal sentinel, not a meaningful day count.
+        """
+        metrics = ranked.metrics
+
+        def display(value: int | float) -> str:
+            return (
+                MISSING_METRIC_DISPLAY
+                if value == MISSING_METRIC_VALUE
+                else str(value)
+            )
+
+        return (
+            "Metrics: "
+            f"min_gap={display(metrics.min_mandatory_gap)} | "
+            f"avg_gap={display(metrics.average_all_gap)} | "
+            f"elective_collisions={display(metrics.elective_collision_count)} | "
+            f"mand_span={display(metrics.mandatory_span)} | "
+            f"max_per_day={display(metrics.max_exams_per_day)}"
+        )
+
+    @staticmethod
+    def _format_settings_summary(
+        constraint_settings: SchedulingConstraintSettings | None,
+        ranking_settings: RankingSettings | None,
+    ) -> str | None:
+        """Format the optional "Settings:" header line.
+
+        Returns None when both arguments are None, so callers that do not
+        pass settings (or pre-Part-3 callers of write_with_count, which never
+        call this at all) get exactly the pre-Part-3 header with no extra
+        line.
+
+        When at least one argument is given, enabled threshold constraints
+        and active ranking criteria are summarized on a single line. An
+        empty summary (no enabled constraints and no ranking criteria) is
+        rendered as "Settings: none (all constraints disabled, no ranking)"
+        rather than an empty/confusing line.
+        """
+        if constraint_settings is None and ranking_settings is None:
+            return None
+
+        constraint_parts: list[str] = []
+        if constraint_settings is not None:
+            for constraint_type in ThresholdConstraintType:
+                setting = constraint_settings.constraints.get(constraint_type)
+                if setting is not None and setting.enabled:
+                    constraint_parts.append(
+                        f"{constraint_type.value}={setting.k}"
+                    )
+
+        ranking_parts: list[str] = []
+        if ranking_settings is not None:
+            for preference in ranking_settings.priority_list:
+                direction = "desc" if preference.descending else "asc"
+                ranking_parts.append(
+                    f"{preference.criterion.value} {direction}"
+                )
+
+        if not constraint_parts and not ranking_parts:
+            return "Settings: none (all constraints disabled, no ranking)"
+
+        segments: list[str] = []
+        if constraint_parts:
+            segments.append(f"constraints[{', '.join(constraint_parts)}]")
+        if ranking_parts:
+            segments.append(f"ranking[{', '.join(ranking_parts)}]")
+
+        return "Settings: " + " | ".join(segments)

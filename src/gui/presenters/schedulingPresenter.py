@@ -1,45 +1,33 @@
-"""Presenter for triggering schedule generation (SCRUM-125).
+"""Presenter for triggering schedule generation.
 
-After SCRUM-184 this presenter also acts as the orchestration hub for
-smart invalidation and cache persistence:
-
-* ``generate()`` — runs the generation engine and, on success, writes a
-  COMPLETE ``ProgressiveRankedSnapshot`` to the cache (schedules + ranking).
-  Only COMPLETE snapshots reach the cache; PARTIAL states stay in-memory.
-
-* ``rerank_cached()`` — re-sorts the already-cached schedule list using a
-  new ``RankingSettings`` and re-saves it without touching the engine.
-  This is the "ranking-only change" fast path: no regeneration required.
-
-* ``invalidate_for_threshold_change()`` — clears the schedule cache and
-  resets the ranking so that the next ``generate()`` call starts fresh.
-  This is the "threshold constraint change" slow path.
-
-Following the MVP pattern this class contains no customTkinter code.
+The presenter keeps GUI code out of the scheduling service.  ``generate()`` is
+kept for the existing full-materialization flow, while ``generate_progressive``
+uses the service's lazy batched ranking path and forwards snapshots to the view.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Callable
+from typing import Any, Callable
 
 from application.cache_manager import CacheManager
-from scheduling.progressiveSnapshot import ProgressiveRankedSnapshot, SnapshotState
-from scheduling.rankingSettings import RankingSettings
+from scheduling.progressiveGeneration import (
+    ProgressiveGenerationOptions,
+    ProgressiveRankedSnapshot,
+    ProgressiveResultState,
+)
 from scheduling.schedulingService import SchedulingService
 
 
 @dataclass(frozen=True)
 class GenerationResult:
-    """Display-ready outcome of a generation attempt.
-
-    The View shows `message` directly. On success `schedule_count` drives the
-    "X systems generated" text and whether navigation to the output screen is
-    offered; on failure `success` is False and `message` holds the reason.
-    """
+    """Display-ready outcome of a generation attempt."""
 
     success: bool
     message: str
     schedule_count: int = 0
+    pruned_candidates: int = 0
+    displayed_count: int = 0
+    partial: bool = False
 
 
 class SchedulingPresenter:
@@ -57,18 +45,7 @@ class SchedulingPresenter:
         service: SchedulingService | None = None,
         initial_ranking: RankingSettings | None = None,
     ) -> None:
-        """Create the presenter with the shared cache and a scheduling service.
-
-        Args:
-            cache: the single application CacheManager holding the loaded data
-                and receiving the generated schedules (Dependency Injection).
-            service: the scheduling service to run; a default is created when
-                none is supplied, while tests can inject a fake.
-            initial_ranking: the ``RankingSettings`` to apply when generation
-                finishes.  Defaults to the no-op (generation order) when not
-                supplied.  Pass the value loaded from the cache on app startup
-                so the previous session's ordering is restored.
-        """
+        """Create the presenter with the shared cache and scheduling service."""
         self._cache = cache
         self._service = service or SchedulingService()
         # The active ranking.  Updated by apply_ranking() and rerank_cached().
@@ -138,38 +115,69 @@ class SchedulingPresenter:
     # ------------------------------------------------------------------
 
     def generate(self) -> GenerationResult:
-        """Run scheduling on the cached data and report a display-ready result.
-
-        On success, a ``ProgressiveRankedSnapshot`` with ``COMPLETE`` state is
-        built, the current ``self._ranking`` is applied to sort the schedules,
-        and both the sorted schedules and the settings are written to the cache.
-
-        PARTIAL snapshots are kept in ``self._partial_snapshot`` during the run
-        (intended for future progressive streaming) but are **never** written to
-        the cache.
-
-        Translates the service outcome into user-facing text. Missing inputs
-        (raised as ValueError by the service) become a friendly failure result
-        rather than an exception, so the View can simply show the message.
-        """
+        """Run scheduling on cached data and report a display-ready result."""
         try:
             outcome = self._service.run(self._cache)
         except ValueError as error:
-            # Expected, user-facing problem (e.g. a wizard step was skipped).
             return GenerationResult(success=False, message=str(error))
         except Exception as error:  # noqa: BLE001 - last-resort UI guard
             return GenerationResult(
                 success=False,
-                message=f"Schedule generation failed unexpectedly: "
-                        f"{type(error).__name__}.",
+                message=(
+                    "Schedule generation failed unexpectedly: "
+                    f"{type(error).__name__}."
+                ),
             )
 
-        # A valid run that yields zero systems is not an error.
+        return self._result_from_full_outcome(outcome)
+
+    def generate_progressive(
+        self,
+        on_snapshot: Callable[[ProgressiveRankedSnapshot], None] | None = None,
+        cancellation_token: Any | None = None,
+        options: ProgressiveGenerationOptions | None = None,
+    ) -> GenerationResult:
+        """Run progressive generation and return a final display result.
+
+        ``on_snapshot`` receives ``PARTIAL`` and terminal snapshots from the
+        service.  The returned ``GenerationResult`` is only the final summary the
+        existing screen code already knows how to display.
+        """
+        try:
+            final_snapshot = self._service.run_progressive(
+                cache=self._cache,
+                options=options,
+                on_snapshot=on_snapshot,
+                cancellation_token=cancellation_token,
+            )
+        except ValueError as error:
+            return GenerationResult(success=False, message=str(error))
+        except Exception as error:  # noqa: BLE001 - last-resort UI guard
+            return GenerationResult(
+                success=False,
+                message=(
+                    "Schedule generation failed unexpectedly: "
+                    f"{type(error).__name__}."
+                ),
+            )
+
+        return self._result_from_progressive_snapshot(final_snapshot)
+
+    @staticmethod
+    def _result_from_full_outcome(outcome) -> GenerationResult:
+        """Translate ``SchedulingOutcome`` to GUI-facing text."""
         if outcome.schedule_count == 0:
             if outcome.relevant_course_count == 0:
                 message = (
                     "No exam courses found for the selected programs. "
                     "Try selecting different programs."
+                )
+            elif outcome.any_constraint_enabled:
+                message = (
+                    "No valid exam systems satisfy the current selection "
+                    "with the active threshold constraints. Try relaxing a "
+                    "threshold constraint, excluding fewer dates, or changing "
+                    "programs."
                 )
             else:
                 message = (
@@ -180,6 +188,7 @@ class SchedulingPresenter:
                 success=True,
                 message=message,
                 schedule_count=0,
+                pruned_candidates=outcome.pruned_candidates,
             )
 
         # Build a COMPLETE snapshot and apply the active ranking before caching.
@@ -201,4 +210,56 @@ class SchedulingPresenter:
             success=True,
             message=f"{outcome.schedule_count} exam system(s) generated.",
             schedule_count=outcome.schedule_count,
+            displayed_count=len(outcome.ranked_schedules),
+        )
+
+    @staticmethod
+    def _result_from_progressive_snapshot(
+        snapshot: ProgressiveRankedSnapshot,
+    ) -> GenerationResult:
+        """Translate a terminal progressive snapshot to GUI-facing text."""
+        if snapshot.state == ProgressiveResultState.CANCELLED:
+            return GenerationResult(
+                success=False,
+                message=snapshot.message,
+                schedule_count=snapshot.counters.systems_seen,
+                pruned_candidates=snapshot.counters.pruned_candidates,
+                displayed_count=snapshot.counters.displayed_count,
+            )
+
+        if snapshot.state == ProgressiveResultState.FAILED:
+            return GenerationResult(
+                success=False,
+                message=snapshot.message,
+                schedule_count=snapshot.counters.systems_seen,
+                pruned_candidates=snapshot.counters.pruned_candidates,
+                displayed_count=snapshot.counters.displayed_count,
+            )
+
+        if snapshot.counters.systems_seen == 0:
+            if snapshot.relevant_course_count == 0:
+                message = (
+                    "No exam courses found for the selected programs. "
+                    "Try selecting different programs."
+                )
+            else:
+                message = (
+                    "No valid exam systems could be generated for the current "
+                    "selection. Try excluding fewer dates, relaxing threshold "
+                    "constraints, or changing programs."
+                )
+            return GenerationResult(
+                success=True,
+                message=message,
+                schedule_count=0,
+                pruned_candidates=snapshot.counters.pruned_candidates,
+                displayed_count=0,
+            )
+
+        return GenerationResult(
+            success=True,
+            message=snapshot.message,
+            schedule_count=snapshot.counters.systems_seen,
+            pruned_candidates=snapshot.counters.pruned_candidates,
+            displayed_count=snapshot.counters.displayed_count,
         )

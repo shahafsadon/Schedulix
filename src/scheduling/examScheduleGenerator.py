@@ -5,7 +5,12 @@ from dataclasses import dataclass
 from datetime import date
 from itertools import product
 
+from constraint_settings import SchedulingConstraintSettings
 from models import Course, ExamPeriod
+from scheduling.constraints import (
+    ConstraintEvaluationContext,
+    ConstraintRegistry,
+)
 from scheduling.examConflictDetector import (
     ExamConflictDetector,
     ScheduledExam,
@@ -18,6 +23,11 @@ ResourceKey = tuple[str, int]
 # The first value is the total number of exams using a resource.
 # The second value is the number of obligatory exams using that resource.
 Usage = list[int]
+DateIndex = dict[ResourceKey, list[date]]
+PeriodDateIndex = dict[tuple[str, int, str | None, str | None], list[date]]
+ElectiveCountIndex = dict[date, dict[str, int]]
+CollisionIndex = dict[str, int]
+ExamCountIndex = dict[date, int]
 
 
 @dataclass(frozen=True)
@@ -36,6 +46,15 @@ class ExamSystem:
     period_schedules: list[ExamSchedule]
 
 
+@dataclass
+class SchedulingDiagnostics:
+    """Diagnostic counters for recursive candidate evaluation."""
+
+    generated_candidates: int = 0
+    accepted_candidates: int = 0
+    pruned_candidates: int = 0
+
+
 @dataclass(frozen=True)
 class _CourseProfile:
     """Precomputed conflict resources used while placing one course."""
@@ -43,6 +62,8 @@ class _CourseProfile:
     course: Course
     obligatory_keys: frozenset[ResourceKey]
     elective_keys: frozenset[ResourceKey]
+    all_keys: frozenset[ResourceKey]
+    elective_programs: frozenset[str]
 
 
 class ExamScheduleGenerator:
@@ -65,6 +86,8 @@ class ExamScheduleGenerator:
         self,
         date_handler: ExamDateHandler | None = None,
         conflict_detector: ExamConflictDetector | None = None,
+        constraint_registry: ConstraintRegistry | None = None,
+        constraint_settings: SchedulingConstraintSettings | None = None,
     ) -> None:
         self.date_handler = (
             date_handler
@@ -78,6 +101,19 @@ class ExamScheduleGenerator:
             conflict_detector
             or ExamConflictDetector()
         )
+
+        self.constraint_registry = (
+            constraint_registry
+            or ConstraintRegistry.default(
+                constraint_settings
+            )
+        )
+
+        self.diagnostics = SchedulingDiagnostics()
+
+    def reset_diagnostics(self) -> None:
+        """Reset recursive candidate-evaluation counters."""
+        self.diagnostics = SchedulingDiagnostics()
 
     def generate_for_period(
         self,
@@ -142,6 +178,13 @@ class ExamScheduleGenerator:
             set[str],
         ] = {}
 
+        mandatory_dates_by_key: DateIndex = {}
+        all_dates_by_key: DateIndex = {}
+        mandatory_period_dates_by_key: PeriodDateIndex = {}
+        elective_counts_by_date_program: ElectiveCountIndex = {}
+        elective_collisions_by_program: CollisionIndex = {}
+        exam_counts_by_date: ExamCountIndex = {}
+
         current_schedule: list[
             ScheduledExam
         ] = []
@@ -153,6 +196,12 @@ class ExamScheduleGenerator:
             current_schedule=current_schedule,
             occupancy=occupancy,
             course_numbers_by_date=course_numbers_by_date,
+            mandatory_dates_by_key=mandatory_dates_by_key,
+            all_dates_by_key=all_dates_by_key,
+            mandatory_period_dates_by_key=mandatory_period_dates_by_key,
+            elective_counts_by_date_program=elective_counts_by_date_program,
+            elective_collisions_by_program=elective_collisions_by_program,
+            exam_counts_by_date=exam_counts_by_date,
             exam_period=exam_period,
         )
 
@@ -227,11 +276,16 @@ class ExamScheduleGenerator:
                 courses,
                 relevant_periods[0],
             ):
-                yield ExamSystem(
+                exam_system = ExamSystem(
                     period_schedules=[
                         schedule
                     ]
                 )
+
+                if self._is_valid_complete_system(
+                    exam_system
+                ):
+                    yield exam_system
 
             return
 
@@ -272,11 +326,16 @@ class ExamScheduleGenerator:
             for combination in product(
                 *period_options
             ):
-                yield ExamSystem(
+                exam_system = ExamSystem(
                     period_schedules=list(
                         combination
                     )
                 )
+
+                if self._is_valid_complete_system(
+                    exam_system
+                ):
+                    yield exam_system
 
             return
 
@@ -289,6 +348,13 @@ class ExamScheduleGenerator:
             date,
             set[str],
         ] = {}
+
+        mandatory_dates_by_key: DateIndex = {}
+        all_dates_by_key: DateIndex = {}
+        mandatory_period_dates_by_key: PeriodDateIndex = {}
+        elective_counts_by_date_program: ElectiveCountIndex = {}
+        elective_collisions_by_program: CollisionIndex = {}
+        exam_counts_by_date: ExamCountIndex = {}
 
         current_periods: list[
             ExamSchedule
@@ -305,6 +371,12 @@ class ExamScheduleGenerator:
             current_periods=current_periods,
             occupancy=occupancy,
             course_numbers_by_date=course_numbers_by_date,
+            mandatory_dates_by_key=mandatory_dates_by_key,
+            all_dates_by_key=all_dates_by_key,
+            mandatory_period_dates_by_key=mandatory_period_dates_by_key,
+            elective_counts_by_date_program=elective_counts_by_date_program,
+            elective_collisions_by_program=elective_collisions_by_program,
+            exam_counts_by_date=exam_counts_by_date,
             profile_cache=profile_cache,
         )
 
@@ -322,6 +394,12 @@ class ExamScheduleGenerator:
             date,
             set[str],
         ],
+        mandatory_dates_by_key: DateIndex,
+        all_dates_by_key: DateIndex,
+        mandatory_period_dates_by_key: PeriodDateIndex,
+        elective_counts_by_date_program: ElectiveCountIndex,
+        elective_collisions_by_program: CollisionIndex,
+        exam_counts_by_date: ExamCountIndex,
         exam_period: ExamPeriod,
     ) -> Iterator[ExamSchedule]:
         """Recursively yield valid options for one exam period."""
@@ -348,10 +426,19 @@ class ExamScheduleGenerator:
 
         for exam_date in valid_dates:
             if not self._can_place(
-                profile,
-                exam_date,
-                occupancy,
-                course_numbers_by_date,
+                profile=profile,
+                exam_date=exam_date,
+                current_schedule=current_schedule,
+                occupancy=occupancy,
+                course_numbers_by_date=course_numbers_by_date,
+                mandatory_dates_by_key=mandatory_dates_by_key,
+                all_dates_by_key=all_dates_by_key,
+                mandatory_period_dates_by_key=mandatory_period_dates_by_key,
+                elective_counts_by_date_program=elective_counts_by_date_program,
+                elective_collisions_by_program=elective_collisions_by_program,
+                exam_counts_by_date=exam_counts_by_date,
+                semester=exam_period.semester,
+                moed=exam_period.moed,
             ):
                 continue
 
@@ -360,6 +447,14 @@ class ExamScheduleGenerator:
                 exam_date,
                 occupancy,
                 course_numbers_by_date,
+                mandatory_dates_by_key,
+                all_dates_by_key,
+                mandatory_period_dates_by_key,
+                elective_counts_by_date_program,
+                elective_collisions_by_program,
+                exam_counts_by_date,
+                exam_period.semester,
+                exam_period.moed,
             )
 
             current_schedule.append(
@@ -378,6 +473,12 @@ class ExamScheduleGenerator:
                 current_schedule=current_schedule,
                 occupancy=occupancy,
                 course_numbers_by_date=course_numbers_by_date,
+                mandatory_dates_by_key=mandatory_dates_by_key,
+                all_dates_by_key=all_dates_by_key,
+                mandatory_period_dates_by_key=mandatory_period_dates_by_key,
+                elective_counts_by_date_program=elective_counts_by_date_program,
+                elective_collisions_by_program=elective_collisions_by_program,
+                exam_counts_by_date=exam_counts_by_date,
                 exam_period=exam_period,
             )
 
@@ -388,6 +489,14 @@ class ExamScheduleGenerator:
                 exam_date,
                 occupancy,
                 course_numbers_by_date,
+                mandatory_dates_by_key,
+                all_dates_by_key,
+                mandatory_period_dates_by_key,
+                elective_counts_by_date_program,
+                elective_collisions_by_program,
+                exam_counts_by_date,
+                exam_period.semester,
+                exam_period.moed,
             )
 
     def _iter_exam_systems(
@@ -407,6 +516,12 @@ class ExamScheduleGenerator:
             date,
             set[str],
         ],
+        mandatory_dates_by_key: DateIndex,
+        all_dates_by_key: DateIndex,
+        mandatory_period_dates_by_key: PeriodDateIndex,
+        elective_counts_by_date_program: ElectiveCountIndex,
+        elective_collisions_by_program: CollisionIndex,
+        exam_counts_by_date: ExamCountIndex,
         profile_cache: dict[
             int,
             _CourseProfile,
@@ -416,11 +531,16 @@ class ExamScheduleGenerator:
         if period_index == len(
             period_options
         ):
-            yield ExamSystem(
+            exam_system = ExamSystem(
                 period_schedules=list(
                     current_periods
                 )
             )
+
+            if self._is_valid_complete_system(
+                exam_system
+            ):
+                yield exam_system
 
             return
 
@@ -455,10 +575,28 @@ class ExamScheduleGenerator:
                     ] = profile
 
                 if not self._can_place(
-                    profile,
-                    exam.exam_date,
-                    occupancy,
-                    course_numbers_by_date,
+                    profile=profile,
+                    exam_date=exam.exam_date,
+                    current_schedule=self._flatten_period_schedules(
+                        current_periods
+                    )
+                    + [
+                        ScheduledExam(
+                            course=placed_profile.course,
+                            exam_date=placed_date,
+                        )
+                        for placed_profile, placed_date in placed
+                    ],
+                    occupancy=occupancy,
+                    course_numbers_by_date=course_numbers_by_date,
+                    mandatory_dates_by_key=mandatory_dates_by_key,
+                    all_dates_by_key=all_dates_by_key,
+                    mandatory_period_dates_by_key=mandatory_period_dates_by_key,
+                    elective_counts_by_date_program=elective_counts_by_date_program,
+                    elective_collisions_by_program=elective_collisions_by_program,
+                    exam_counts_by_date=exam_counts_by_date,
+                    semester=option.semester,
+                    moed=option.moed,
                 ):
                     break
 
@@ -467,6 +605,14 @@ class ExamScheduleGenerator:
                     exam.exam_date,
                     occupancy,
                     course_numbers_by_date,
+                    mandatory_dates_by_key,
+                    all_dates_by_key,
+                    mandatory_period_dates_by_key,
+                    elective_counts_by_date_program,
+                    elective_collisions_by_program,
+                    exam_counts_by_date,
+                    option.semester,
+                    option.moed,
                 )
 
                 placed.append(
@@ -489,6 +635,12 @@ class ExamScheduleGenerator:
                     current_periods=current_periods,
                     occupancy=occupancy,
                     course_numbers_by_date=course_numbers_by_date,
+                    mandatory_dates_by_key=mandatory_dates_by_key,
+                    all_dates_by_key=all_dates_by_key,
+                    mandatory_period_dates_by_key=mandatory_period_dates_by_key,
+                    elective_counts_by_date_program=elective_counts_by_date_program,
+                    elective_collisions_by_program=elective_collisions_by_program,
+                    exam_counts_by_date=exam_counts_by_date,
                     profile_cache=profile_cache,
                 )
 
@@ -503,12 +655,51 @@ class ExamScheduleGenerator:
                     exam_date,
                     occupancy,
                     course_numbers_by_date,
+                    mandatory_dates_by_key,
+                    all_dates_by_key,
+                    mandatory_period_dates_by_key,
+                    elective_counts_by_date_program,
+                    elective_collisions_by_program,
+                    exam_counts_by_date,
+                    option.semester,
+                    option.moed,
                 )
 
+    def _is_valid_complete_system(
+        self,
+        exam_system: ExamSystem,
+    ) -> bool:
+        """Return True when all enabled final-system constraints accept it."""
+        if not self.constraint_registry.requires_final_system_evaluation():
+            return True
+
+        result = self.constraint_registry.evaluate_final(
+            ConstraintEvaluationContext(
+                exam_system=exam_system,
+            )
+        )
+
+        return result.accepted
+
     @staticmethod
+    def _flatten_period_schedules(
+        period_schedules: list[ExamSchedule],
+    ) -> list[ScheduledExam]:
+        """Return the already selected period exams as one list."""
+        scheduled_exams: list[ScheduledExam] = []
+
+        for period_schedule in period_schedules:
+            scheduled_exams.extend(
+                period_schedule.scheduled_exams
+            )
+
+        return scheduled_exams
+
     def _can_place(
+        self,
         profile: _CourseProfile,
         exam_date: date,
+        current_schedule: list[ScheduledExam],
         occupancy: dict[
             date,
             dict[ResourceKey, Usage],
@@ -517,43 +708,47 @@ class ExamScheduleGenerator:
             date,
             set[str],
         ],
+        mandatory_dates_by_key: DateIndex,
+        all_dates_by_key: DateIndex,
+        mandatory_period_dates_by_key: PeriodDateIndex,
+        elective_counts_by_date_program: ElectiveCountIndex,
+        elective_collisions_by_program: CollisionIndex,
+        exam_counts_by_date: ExamCountIndex,
+        semester: str | None,
+        moed: str | None,
     ) -> bool:
-        """Return True when a course may be assigned to the candidate date."""
-        if (
-            profile.course.course_number
-            in course_numbers_by_date.get(
-                exam_date,
-                set(),
-            )
-        ):
-            # Prevent the same course from receiving two different moeds on
-            # the same calendar date when exam periods overlap.
-            return False
+        """Return True when all enabled constraints accept the candidate."""
+        self.diagnostics.generated_candidates += 1
 
-        day_usage = occupancy.get(
-            exam_date,
-            {},
+        result = self.constraint_registry.evaluate_incremental(
+            ConstraintEvaluationContext(
+                candidate_exam=profile.course,
+                candidate_date=exam_date,
+                partial_schedule=current_schedule,
+                semester=semester,
+                moed=moed,
+                metadata={
+                    "occupancy": occupancy,
+                    "course_numbers_by_date": course_numbers_by_date,
+                    "candidate_obligatory_keys": profile.obligatory_keys,
+                    "candidate_all_keys": profile.all_keys,
+                    "candidate_elective_programs": profile.elective_programs,
+                    "mandatory_dates_by_key": mandatory_dates_by_key,
+                    "all_dates_by_key": all_dates_by_key,
+                    "mandatory_period_dates_by_key": mandatory_period_dates_by_key,
+                    "elective_counts_by_date_program": elective_counts_by_date_program,
+                    "elective_collisions_by_program": elective_collisions_by_program,
+                    "exam_counts_by_date": exam_counts_by_date,
+                },
+            )
         )
 
-        for key in profile.obligatory_keys:
-            usage = day_usage.get(key)
+        if result.accepted:
+            self.diagnostics.accepted_candidates += 1
+        else:
+            self.diagnostics.pruned_candidates += 1
 
-            if (
-                usage is not None
-                and usage[0] > 0
-            ):
-                return False
-
-        for key in profile.elective_keys:
-            usage = day_usage.get(key)
-
-            if (
-                usage is not None
-                and usage[1] > 0
-            ):
-                return False
-
-        return True
+        return result.accepted
 
     @staticmethod
     def _place(
@@ -567,6 +762,14 @@ class ExamScheduleGenerator:
             date,
             set[str],
         ],
+        mandatory_dates_by_key: DateIndex,
+        all_dates_by_key: DateIndex,
+        mandatory_period_dates_by_key: PeriodDateIndex,
+        elective_counts_by_date_program: ElectiveCountIndex,
+        elective_collisions_by_program: CollisionIndex,
+        exam_counts_by_date: ExamCountIndex,
+        semester: str | None,
+        moed: str | None,
     ) -> None:
         """Record one temporary recursive placement."""
         day_usage = occupancy.setdefault(
@@ -580,6 +783,27 @@ class ExamScheduleGenerator:
         ).add(
             profile.course.course_number
         )
+
+        exam_counts_by_date[exam_date] = exam_counts_by_date.get(exam_date, 0) + 1
+
+        for key in profile.obligatory_keys:
+            mandatory_dates_by_key.setdefault(key, []).append(exam_date)
+            mandatory_period_dates_by_key.setdefault(
+                (key[0], key[1], semester, moed),
+                [],
+            ).append(exam_date)
+
+        for key in profile.all_keys:
+            all_dates_by_key.setdefault(key, []).append(exam_date)
+
+        date_elective_counts = elective_counts_by_date_program.setdefault(exam_date, {})
+        for program_number in profile.elective_programs:
+            existing_count = date_elective_counts.get(program_number, 0)
+            elective_collisions_by_program[program_number] = (
+                elective_collisions_by_program.get(program_number, 0)
+                + existing_count
+            )
+            date_elective_counts[program_number] = existing_count + 1
 
         for key in profile.obligatory_keys:
             usage = day_usage.setdefault(
@@ -610,11 +834,57 @@ class ExamScheduleGenerator:
             date,
             set[str],
         ],
+        mandatory_dates_by_key: DateIndex,
+        all_dates_by_key: DateIndex,
+        mandatory_period_dates_by_key: PeriodDateIndex,
+        elective_counts_by_date_program: ElectiveCountIndex,
+        elective_collisions_by_program: CollisionIndex,
+        exam_counts_by_date: ExamCountIndex,
+        semester: str | None,
+        moed: str | None,
     ) -> None:
         """Undo one temporary recursive placement."""
         day_usage = occupancy[
             exam_date
         ]
+
+        exam_count = exam_counts_by_date[exam_date] - 1
+        if exam_count == 0:
+            del exam_counts_by_date[exam_date]
+        else:
+            exam_counts_by_date[exam_date] = exam_count
+
+        for key in profile.obligatory_keys:
+            _remove_one_date(mandatory_dates_by_key, key, exam_date)
+            _remove_one_date(
+                mandatory_period_dates_by_key,
+                (key[0], key[1], semester, moed),
+                exam_date,
+            )
+
+        for key in profile.all_keys:
+            _remove_one_date(all_dates_by_key, key, exam_date)
+
+        date_elective_counts = elective_counts_by_date_program.get(exam_date, {})
+        for program_number in profile.elective_programs:
+            current_count = date_elective_counts[program_number]
+            remaining_count = current_count - 1
+            new_collision_count = (
+                elective_collisions_by_program.get(program_number, 0)
+                - remaining_count
+            )
+            if new_collision_count == 0:
+                elective_collisions_by_program.pop(program_number, None)
+            else:
+                elective_collisions_by_program[program_number] = new_collision_count
+
+            if remaining_count == 0:
+                del date_elective_counts[program_number]
+            else:
+                date_elective_counts[program_number] = remaining_count
+
+        if not date_elective_counts and exam_date in elective_counts_by_date_program:
+            del elective_counts_by_date_program[exam_date]
 
         for key in profile.obligatory_keys:
             usage = day_usage[
@@ -695,6 +965,24 @@ class ExamScheduleGenerator:
             obligatory_keys
         )
 
+        mandatory_programs = {
+            program.program_number
+            for program in course.programs
+            if (
+                program.status.strip().lower()
+                != "elective"
+            )
+        }
+        elective_programs = {
+            program.program_number
+            for program in course.programs
+            if (
+                program.status.strip().lower()
+                == "elective"
+            )
+        }
+        elective_programs.difference_update(mandatory_programs)
+
         return _CourseProfile(
             course=course,
             obligatory_keys=frozenset(
@@ -702,6 +990,12 @@ class ExamScheduleGenerator:
             ),
             elective_keys=frozenset(
                 elective_keys
+            ),
+            all_keys=frozenset(
+                obligatory_keys.union(elective_keys)
+            ),
+            elective_programs=frozenset(
+                elective_programs
             ),
         )
 
@@ -802,3 +1096,13 @@ class ExamScheduleGenerator:
             )
 
         return period_courses
+
+def _remove_one_date(
+    index: dict,
+    key,
+    exam_date: date,
+) -> None:
+    dates = index[key]
+    dates.remove(exam_date)
+    if not dates:
+        del index[key]

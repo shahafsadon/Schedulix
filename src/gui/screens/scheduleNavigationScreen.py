@@ -20,8 +20,14 @@ except ModuleNotFoundError as error:
 
 from gui.presenters.exportPresenter import ExportPresenter
 from gui.presenters.scheduleNavigationPresenter import ExamRow, ScheduleNavigationPresenter
-from application.async_runner import AsyncScheduleRunner
-from scheduling.rankingSettings import RankingCriterion, RankingSettings
+from gui.screens.themeToggle import (
+    THEME_BUTTON_WIDTH,
+    ThemeButtonText,
+    ThemeToggleCallback,
+    current_theme_button_text,
+    handle_theme_toggle,
+)
+from ranking_settings import RankingCriterion, RankingPreference, RankingSettings
 
 
 _MONTH_NAMES = [
@@ -45,14 +51,21 @@ _SELECTED_DAY_COLOR = ("#2563EB", "#60A5FA")
 _SELECTED_DAY_TEXT = ("#FFFFFF", "#0B1220")
 _REGULAR_DAY_TEXT = ("#A8B0BA", "#64748B")
 
-# Human-readable labels for each RankingCriterion, used by ranking combo-boxes.
-_CRITERION_LABELS: dict[str, RankingCriterion | None] = {
-    "(none)": None,
-    "Fewer exam days": RankingCriterion.FEWER_EXAM_DAYS,
-    "More date spread": RankingCriterion.MORE_SPREAD,
-    "Earlier start date": RankingCriterion.EARLIER_START,
+_RANKING_LABELS: dict[RankingCriterion, str] = {
+    RankingCriterion.min_mandatory_gap: "Min mandatory gap (descending)",
+    RankingCriterion.average_all_gap: "Average exam gap (descending)",
+    RankingCriterion.elective_collision_count: "Elective collisions (descending)",
+    RankingCriterion.mandatory_span: "Mandatory span (descending)",
+    RankingCriterion.max_exams_per_day: "Max exams/day (descending)",
 }
-_CRITERION_KEYS: list[str] = list(_CRITERION_LABELS.keys())
+
+_RANKING_DIRECTION: dict[RankingCriterion, bool] = {
+    RankingCriterion.min_mandatory_gap: True,
+    RankingCriterion.average_all_gap: True,
+    RankingCriterion.elective_collision_count: True,
+    RankingCriterion.mandatory_span: True,
+    RankingCriterion.max_exams_per_day: True,
+}
 
 
 class ScheduleNavigationScreen(ctk.CTkFrame):
@@ -64,25 +77,28 @@ class ScheduleNavigationScreen(ctk.CTkFrame):
         presenter: ScheduleNavigationPresenter,
         export_presenter: ExportPresenter | None = None,
         on_back: Callable[[], None] | None = None,
-        runner: AsyncScheduleRunner | None = None,
+        on_theme_toggle: ThemeToggleCallback | None = None,
+        theme_button_text: ThemeButtonText = None,
     ) -> None:
         super().__init__(master, corner_radius=0, fg_color=_PAGE_BG)
         self.presenter = presenter
         self._export_presenter = export_presenter
         self._on_back = on_back
-        # Runner is optional; when supplied, threshold controls are disabled
-        # while generation is active (ranking priorities remain always enabled).
-        self._runner: AsyncScheduleRunner | None = runner
+        self._on_theme_toggle = on_theme_toggle
+        self._theme_button_text = theme_button_text
 
         self._exam_cells: dict[str, ctk.CTkButton] = {}
         self._selected_iso_date: str | None = None
         self._current_exams_by_iso_date: dict[str, list[ExamRow]] = {}
         self._grid_built = False
         self._metric_labels: dict[str, ctk.CTkLabel] = {}
-        # Ranking combo-box StringVar instances (one per priority slot).
-        self._ranking_vars: list[ctk.StringVar] = []
-        # Threshold-constraint widgets that must be disabled during generation.
-        self._threshold_widgets: list[ctk.CTkBaseClass] = []
+        self._ranking_metric_labels: dict[str, ctk.CTkLabel] = {}
+        self._ranking_criteria: list[RankingCriterion] = []
+        self._ranking_rows_frame = None
+        self._criterion_selector = None
+        self._apply_ranking_button = None
+        self._ranking_status_label = None
+        self._theme_button: ctk.CTkButton | None = None
 
         self._build()
         self._refresh()
@@ -155,6 +171,7 @@ class ScheduleNavigationScreen(ctk.CTkFrame):
         self._next_button.grid(row=0, column=2, padx=(0, 8))
 
         self._save_button = None
+        next_action_column = 3
         if self._export_presenter is not None:
             self._save_button = ctk.CTkButton(
                 actions,
@@ -165,6 +182,26 @@ class ScheduleNavigationScreen(ctk.CTkFrame):
                 command=self._handle_save,
             )
             self._save_button.grid(row=0, column=3)
+            next_action_column = 4
+
+        if self._on_theme_toggle is not None:
+            # Button text tells the user which mode the click will open.
+            self._theme_button = ctk.CTkButton(
+                actions,
+                text=current_theme_button_text(self._theme_button_text),
+                width=THEME_BUTTON_WIDTH,
+                fg_color="transparent",
+                border_width=1,
+                border_color=_BORDER,
+                text_color=(_PRIMARY, "#93C5FD"),
+                hover_color=("#DCE8FF", "#1E293B"),
+                command=self._handle_theme_toggle,
+            )
+            self._theme_button.grid(
+                row=0,
+                column=next_action_column,
+                padx=(8, 0),
+            )
 
     def _build_metrics(self) -> None:
         """Build compact summary cards for the current system."""
@@ -247,14 +284,19 @@ class ScheduleNavigationScreen(ctk.CTkFrame):
         self._body.grid(row=1, column=0, sticky="nsew", padx=14, pady=(0, 14))
         self._body.grid_columnconfigure(0, weight=1)
 
+        sidebar = ctk.CTkFrame(main, fg_color="transparent")
+        sidebar.grid(row=0, column=1, sticky="nsew")
+        sidebar.grid_columnconfigure(0, weight=1)
+        sidebar.grid_rowconfigure(0, weight=1)
+
         details_card = ctk.CTkFrame(
-            main,
+            sidebar,
             fg_color=_SURFACE,
             border_width=1,
             border_color=_BORDER,
             corner_radius=8,
         )
-        details_card.grid(row=0, column=1, sticky="nsew")
+        details_card.grid(row=0, column=0, sticky="nsew", pady=(0, 12))
         details_card.grid_columnconfigure(0, weight=1)
         details_card.grid_rowconfigure(2, weight=1)
 
@@ -299,6 +341,118 @@ class ScheduleNavigationScreen(ctk.CTkFrame):
         )
         self._schedule_body.grid(row=4, column=0, sticky="ew", padx=12, pady=(0, 12))
         self._schedule_body.grid_columnconfigure(0, weight=1)
+
+        self._build_ranking_panel(sidebar)
+
+    def _build_ranking_panel(self, sidebar: ctk.CTkFrame) -> None:
+        """Build ranking controls and current-system metric readout."""
+        panel = ctk.CTkFrame(
+            sidebar,
+            fg_color=_SURFACE,
+            border_width=1,
+            border_color=_BORDER,
+            corner_radius=8,
+        )
+        panel.grid(row=1, column=0, sticky="ew")
+        panel.grid_columnconfigure(0, weight=1)
+
+        ctk.CTkLabel(
+            panel,
+            text="Ranking",
+            font=("Segoe UI", 16, "bold"),
+            text_color=_TEXT,
+            anchor="w",
+        ).grid(row=0, column=0, columnspan=2, sticky="ew", padx=16, pady=(14, 2))
+
+        ctk.CTkLabel(
+            panel,
+            text=(
+                "Choose criteria; all sorting is descending and applies "
+                "after generation."
+            ),
+            font=("Segoe UI", 11),
+            text_color=_MUTED,
+            anchor="w",
+            wraplength=320,
+            justify="left",
+        ).grid(row=1, column=0, columnspan=2, sticky="ew", padx=16, pady=(0, 8))
+
+        self._criterion_selector = ctk.CTkOptionMenu(
+            panel,
+            values=list(_RANKING_LABELS.values()),
+            width=210,
+            fg_color=_PRIMARY,
+            button_color="#1E40AF",
+            button_hover_color=_PRIMARY_HOVER,
+        )
+        self._criterion_selector.grid(row=2, column=0, sticky="ew", padx=(16, 8), pady=(0, 10))
+        self._criterion_selector.set(_RANKING_LABELS[RankingCriterion.min_mandatory_gap])
+
+        ctk.CTkButton(
+            panel,
+            text="Add",
+            width=70,
+            fg_color=_PRIMARY,
+            hover_color=_PRIMARY_HOVER,
+            command=self._handle_add_ranking_criterion,
+        ).grid(row=2, column=1, sticky="e", padx=(0, 16), pady=(0, 10))
+
+        self._ranking_rows_frame = ctk.CTkFrame(panel, fg_color="transparent")
+        self._ranking_rows_frame.grid(row=3, column=0, columnspan=2, sticky="ew", padx=12)
+        self._ranking_rows_frame.grid_columnconfigure(0, weight=1)
+
+        self._apply_ranking_button = ctk.CTkButton(
+            panel,
+            text="Apply Ranking",
+            width=128,
+            fg_color=_PRIMARY,
+            hover_color=_PRIMARY_HOVER,
+            command=self._handle_apply_ranking,
+        )
+        self._apply_ranking_button.grid(row=4, column=0, sticky="w", padx=16, pady=(10, 8))
+
+        self._ranking_status_label = ctk.CTkLabel(
+            panel,
+            text="No ranking criteria selected.",
+            font=("Segoe UI", 11),
+            text_color=_MUTED,
+            anchor="w",
+            wraplength=320,
+            justify="left",
+        )
+        self._ranking_status_label.grid(row=5, column=0, columnspan=2, sticky="ew", padx=16, pady=(0, 12))
+
+        metrics = ctk.CTkFrame(panel, fg_color=_SUBTLE_SURFACE, corner_radius=8)
+        metrics.grid(row=6, column=0, columnspan=2, sticky="ew", padx=12, pady=(0, 12))
+        metrics.grid_columnconfigure(1, weight=1)
+
+        metric_rows = [
+            ("min_mandatory_gap", "Min mandatory gap"),
+            ("average_all_gap", "Average gap"),
+            ("elective_collision_count", "Elective collisions"),
+            ("mandatory_span", "Mandatory span"),
+            ("max_exams_per_day", "Max exams/day"),
+        ]
+        for row_index, (key, label) in enumerate(metric_rows):
+            ctk.CTkLabel(
+                metrics,
+                text=label,
+                font=("Segoe UI", 10, "bold"),
+                text_color=_MUTED,
+                anchor="w",
+            ).grid(row=row_index, column=0, sticky="w", padx=(12, 8), pady=(8 if row_index == 0 else 2, 2))
+
+            value = ctk.CTkLabel(
+                metrics,
+                text="-",
+                font=("Segoe UI", 11, "bold"),
+                text_color=_TEXT,
+                anchor="e",
+            )
+            value.grid(row=row_index, column=1, sticky="e", padx=(8, 12), pady=(8 if row_index == 0 else 2, 2))
+            self._ranking_metric_labels[key] = value
+
+        self._refresh_ranking_order()
 
     def _build_footer(self) -> None:
         """Build a small export/status footer."""
@@ -536,12 +690,77 @@ class ScheduleNavigationScreen(ctk.CTkFrame):
         result = self._export_presenter.export_current(chosen or None)
 
         if result.success:
-            color = "#147A39"
+            color = "#2e7d32"
         elif "cancelled" in result.message.lower():
             color = "#666666"
         else:
             color = "#B00020"
         self._status_label.configure(text=result.message, text_color=color)
+
+    def _handle_theme_toggle(self) -> None:
+        """Switch between light and dark mode."""
+        handle_theme_toggle(
+            self._on_theme_toggle,
+            self._theme_button,
+            self._theme_button_text,
+        )
+
+    def _handle_add_ranking_criterion(self) -> None:
+        """Add the selected criterion unless it is already active."""
+        criterion = self._selected_ranking_criterion()
+        if criterion in self._ranking_criteria:
+            self._set_ranking_status("This criterion is already active.", ok=False)
+            return
+
+        self._ranking_criteria.append(criterion)
+        self._refresh_ranking_order()
+        self._set_ranking_status("Ranking criterion added.", ok=None)
+
+    def _handle_remove_ranking_criterion(
+        self,
+        criterion: RankingCriterion,
+    ) -> None:
+        """Remove one active ranking criterion."""
+        self._ranking_criteria = [
+            active
+            for active in self._ranking_criteria
+            if active != criterion
+        ]
+        self._refresh_ranking_order()
+        self._set_ranking_status("Ranking criterion removed.", ok=None)
+
+    def _handle_move_ranking_criterion(
+        self,
+        criterion: RankingCriterion,
+        direction: int,
+    ) -> None:
+        """Move a criterion up or down in priority order."""
+        try:
+            index = self._ranking_criteria.index(criterion)
+        except ValueError:
+            return
+
+        new_index = index + direction
+        if new_index < 0 or new_index >= len(self._ranking_criteria):
+            return
+
+        self._ranking_criteria[index], self._ranking_criteria[new_index] = (
+            self._ranking_criteria[new_index],
+            self._ranking_criteria[index],
+        )
+        self._refresh_ranking_order()
+        self._set_ranking_status("Ranking order updated.", ok=None)
+
+    def _handle_apply_ranking(self) -> None:
+        """Apply the active ranking order without generating schedules."""
+        result = self.presenter.apply_ranking(self._ranking_settings())
+        self._set_ranking_status(result.message, ok=result.success)
+
+        if result.success:
+            self._grid_built = False
+            self._exam_cells = {}
+            self._selected_iso_date = None
+            self._refresh()
 
     def _refresh(self) -> None:
         """Refresh counter, metrics, calendar highlights, and detail panes."""
@@ -555,9 +774,15 @@ class ScheduleNavigationScreen(ctk.CTkFrame):
             self._next_button.configure(state="disabled")
             if self._save_button is not None:
                 self._save_button.configure(state="disabled")
+            if getattr(self, "_apply_ranking_button", None) is not None:
+                self._apply_ranking_button.configure(state="disabled")
+            self._refresh_ranking_metrics(None)
             return
 
         if not self._grid_built:
+            for child in self._body.winfo_children():
+                child.destroy()
+            self._exam_cells = {}
             self._build_relevant_months_grid()
             self._grid_built = True
 
@@ -566,12 +791,13 @@ class ScheduleNavigationScreen(ctk.CTkFrame):
             self._selected_iso_date = self._first_exam_date()
 
         self._counter_label.configure(
-            text=f"Reviewing system {view.position} of {view.total}"
+            text=f"System {view.position} of {view.total}"
         )
         self._refresh_metrics(view)
         self._paint_exam_days(view.exams_by_iso_date)
         self._render_selected_day()
         self._render_system_exam_list(view.sections)
+        self._refresh_ranking_metrics(view.metrics_summary)
 
         self._prev_button.configure(
             state="normal" if self.presenter.can_go_previous() else "disabled"
@@ -581,6 +807,8 @@ class ScheduleNavigationScreen(ctk.CTkFrame):
         )
         if self._save_button is not None:
             self._save_button.configure(state="normal")
+        if getattr(self, "_apply_ranking_button", None) is not None:
+            self._apply_ranking_button.configure(state="normal")
 
     def _refresh_metrics(self, view) -> None:
         """Update summary cards from the current system view."""
@@ -589,6 +817,137 @@ class ScheduleNavigationScreen(ctk.CTkFrame):
         self._metric_labels["days"].configure(text=str(len(view.exams_by_iso_date)))
         self._metric_labels["sections"].configure(text=str(len(view.sections)))
         self._metric_labels["months"].configure(text=str(len(self.presenter.relevant_months())))
+
+    def _refresh_ranking_order(self) -> None:
+        """Render the active ranking priority list."""
+        if self._ranking_rows_frame is None:
+            return
+
+        for child in self._ranking_rows_frame.winfo_children():
+            child.destroy()
+
+        if not self._ranking_criteria:
+            ctk.CTkLabel(
+                self._ranking_rows_frame,
+                text="No active ranking criteria.",
+                font=("Segoe UI", 11),
+                text_color=_MUTED,
+                anchor="w",
+            ).grid(row=0, column=0, sticky="ew", padx=4, pady=4)
+            return
+
+        for row_index, criterion in enumerate(self._ranking_criteria):
+            row = ctk.CTkFrame(
+                self._ranking_rows_frame,
+                fg_color=_SUBTLE_SURFACE,
+                corner_radius=8,
+            )
+            row.grid(row=row_index, column=0, sticky="ew", padx=0, pady=(4, 0))
+            row.grid_columnconfigure(0, weight=1)
+
+            ctk.CTkLabel(
+                row,
+                text=f"{row_index + 1}. {_RANKING_LABELS[criterion]}",
+                font=("Segoe UI", 11, "bold"),
+                text_color=_TEXT,
+                anchor="w",
+            ).grid(row=0, column=0, sticky="ew", padx=(10, 6), pady=8)
+
+            ctk.CTkButton(
+                row,
+                text="Up",
+                width=42,
+                fg_color="transparent",
+                border_width=1,
+                border_color=_BORDER,
+                text_color=(_PRIMARY, "#93C5FD"),
+                command=lambda item=criterion: self._handle_move_ranking_criterion(
+                    item,
+                    -1,
+                ),
+            ).grid(row=0, column=1, padx=(0, 4), pady=6)
+
+            ctk.CTkButton(
+                row,
+                text="Down",
+                width=54,
+                fg_color="transparent",
+                border_width=1,
+                border_color=_BORDER,
+                text_color=(_PRIMARY, "#93C5FD"),
+                command=lambda item=criterion: self._handle_move_ranking_criterion(
+                    item,
+                    1,
+                ),
+            ).grid(row=0, column=2, padx=(0, 4), pady=6)
+
+            ctk.CTkButton(
+                row,
+                text="Remove",
+                width=68,
+                fg_color="transparent",
+                border_width=1,
+                border_color=_BORDER,
+                text_color=("#B00020", "#FCA5A5"),
+                command=lambda item=criterion: self._handle_remove_ranking_criterion(
+                    item
+                ),
+            ).grid(row=0, column=3, padx=(0, 8), pady=6)
+
+    def _refresh_ranking_metrics(self, metrics) -> None:
+        """Display current-system ranking metrics when available."""
+        if not getattr(self, "_ranking_metric_labels", None):
+            return
+
+        if metrics is None:
+            for label in self._ranking_metric_labels.values():
+                label.configure(text="-")
+            return
+
+        values = {
+            "min_mandatory_gap": str(metrics.min_mandatory_gap),
+            "average_all_gap": f"{metrics.average_all_gap:.2f}",
+            "elective_collision_count": str(metrics.elective_collision_count),
+            "mandatory_span": str(metrics.mandatory_span),
+            "max_exams_per_day": str(metrics.max_exams_per_day),
+        }
+        for key, value in values.items():
+            self._ranking_metric_labels[key].configure(text=value)
+
+    def _set_ranking_status(
+        self,
+        message: str,
+        ok: bool | None,
+    ) -> None:
+        if self._ranking_status_label is None:
+            return
+
+        if ok is True:
+            color = "#2e7d32"
+        elif ok is False:
+            color = "#B00020"
+        else:
+            color = _MUTED
+
+        self._ranking_status_label.configure(text=message, text_color=color)
+
+    def _selected_ranking_criterion(self) -> RankingCriterion:
+        selected = self._criterion_selector.get()
+        for criterion, label in _RANKING_LABELS.items():
+            if label == selected:
+                return criterion
+        return RankingCriterion.min_mandatory_gap
+
+    def _ranking_settings(self) -> RankingSettings:
+        return RankingSettings(
+            [
+                RankingPreference(
+                    criterion=criterion,
+                    descending=_RANKING_DIRECTION[criterion],
+                )
+                for criterion in self._ranking_criteria
+            ]
+        )
 
     def _build_relevant_months_grid(self) -> None:
         """Draw only months that contain exams in at least one system."""
@@ -680,22 +1039,80 @@ class ScheduleNavigationScreen(ctk.CTkFrame):
             if not exams:
                 continue
 
-            selected = iso_date == self._selected_iso_date
+            selected = iso_date == getattr(self, "_selected_iso_date", None)
             cell.configure(
                 text=f"{int(iso_date[-2:])}  ({len(exams)})",
                 fg_color=_SELECTED_DAY_COLOR if selected else _EXAM_DAY_COLOR,
                 hover=True,
                 hover_color=_EXAM_DAY_HOVER,
                 text_color=_SELECTED_DAY_TEXT if selected else _EXAM_DAY_TEXT,
-                command=lambda d=iso_date: self._select_day(d),
+                command=lambda d=iso_date, rows=exams: self._handle_exam_day_click(
+                    d,
+                    rows,
+                ),
                 state="normal",
             )
+
+    def _handle_exam_day_click(
+        self,
+        iso_date: str,
+        exams: list[ExamRow],
+    ) -> None:
+        """Handle an exam-day click in full UI or headless compatibility mode."""
+        if hasattr(self, "_details_body"):
+            self._select_day(iso_date)
+            return
+
+        self._show_day_popup(iso_date, exams)
 
     def _select_day(self, iso_date: str) -> None:
         """Select a day and refresh the detail panel."""
         self._selected_iso_date = iso_date
         self._paint_exam_days(self._current_exams_by_iso_date)
         self._render_selected_day()
+
+    def _show_day_popup(
+        self,
+        iso_date: str,
+        exams: list[ExamRow],
+    ) -> None:
+        """Legacy popup used by older headless tests and fallback UI paths."""
+        popup = ctk.CTkToplevel(self.winfo_toplevel())
+        popup.title(f"Exams on {iso_date}")
+        popup.geometry("460x320")
+        popup.transient(self.winfo_toplevel())
+        popup.grab_set()
+
+        body = ctk.CTkFrame(popup, fg_color="transparent")
+        body.pack(fill="both", expand=True, padx=18, pady=18)
+
+        ctk.CTkLabel(
+            body,
+            text=f"Exams scheduled on {iso_date}",
+            font=("Segoe UI", 16, "bold"),
+            text_color=_TEXT,
+        ).pack(anchor="w", pady=(0, 10))
+
+        for exam in exams:
+            ctk.CTkLabel(
+                body,
+                text=f"{exam.course_number}  -  {exam.course_name}",
+                font=("Segoe UI", 13, "bold"),
+                text_color=_TEXT,
+                anchor="w",
+            ).pack(anchor="w", pady=(6, 2))
+
+            ctk.CTkLabel(
+                body,
+                text=(
+                    f"Instructor: {exam.instructor}    "
+                    f"Requirement: {exam.status}    "
+                    f"Programs: {exam.program_numbers}"
+                ),
+                font=("Segoe UI", 11),
+                text_color=_MUTED,
+                anchor="w",
+            ).pack(anchor="w")
 
     def _render_selected_day(self) -> None:
         """Show selected-day exam details in the sidebar."""

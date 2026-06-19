@@ -19,7 +19,7 @@ The Version 2.0 desktop app guides the user through the complete scheduling
 process:
 
 ```text
-Upload Files -> Select Programs -> Manage Exam Dates -> Generate Schedules -> Review Results
+Upload Files -> Select Programs -> Scheduling Settings -> Manage Exam Dates -> Generate Schedules -> Review Results
 ```
 
 Generated schedules are created on a background worker so the GUI remains
@@ -51,7 +51,15 @@ courses grouped by year and semester, including requirement type and evaluation
 method. After selecting the relevant programs, the user continues to review and
 edit exam dates.
 
-### 3. Manage Exam Dates
+### 3. Scheduling Settings
+
+The scheduling settings screen lets the user enable or disable the five Part 3
+threshold requirements and enter the matching `k` value for each enabled rule.
+Disabled requirements are ignored by the generator. The screen also keeps the
+flow compatible with Version 2.0: when all requirements are disabled and no
+ranking criteria are selected, generation behaves like the old flow.
+
+### 4. Manage Exam Dates
 
 ![Date management and direct generation](images/date-management-generate-screen.png)
 
@@ -62,7 +70,7 @@ period count, window length, active days, excluded days, and hidden exclusions.
 When the calendar is ready, the user clicks **Generate Exam Schedules** directly
 from this screen.
 
-### 4. Generate Schedules
+### 5. Generate Schedules
 
 The generation action runs asynchronously from the Date Management screen. While
 generation is running, calendar editing controls are disabled to prevent
@@ -71,7 +79,7 @@ the generated schedule systems are saved in the GUI cache and the app opens the
 results screen automatically. If generation fails, the user stays on Date
 Management and receives a clear error message.
 
-### 5. Review Results
+### 6. Review Results
 
 ![Generated schedules review screen](images/generated-schedules-review-screen.png)
 
@@ -95,7 +103,8 @@ Schedulix/
 |   |-- examples/
 |   |   |-- CourseExample.txt        # Example course records
 |   |   |-- DatesExample.txt         # Example exam periods and excluded dates
-|   |   `-- ProgramsExample.txt      # Example selected study programs
+|   |   |-- ProgramsExample.txt      # Example selected study programs
+|   |   `-- SettingsExample.txt      # Example Part 3 scheduling-settings file (optional)
 |   |-- outputs/
 |   |   `-- exam_schedules.txt       # Generated output file after running the system
 |   `-- output/                      # Old/unused output folder placeholder
@@ -108,9 +117,11 @@ Schedulix/
 |   |-- fileReader/
 |   |   |-- baseFileReader.py        # Shared reader base class and reader factory
 |   |   `-- fileTypeReaders/
-|   |       |-- coursesReader.py     # Parses CourseExample-style course files
-|   |       |-- examPeriodsReader.py # Parses DatesExample-style exam-period files
-|   |       `-- programReader.py     # Parses selected program files
+|   |       |-- coursesReader.py             # Parses CourseExample-style course files
+|   |       |-- examPeriodsReader.py         # Parses DatesExample-style exam-period files
+|   |       |-- programReader.py             # Parses selected program files
+|   |       |-- schedulingSettingsReader.py  # Parses optional Part 3 settings files
+|   |       `-- schedulingSettingsWriter.py  # Writes Part 3 settings files
 |   |-- output/
 |   |   |-- exportService.py         # Exports one chosen generated schedule
 |   |   `-- outputWriter.py          # Formats and writes readable schedule output
@@ -121,13 +132,16 @@ Schedulix/
 |   |   |-- screens/                 # customTkinter views only
 |   |   |   |-- fileUploadScreen.py
 |   |   |   |-- programConfigScreen.py
+|   |   |   |-- schedulingSettingsScreen.py
 |   |   |   |-- dateManagementScreen.py
 |   |   |   `-- scheduleNavigationScreen.py
 |   |   |-- presenters/              # Testable MVP presenter logic
 |   |   |   |-- dateManagementPresenter.py
 |   |   |   |-- exportPresenter.py
 |   |   |   |-- programSelectionPresenter.py
+|   |   |   |-- schedulingSettingsPresenter.py
 |   |   |   |-- schedulingPresenter.py
+|   |   |   |-- scheduleNavigationPresenter.py
 |   |   |   `-- uploadedDataPresenter.py
 |   |   |-- services/                # GUI-facing data services
 |   |   |   |-- uploadService.py
@@ -201,13 +215,20 @@ Selected programs: 3
 Courses read: 3
 Relevant Exam courses: 2
 Exam periods read: 3
-Schedules generated: 76032
+Valid exam systems: 76032
+Active constraints: none
+Active ranking criteria: none
 Output file: C:\Users\user\Desktop\Schedulix\data\outputs\exam_schedules.txt
 Runtime seconds: 1.42
 ```
 
 `Runtime seconds` is useful for checking the Version 1.0 performance requirement.
 The requirement says the system should create the output within 30 seconds.
+
+`Active constraints` and `Active ranking criteria` reflect the optional Part 3
+settings file passed via `settings_path` (see "Scheduling Settings File" under
+Input File Format). When no settings file is supplied, both show `none` and
+`Valid exam systems` behaves exactly as the old `Schedules generated` count.
 
 ## Default Example Files
 
@@ -227,14 +248,19 @@ data/outputs/exam_schedules.txt
 
 ## Output Format
 
-The output starts with a title and then lists schedule options:
+The output starts with a title, an optional settings summary, the count of
+valid systems, and then lists schedule options in ranked order:
 
 ```text
 Schedulix Exam Schedules
 ========================================
+Settings: constraints[mandatory_gap_days=3, max_exams_per_day=2] | ranking[min_mandatory_gap desc, average_all_gap desc]
+Valid systems: 12
+========================================
 
 Schedule 1
 ========================================
+Metrics: min_gap=3 | avg_gap=5.0 | elective_collisions=0 | mand_span=2 | max_per_day=1
 Semester: FALL
 Moed: Aleph
 29-01-2026 | Physics 1 | Prof. O. Some
@@ -244,12 +270,25 @@ Moed: Bet
 12-04-2026 | Calculus 1 | Dr. Erez Scheiner
 ```
 
-Each `Schedule N` represents one complete exam-system option. Inside it, exams
-are separated by semester and moed. Each exam line contains:
+The `Settings:` line is omitted when no Part 3 constraints are enabled and no
+ranking criteria are active; it then reads:
+
+```text
+Settings: none (all constraints disabled, no ranking)
+```
+
+Each `Schedule N` represents one complete exam-system option, ordered
+according to the active ranking criteria (or generation order if none are
+set). The `Metrics:` line summarizes the five Part 3 metrics for that system;
+a value of `n/a` means the metric could not be calculated for that system
+(e.g. fewer than two exams). Inside each schedule, exams are separated by
+semester and moed. Each exam line contains:
 
 ```text
 exam date | course name | instructor name
 ```
+
+This exam-line format is unchanged from Version 2.0.
 
 ## Input File Format
 
@@ -365,8 +404,60 @@ Rules:
 - The leading `-` before excluded dates is optional.
 - Comments after excluded dates are ignored by the scheduler.
 
-## How To Make Your Own Example
+### 4. Scheduling Settings File (optional, Part 3)
 
+File:
+
+```text
+data/examples/SettingsExample.txt
+```
+
+This optional fourth file configures the Part 3 threshold constraints
+(Section 2 of the requirements) and the ranking-criteria priority order
+(Section 3). It is parsed by `SchedulingSettingsFileReader` into the same
+`SchedulingConstraintSettings` and `RankingSettings` models used by the GUI.
+
+> **Status:** This file is parsed, validated, and can be passed to
+> `SchedulixApp.run(settings_path=...)`. When no settings file is supplied,
+> the CLI flow keeps the old behavior.
+
+Format:
+
+```text
+# Comments start with '#'. Blank lines are ignored.
+#
+# Threshold constraints (Section 2).
+# Each line:  <constraint_type> = <enabled>, <k>
+mandatory_gap_days             = on,  3
+any_course_gap_days            = off, 0
+elective_conflicts_per_program = off, 0
+mandatory_span_days            = off, 0
+max_exams_per_day              = on,  2
+
+# Ranking criteria (Section 3), in priority order.
+# Each line:  ranking: <criterion> [ : desc ]
+ranking: min_mandatory_gap
+ranking: average_all_gap : desc
+```
+
+Rules:
+
+- Enabled tokens: `on` / `off` (also accepted: `true`/`false`, `yes`/`no`, `1`/`0`).
+- Constraint names: `mandatory_gap_days`, `any_course_gap_days`,
+  `elective_conflicts_per_program`, `mandatory_span_days`, `max_exams_per_day`.
+- `k` must be positive (>= 1) for enabled gap/span/day-count constraints.
+  Requirement 2.3 (`elective_conflicts_per_program`) accepts non-negative
+  values, so `k=0` is valid there.
+- Ranking criteria: `min_mandatory_gap`, `average_all_gap`,
+  `elective_collision_count`, `mandatory_span`, `max_exams_per_day`.
+- Ranking direction is fixed to descending; `desc` may be written explicitly.
+- Ranking order can be changed after schedules are generated; this reorders
+  existing results without running schedule generation again.
+- Each constraint and each ranking criterion may appear at most once.
+- Omitting the file preserves Version 2.0 behavior (all constraints
+  disabled, generation order preserved).
+
+## How To Make Your Own Example
 There are two simple options.
 
 ### Option A: Replace The Default Example Files
