@@ -41,6 +41,7 @@ from output.outputWriter import (
 from ranking_settings import RankingSettings
 from scheduling.courseFilter import CourseFilter
 from scheduling.examScheduleGenerator import ExamScheduleGenerator
+from scheduling.qualityTagCalculator import QualityTagCalculator
 from scheduling.schedulingService import SchedulingService
 
 
@@ -322,12 +323,15 @@ class SchedulixApp:
             outcome = self._service.run(cache)
 
         # --- Step 4: write the ranked output. ---
+        # QualityTagCalculator is instantiated once per run so it can be
+        # reused across all ranked schedules without repeated allocation.
         created_output_path, written_count = (
             self.output_writer.write_ranked_with_count(
                 outcome.ranked_schedules,
                 output_path,
                 constraint_settings=constraint_settings,
                 ranking_settings=ranking_settings,
+                quality_tag_calculator=QualityTagCalculator(),
             )
         )
 

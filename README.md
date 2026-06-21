@@ -260,7 +260,8 @@ Valid systems: 12
 
 Schedule 1
 ========================================
-Metrics: min_gap=3 | avg_gap=5.0 | elective_collisions=0 | mand_span=2 | max_per_day=1
+Metrics: min_gap=7 | avg_gap=5.0 | elective_collisions=0 | mand_span=15 | max_per_day=2
+Quality: Excellent — comfortable spacing: min gap 7d, span 15d, no elective collisions
 Semester: FALL
 Moed: Aleph
 29-01-2026 | Physics 1 | Prof. O. Some
@@ -281,8 +282,18 @@ Each `Schedule N` represents one complete exam-system option, ordered
 according to the active ranking criteria (or generation order if none are
 set). The `Metrics:` line summarizes the five Part 3 metrics for that system;
 a value of `n/a` means the metric could not be calculated for that system
-(e.g. fewer than two exams). Inside each schedule, exams are separated by
-semester and moed. Each exam line contains:
+(e.g. fewer than two exams). The `Quality:` line (SCRUM-191) classifies each
+system into one of four bands based on those metrics:
+
+| Tag | Meaning |
+|-----|---------|
+| `Excellent` | All metrics clearly exceed good benchmarks (min gap ≥ 7 days, span ≤ 20 days, no elective collisions, ≤ 3 exams/day) |
+| `Good` | Metrics comfortably satisfy requirements (min gap ≥ 4 days, span ≤ 35 days, ≤ 2 collisions, ≤ 5 exams/day) |
+| `Needs Review` | Borderline values — min gap exactly 3 days, or span/collision/load just outside Good thresholds |
+| `Risky` | At least one metric violates a hard threshold (min gap < 3 days violates Req 2.1, collisions > 5, or > 6 exams/day) |
+
+Inside each schedule, exams are separated by semester and moed. Each exam
+line contains:
 
 ```text
 exam date | course name | instructor name

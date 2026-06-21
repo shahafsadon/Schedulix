@@ -27,6 +27,7 @@ from ranking_settings import (
 )
 from scheduling.examConflictDetector import ScheduledExam
 from scheduling.examScheduleGenerator import ExamSchedule, ExamSystem
+from scheduling.qualityTagCalculator import QualityTagCalculator
 
 
 def make_exam(course_name: str, course_number: str, exam_date: date) -> ScheduledExam:
@@ -362,6 +363,104 @@ class OutputWriterTests(unittest.TestCase):
             "Settings: none (all constraints disabled, no ranking)",
             text,
         )
+
+
+    # ------------------------------------------------------------------
+    # Quality tag integration (SCRUM-191)
+    # ------------------------------------------------------------------
+
+    def test_quality_line_present_after_metrics_when_calculator_provided(
+        self,
+    ) -> None:
+        """When quality_tag_calculator is supplied, each schedule section
+        contains a 'Quality:' line positioned immediately after 'Metrics:'."""
+        schedule = ExamSystem(
+            period_schedules=[
+                ExamSchedule(
+                    semester="FALL",
+                    moed="Aleph",
+                    scheduled_exams=[
+                        make_exam("Physics 1", "83102", date(2026, 1, 29)),
+                    ],
+                ),
+            ],
+        )
+        ranked = [
+            RankedExamSystem(
+                exam_system=schedule,
+                metrics=ScheduleMetrics(
+                    schedule_id=1,
+                    min_mandatory_gap=8,   # Excellent: >= 7
+                    average_all_gap=10.0,
+                    elective_collision_count=0,
+                    mandatory_span=15,     # Excellent: <= 20
+                    max_exams_per_day=2,   # Excellent: <= 3
+                ),
+                key=1,
+            ),
+        ]
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_path = Path(temp_dir) / "ranked.txt"
+
+            OutputWriter().write_ranked_with_count(
+                ranked,
+                output_path,
+                quality_tag_calculator=QualityTagCalculator(),
+            )
+            text = output_path.read_text(encoding="utf-8")
+
+        # Quality line must exist.
+        self.assertIn("Quality:", text)
+        self.assertIn("Excellent", text)
+
+        # Quality line must appear after Metrics and before Semester.
+        metrics_pos = text.index("Metrics:")
+        quality_pos = text.index("Quality:")
+        semester_pos = text.index("Semester:")
+        self.assertLess(metrics_pos, quality_pos)
+        self.assertLess(quality_pos, semester_pos)
+
+    def test_quality_line_absent_when_calculator_is_none(self) -> None:
+        """When quality_tag_calculator is None (the default), no 'Quality:'
+        line appears in the output — pre-SCRUM-191 format is preserved."""
+        schedule = ExamSystem(
+            period_schedules=[
+                ExamSchedule(
+                    semester="FALL",
+                    moed="Aleph",
+                    scheduled_exams=[
+                        make_exam("Physics 1", "83102", date(2026, 1, 29)),
+                    ],
+                ),
+            ],
+        )
+        ranked = [
+            RankedExamSystem(
+                exam_system=schedule,
+                metrics=ScheduleMetrics(
+                    schedule_id=1,
+                    min_mandatory_gap=5,
+                    average_all_gap=5.0,
+                    elective_collision_count=0,
+                    mandatory_span=10,
+                    max_exams_per_day=1,
+                ),
+                key=1,
+            ),
+        ]
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_path = Path(temp_dir) / "ranked.txt"
+
+            # Call without quality_tag_calculator (defaults to None).
+            OutputWriter().write_ranked_with_count(ranked, output_path)
+            text = output_path.read_text(encoding="utf-8")
+
+        self.assertNotIn("Quality:", text)
+        # Existing structure still intact.
+        self.assertIn("Metrics:", text)
+        self.assertIn("Semester:", text)
 
 
 if __name__ == "__main__":
