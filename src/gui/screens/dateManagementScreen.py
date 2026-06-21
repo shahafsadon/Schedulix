@@ -85,7 +85,7 @@ class DateManagementScreen(ctk.CTkFrame):
         self._on_theme_toggle = on_theme_toggle
         self._theme_button_text = theme_button_text
         self._generation_in_progress = False
-        self._progress_queue: queue.Queue = queue.Queue()
+        self._progress_queue: queue.Queue = queue.Queue(maxsize=1)
 
         self._period_selector = None
         self._undo_button = None
@@ -528,7 +528,7 @@ class DateManagementScreen(ctk.CTkFrame):
                     cancellation_token=token,
                 ),
                 on_started=self._show_generation_started_progressive,
-                on_progress=lambda snapshot: self._progress_queue.put(snapshot),
+                on_progress=self._post_progress,
                 on_complete=lambda result: self.after(
                     0,
                     lambda: self._show_generation_result(result),
@@ -571,12 +571,49 @@ class DateManagementScreen(ctk.CTkFrame):
         Called only from the ``run_with_progress`` code path so the 50 ms
         polling loop is never armed for the backward-compatible ``run()`` path
         (which is synchronous in tests and does not use the progress queue).
+
+        The queue is flushed before the loop starts so that stale snapshots
+        from a previous run cannot bleed into the new one.
         """
+        # Discard any leftover snapshots from a previous run before starting.
+        progress_queue = getattr(self, "_progress_queue", None)
+        if progress_queue is not None:
+            try:
+                while True:
+                    progress_queue.get_nowait()
+            except queue.Empty:
+                pass
+
         self._show_generation_started()
         # Kick off the 50 ms polling loop that drains the progress queue on the
         # main thread, ensuring no Tkinter widget is ever touched from the
         # background worker thread.
         self.after(50, self._poll_progress_queue)
+
+    def _post_progress(self, snapshot) -> None:
+        """Post a progress snapshot into the bounded queue from the background thread.
+
+        Implements a "replace latest" strategy: when the single slot is already
+        occupied the stale snapshot is evicted and the fresher one takes its
+        place.  This keeps the queue from growing without bound and ensures the
+        polling loop always sees the most recent update.
+
+        This method is safe to call from any thread.
+        """
+        progress_queue = getattr(self, "_progress_queue", None)
+        if progress_queue is None:
+            return
+        try:
+            progress_queue.put_nowait(snapshot)
+        except queue.Full:
+            try:
+                progress_queue.get_nowait()   # evict the stale snapshot
+            except queue.Empty:
+                pass
+            try:
+                progress_queue.put_nowait(snapshot)
+            except queue.Full:
+                pass  # another thread beat us; the newer snapshot is already there
 
     def _poll_progress_queue(self) -> None:
         """Drain the progress queue on the main thread, showing only the latest update.
@@ -599,7 +636,9 @@ class DateManagementScreen(ctk.CTkFrame):
             except queue.Empty:
                 pass
 
-        if latest is not None:
+        # Guard: if generation finished while we were draining, discard the
+        # stale partial snapshot so it cannot overwrite the final result.
+        if latest is not None and self._generation_in_progress:
             self._show_generation_progress(latest)
 
         # Re-schedule only while generation is still running so the loop stops
