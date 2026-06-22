@@ -60,19 +60,20 @@ _BANNER_FINAL_TEXT = ("#065F46", "#6EE7B7")
 _RANKING_LABELS: dict[RankingCriterion, str] = {
     RankingCriterion.min_mandatory_gap: "Min mandatory gap (descending)",
     RankingCriterion.average_all_gap: "Average exam gap (descending)",
-    RankingCriterion.elective_collision_count: "Elective collisions (ascending)",
-    RankingCriterion.mandatory_span: "Mandatory span (ascending)",
-    RankingCriterion.max_exams_per_day: "Max exams/day (ascending)",
+    RankingCriterion.elective_collision_count: "Elective collisions (descending)",
+    RankingCriterion.mandatory_span: "Mandatory span (descending)",
+    RankingCriterion.max_exams_per_day: "Max exams/day (descending)",
 }
 
-# True  = descending (higher is better — e.g. larger gap is preferred).
-# False = ascending  (lower is better  — e.g. fewer collisions is preferred).
+# Version 2.0 ranking settings currently accept descending order only.
+# Keep the GUI aligned with the parser/validator contract so applying a ranking
+# from the results screen cannot create invalid RankingSettings.
 _RANKING_DIRECTION: dict[RankingCriterion, bool] = {
     RankingCriterion.min_mandatory_gap: True,
     RankingCriterion.average_all_gap: True,
-    RankingCriterion.elective_collision_count: False,
-    RankingCriterion.mandatory_span: False,
-    RankingCriterion.max_exams_per_day: False,
+    RankingCriterion.elective_collision_count: True,
+    RankingCriterion.mandatory_span: True,
+    RankingCriterion.max_exams_per_day: True,
 }
 
 
@@ -213,17 +214,11 @@ class ScheduleNavigationScreen(ctk.CTkFrame):
                 padx=(8, 0),
             )
 
-        # ------------------------------------------------------------------
-        # Live-generation status banner (row=2 of the header, full width).
-        # Shown only while a partial result is available or generation just
-        # completed.  Hidden initially; made visible by push_live_update().
-        # ------------------------------------------------------------------
         self._status_banner = ctk.CTkFrame(
             header,
             fg_color=_BANNER_PARTIAL_BG,
             corner_radius=6,
         )
-        # Start hidden; push_live_update will grid it when needed.
         self._status_banner.grid_columnconfigure(0, weight=1)
 
         self._status_seen_label = ctk.CTkLabel(
@@ -588,8 +583,10 @@ class ScheduleNavigationScreen(ctk.CTkFrame):
         if result.success:
             # Force a full grid rebuild so the newly sorted systems are painted
             # immediately (SCRUM-183: live re-ranking must be reflected at once).
-            for child in self._body.winfo_children():
-                child.destroy()
+            body = getattr(self, "_body", None)
+            if body is not None:
+                for child in body.winfo_children():
+                    child.destroy()
             self._exam_cells = {}
             self._built_months = set()
             self._selected_iso_date = None
@@ -599,7 +596,7 @@ class ScheduleNavigationScreen(ctk.CTkFrame):
     def push_live_error(self, error_message: str) -> None:
         """Display a fatal generation error in the status banner.
 
-        MUST be called on the main (Tkinter) thread.  Shows the banner with a
+        MUST be called on the main (Tkinter) thread. Shows the banner with a
         red tint and a ❌ icon so the user immediately sees that generation
         failed.
 
@@ -626,15 +623,16 @@ class ScheduleNavigationScreen(ctk.CTkFrame):
     ) -> None:
         """Public hook for the background generator to push live batches.
 
-        MUST be called on the main (Tkinter) thread – e.g. via
-        ``root.after(0, lambda: screen.push_live_update(...))``.  Incremental
-        calendar rendering means only *new* month cards are appended to the
-        DOM; no full grid rebuild occurs unless the grid has been invalidated
-        (e.g. after Apply Ranking).
+        MUST be called on the main (Tkinter) thread, for example:
+        ``root.after(0, lambda: screen.push_live_update(...))``.
+
+        Incremental calendar rendering means only new month cards are appended
+        to the DOM; no full grid rebuild occurs unless the grid has been
+        invalidated, for example after Apply Ranking.
 
         Args:
-            schedules:    The full list of systems available so far.
-            is_partial:   True while generation is still running.
+            schedules: The full list of systems available so far.
+            is_partial: True while generation is still running.
             systems_seen: Total systems produced by the generator so far.
         """
         displayed_count = len(schedules)
@@ -646,8 +644,6 @@ class ScheduleNavigationScreen(ctk.CTkFrame):
         )
         self._update_status_banner(is_partial, systems_seen, displayed_count)
 
-        # If there is at least one schedule we ensure the grid is shown and
-        # only append the months not yet rendered (incremental update).
         if self.presenter.has_schedules():
             self._grid_built = True
             self._build_relevant_months_grid()
@@ -680,7 +676,6 @@ class ScheduleNavigationScreen(ctk.CTkFrame):
         self._status_banner.configure(fg_color=bg)
         self._status_seen_label.configure(text=msg, text_color=text_color)
 
-        # Make the banner visible (grid it into the header row=2 if not yet shown).
         if not self._status_banner.winfo_ismapped():
             self._status_banner.grid(
                 row=2, column=0, columnspan=2, sticky="ew", pady=(6, 2)
@@ -690,18 +685,23 @@ class ScheduleNavigationScreen(ctk.CTkFrame):
         """Refresh counter, metrics, calendar highlights, and detail panes."""
         view = self.presenter.current_view()
         if view is None:
-            # Distinguish between "no schedules at all" and "still generating".
-            if self.presenter.is_partial:
+            # Some unit tests and legacy callers provide a presenter test-double
+            # without this property. MagicMock attributes are truthy by default,
+            # so only an explicit True should switch to the live-generation copy.
+            is_partial = getattr(self.presenter, "is_partial", False) is True
+            if is_partial:
                 empty_text = "Generating schedules… No preview available yet."
             else:
                 empty_text = "No schedules to display."
+
             self._counter_label.configure(text=empty_text)
             self._prev_button.configure(state="disabled")
             self._next_button.configure(state="disabled")
             if self._save_button is not None:
                 self._save_button.configure(state="disabled")
-            # Ranking controls remain ENABLED even during partial generation
-            # (SCRUM-183) so the user can apply ranking at any time.
+
+            # Ranking controls remain enabled even during partial generation so
+            # the user can apply ranking at any time.
             self._refresh_ranking_metrics(None)
             return
 
@@ -734,7 +734,6 @@ class ScheduleNavigationScreen(ctk.CTkFrame):
         )
         if self._save_button is not None:
             self._save_button.configure(state="normal")
-        # Apply Ranking is always enabled — it works during live generation too.
         if getattr(self, "_apply_ranking_button", None) is not None:
             self._apply_ranking_button.configure(state="normal")
 
@@ -880,10 +879,10 @@ class ScheduleNavigationScreen(ctk.CTkFrame):
     def _build_relevant_months_grid(self) -> None:
         """Incrementally draw only months that contain exams in any system.
 
-        On the first call (or after a full grid reset) every relevant month is
-        appended.  On subsequent calls from ``push_live_update`` only months
-        not yet present in ``_built_months`` are appended, avoiding a full
-        Tkinter DOM rebuild on every live batch.
+        On the first call, or after a full grid reset, every relevant month is
+        appended. On later calls from ``push_live_update`` only months not yet
+        present in ``_built_months`` are appended, avoiding a full Tkinter DOM
+        rebuild on every live batch.
         """
         for year, month in self.presenter.relevant_months():
             if (year, month) in self._built_months:
