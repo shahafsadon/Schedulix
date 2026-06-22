@@ -60,17 +60,19 @@ _BANNER_FINAL_TEXT = ("#065F46", "#6EE7B7")
 _RANKING_LABELS: dict[RankingCriterion, str] = {
     RankingCriterion.min_mandatory_gap: "Min mandatory gap (descending)",
     RankingCriterion.average_all_gap: "Average exam gap (descending)",
-    RankingCriterion.elective_collision_count: "Elective collisions (descending)",
-    RankingCriterion.mandatory_span: "Mandatory span (descending)",
-    RankingCriterion.max_exams_per_day: "Max exams/day (descending)",
+    RankingCriterion.elective_collision_count: "Elective collisions (ascending)",
+    RankingCriterion.mandatory_span: "Mandatory span (ascending)",
+    RankingCriterion.max_exams_per_day: "Max exams/day (ascending)",
 }
 
+# True  = descending (higher is better — e.g. larger gap is preferred).
+# False = ascending  (lower is better  — e.g. fewer collisions is preferred).
 _RANKING_DIRECTION: dict[RankingCriterion, bool] = {
     RankingCriterion.min_mandatory_gap: True,
     RankingCriterion.average_all_gap: True,
-    RankingCriterion.elective_collision_count: True,
-    RankingCriterion.mandatory_span: True,
-    RankingCriterion.max_exams_per_day: True,
+    RankingCriterion.elective_collision_count: False,
+    RankingCriterion.mandatory_span: False,
+    RankingCriterion.max_exams_per_day: False,
 }
 
 
@@ -396,10 +398,7 @@ class ScheduleNavigationScreen(ctk.CTkFrame):
 
         ctk.CTkLabel(
             panel,
-            text=(
-                "Choose criteria; all sorting is descending and applies "
-                "after generation."
-            ),
+            text="Choose ranking criteria. Sorting applies immediately to all generated schedules.",
             font=("Segoe UI", 11),
             text_color=_MUTED,
             anchor="w",
@@ -587,14 +586,37 @@ class ScheduleNavigationScreen(ctk.CTkFrame):
         self._set_ranking_status(result.message, ok=result.success)
 
         if result.success:
-            # Full grid rebuild required because ranking reorders the systems.
+            # Force a full grid rebuild so the newly sorted systems are painted
+            # immediately (SCRUM-183: live re-ranking must be reflected at once).
             for child in self._body.winfo_children():
                 child.destroy()
             self._exam_cells = {}
             self._built_months = set()
-            self._grid_built = False
             self._selected_iso_date = None
+            self._grid_built = False
             self._refresh()
+
+    def push_live_error(self, error_message: str) -> None:
+        """Display a fatal generation error in the status banner.
+
+        MUST be called on the main (Tkinter) thread.  Shows the banner with a
+        red tint and a ❌ icon so the user immediately sees that generation
+        failed.
+
+        Args:
+            error_message: Human-readable description of the error.
+        """
+        self._status_banner.configure(
+            fg_color=("#FEE2E2", "#5A1F1F"),
+        )
+        self._status_seen_label.configure(
+            text=f"❌  {error_message}",
+            text_color=("#991B1B", "#FCA5A5"),
+        )
+        if not self._status_banner.winfo_ismapped():
+            self._status_banner.grid(
+                row=2, column=0, columnspan=2, sticky="ew", pady=(6, 2)
+            )
 
     def push_live_update(
         self,
@@ -678,8 +700,8 @@ class ScheduleNavigationScreen(ctk.CTkFrame):
             self._next_button.configure(state="disabled")
             if self._save_button is not None:
                 self._save_button.configure(state="disabled")
-            if getattr(self, "_apply_ranking_button", None) is not None:
-                self._apply_ranking_button.configure(state="disabled")
+            # Ranking controls remain ENABLED even during partial generation
+            # (SCRUM-183) so the user can apply ranking at any time.
             self._refresh_ranking_metrics(None)
             return
 
@@ -712,6 +734,7 @@ class ScheduleNavigationScreen(ctk.CTkFrame):
         )
         if self._save_button is not None:
             self._save_button.configure(state="normal")
+        # Apply Ranking is always enabled — it works during live generation too.
         if getattr(self, "_apply_ranking_button", None) is not None:
             self._apply_ranking_button.configure(state="normal")
 
