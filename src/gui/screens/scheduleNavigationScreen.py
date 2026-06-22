@@ -51,6 +51,12 @@ _SELECTED_DAY_COLOR = ("#2563EB", "#60A5FA")
 _SELECTED_DAY_TEXT = ("#FFFFFF", "#0B1220")
 _REGULAR_DAY_TEXT = ("#A8B0BA", "#64748B")
 
+# Status banner colours: light-mode bg / dark-mode bg.
+_BANNER_PARTIAL_BG = ("#FEF3C7", "#3B2800")
+_BANNER_PARTIAL_TEXT = ("#92400E", "#FDE68A")
+_BANNER_FINAL_BG = ("#D1FAE5", "#052E16")
+_BANNER_FINAL_TEXT = ("#065F46", "#6EE7B7")
+
 _RANKING_LABELS: dict[RankingCriterion, str] = {
     RankingCriterion.min_mandatory_gap: "Min mandatory gap (descending)",
     RankingCriterion.average_all_gap: "Average exam gap (descending)",
@@ -91,6 +97,9 @@ class ScheduleNavigationScreen(ctk.CTkFrame):
         self._selected_iso_date: str | None = None
         self._current_exams_by_iso_date: dict[str, list[ExamRow]] = {}
         self._grid_built = False
+        # Tracks which (year, month) cards have already been appended to the
+        # calendar scroll area, enabling incremental DOM updates on live batches.
+        self._built_months: set[tuple[int, int]] = set()
         self._metric_labels: dict[str, ctk.CTkLabel] = {}
         self._ranking_metric_labels: dict[str, ctk.CTkLabel] = {}
         self._ranking_criteria: list[RankingCriterion] = []
@@ -114,9 +123,9 @@ class ScheduleNavigationScreen(ctk.CTkFrame):
         self._build_footer()
 
     def _build_header(self) -> None:
-        """Build title, counter, and primary actions."""
+        """Build title, counter, primary actions, and live-status banner."""
         header = ctk.CTkFrame(self, fg_color="transparent")
-        header.grid(row=0, column=0, sticky="ew", padx=24, pady=(18, 10))
+        header.grid(row=0, column=0, sticky="ew", padx=24, pady=(18, 4))
         header.grid_columnconfigure(0, weight=1)
 
         ctk.CTkLabel(
@@ -201,6 +210,28 @@ class ScheduleNavigationScreen(ctk.CTkFrame):
                 column=next_action_column,
                 padx=(8, 0),
             )
+
+        # ------------------------------------------------------------------
+        # Live-generation status banner (row=2 of the header, full width).
+        # Shown only while a partial result is available or generation just
+        # completed.  Hidden initially; made visible by push_live_update().
+        # ------------------------------------------------------------------
+        self._status_banner = ctk.CTkFrame(
+            header,
+            fg_color=_BANNER_PARTIAL_BG,
+            corner_radius=6,
+        )
+        # Start hidden; push_live_update will grid it when needed.
+        self._status_banner.grid_columnconfigure(0, weight=1)
+
+        self._status_seen_label = ctk.CTkLabel(
+            self._status_banner,
+            text="",
+            font=("Segoe UI", 12, "bold"),
+            text_color=_BANNER_PARTIAL_TEXT,
+            anchor="w",
+        )
+        self._status_seen_label.grid(row=0, column=0, sticky="ew", padx=12, pady=6)
 
     def _build_metrics(self) -> None:
         """Build compact summary cards for the current system."""
@@ -556,16 +587,93 @@ class ScheduleNavigationScreen(ctk.CTkFrame):
         self._set_ranking_status(result.message, ok=result.success)
 
         if result.success:
-            self._grid_built = False
+            # Full grid rebuild required because ranking reorders the systems.
+            for child in self._body.winfo_children():
+                child.destroy()
             self._exam_cells = {}
+            self._built_months = set()
+            self._grid_built = False
             self._selected_iso_date = None
             self._refresh()
+
+    def push_live_update(
+        self,
+        schedules: list,
+        is_partial: bool,
+        systems_seen: int,
+    ) -> None:
+        """Public hook for the background generator to push live batches.
+
+        MUST be called on the main (Tkinter) thread – e.g. via
+        ``root.after(0, lambda: screen.push_live_update(...))``.  Incremental
+        calendar rendering means only *new* month cards are appended to the
+        DOM; no full grid rebuild occurs unless the grid has been invalidated
+        (e.g. after Apply Ranking).
+
+        Args:
+            schedules:    The full list of systems available so far.
+            is_partial:   True while generation is still running.
+            systems_seen: Total systems produced by the generator so far.
+        """
+        displayed_count = len(schedules)
+        self.presenter.update_schedules(
+            schedules,
+            is_partial=is_partial,
+            systems_seen=systems_seen,
+            displayed_count=displayed_count,
+        )
+        self._update_status_banner(is_partial, systems_seen, displayed_count)
+
+        # If there is at least one schedule we ensure the grid is shown and
+        # only append the months not yet rendered (incremental update).
+        if self.presenter.has_schedules():
+            self._grid_built = True
+            self._build_relevant_months_grid()
+
+        self._refresh()
+
+    def _update_status_banner(
+        self,
+        is_partial: bool,
+        systems_seen: int,
+        displayed_count: int,
+    ) -> None:
+        """Paint the status banner with the correct colour and copy."""
+        if is_partial:
+            bg = _BANNER_PARTIAL_BG
+            text_color = _BANNER_PARTIAL_TEXT
+            icon = "⏳"
+            state_word = "Generating"
+        else:
+            bg = _BANNER_FINAL_BG
+            text_color = _BANNER_FINAL_TEXT
+            icon = "✅"
+            state_word = "Complete"
+
+        msg = (
+            f"{icon}  {state_word} — "
+            f"{displayed_count} schedule{'s' if displayed_count != 1 else ''} displayed"
+            f"  |  {systems_seen} produced so far"
+        )
+        self._status_banner.configure(fg_color=bg)
+        self._status_seen_label.configure(text=msg, text_color=text_color)
+
+        # Make the banner visible (grid it into the header row=2 if not yet shown).
+        if not self._status_banner.winfo_ismapped():
+            self._status_banner.grid(
+                row=2, column=0, columnspan=2, sticky="ew", pady=(6, 2)
+            )
 
     def _refresh(self) -> None:
         """Refresh counter, metrics, calendar highlights, and detail panes."""
         view = self.presenter.current_view()
         if view is None:
-            self._counter_label.configure(text="No schedules to display.")
+            # Distinguish between "no schedules at all" and "still generating".
+            if self.presenter.is_partial:
+                empty_text = "Generating schedules… No preview available yet."
+            else:
+                empty_text = "No schedules to display."
+            self._counter_label.configure(text=empty_text)
             self._prev_button.configure(state="disabled")
             self._next_button.configure(state="disabled")
             if self._save_button is not None:
@@ -579,6 +687,7 @@ class ScheduleNavigationScreen(ctk.CTkFrame):
             for child in self._body.winfo_children():
                 child.destroy()
             self._exam_cells = {}
+            self._built_months = set()
             self._build_relevant_months_grid()
             self._grid_built = True
 
@@ -746,9 +855,18 @@ class ScheduleNavigationScreen(ctk.CTkFrame):
         )
 
     def _build_relevant_months_grid(self) -> None:
-        """Draw only months that contain exams in at least one system."""
+        """Incrementally draw only months that contain exams in any system.
+
+        On the first call (or after a full grid reset) every relevant month is
+        appended.  On subsequent calls from ``push_live_update`` only months
+        not yet present in ``_built_months`` are appended, avoiding a full
+        Tkinter DOM rebuild on every live batch.
+        """
         for year, month in self.presenter.relevant_months():
+            if (year, month) in self._built_months:
+                continue
             self._build_month(year, month)
+            self._built_months.add((year, month))
 
     def _build_month(self, year: int, month: int) -> None:
         """Create one compact month card."""

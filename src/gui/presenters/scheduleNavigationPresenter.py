@@ -130,6 +130,62 @@ class ScheduleNavigationPresenter:
         # Start on the first system; stays at 0 when there are no systems.
         self._index = 0
 
+        # Live preview metadata (populated by update_schedules).
+        self._is_partial: bool = False
+        self._systems_seen: int = 0
+        self._displayed_count: int = 0
+
+    # ------------------------------------------------------------------
+    # Live preview metadata
+    # ------------------------------------------------------------------
+
+    @property
+    def is_partial(self) -> bool:
+        """True while background generation is still running."""
+        return self._is_partial
+
+    @property
+    def systems_seen(self) -> int:
+        """Total number of systems produced by the generator so far."""
+        return self._systems_seen
+
+    @property
+    def displayed_count(self) -> int:
+        """Number of systems currently held in the presenter."""
+        return self._displayed_count
+
+    def update_schedules(
+        self,
+        new_schedules: list[ExamSystem | RankedExamSystem],
+        is_partial: bool,
+        systems_seen: int,
+        displayed_count: int,
+    ) -> None:
+        """Safely replace the schedule list with a new live batch.
+
+        The navigation index is *clamped* rather than reset so that the user's
+        current pagination position survives every incremental batch pushed by
+        the background generator.  If the list shrank (shouldn't happen in
+        practice but is safe to handle) the index is moved to the last valid
+        position.
+
+        Args:
+            new_schedules:   The full updated list coming from the generator.
+            is_partial:      True when generation is still running.
+            systems_seen:    How many systems the generator has produced so far.
+            displayed_count: How many systems are in ``new_schedules``.
+        """
+        self._replace_schedules(new_schedules)
+        self._is_partial = is_partial
+        self._systems_seen = systems_seen
+        self._displayed_count = displayed_count
+
+        # Clamp index so it always points to a valid position.
+        if self._schedules:
+            self._index = min(self._index, len(self._schedules) - 1)
+        else:
+            self._index = 0
+
     def has_schedules(self) -> bool:
         """Return True when there is at least one system to display."""
         return len(self._schedules) > 0
