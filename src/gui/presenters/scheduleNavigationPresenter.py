@@ -135,6 +135,10 @@ class ScheduleNavigationPresenter:
         self._systems_seen: int = 0
         self._displayed_count: int = 0
 
+        # The last ranking successfully applied by the user.  Used to
+        # automatically re-rank every incoming live batch (SCRUM-183).
+        self._active_ranking: RankingSettings = RankingSettings([])
+
     # ------------------------------------------------------------------
     # Live preview metadata
     # ------------------------------------------------------------------
@@ -169,12 +173,33 @@ class ScheduleNavigationPresenter:
         practice but is safe to handle) the index is moved to the last valid
         position.
 
+        When an active ranking has been applied (SCRUM-183), the incoming batch
+        is automatically ranked before being stored so the display order is
+        always consistent with the user's chosen ranking criteria.
+
         Args:
             new_schedules:   The full updated list coming from the generator.
             is_partial:      True when generation is still running.
             systems_seen:    How many systems the generator has produced so far.
             displayed_count: How many systems are in ``new_schedules``.
         """
+        # Auto-apply the active ranking to the incoming batch so live updates
+        # honour the user's chosen sort order immediately (SCRUM-183).
+        if self._active_ranking.priority_list and new_schedules:
+            service = ScheduleRankingService()
+            try:
+                if new_schedules and isinstance(new_schedules[0], RankedExamSystem):
+                    outcome = service.rerank(new_schedules, self._active_ranking)
+                else:
+                    outcome = service.rank_generated_schedules(
+                        new_schedules, self._active_ranking
+                    )
+                new_schedules = outcome.ranked_schedules
+            except Exception:
+                # Never crash the live-update pipeline due to a ranking error;
+                # fall back silently to unranked order.
+                pass
+
         self._replace_schedules(new_schedules)
         self._is_partial = is_partial
         self._systems_seen = systems_seen
@@ -373,6 +398,10 @@ class ScheduleNavigationPresenter:
             elapsed_seconds = outcome.elapsed_seconds
 
         self.apply_ranked_schedules(ranked_schedules)
+
+        # Persist the ranking so future live batches are re-ranked automatically
+        # (SCRUM-183: support ranking changes during background generation).
+        self._active_ranking = ranking_settings
 
         if ranking_settings.priority_list:
             message = f"Ranking applied to {len(ranked_schedules)} system(s)."
