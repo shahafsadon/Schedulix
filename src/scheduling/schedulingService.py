@@ -386,10 +386,18 @@ class SchedulingService:
             # Persist only the bounded top-N ranked preview, not the full set.
             # Storing every generated system would undo the lazy-generation
             # optimization that this progressive flow exists to protect.
-            cache.set_generated_schedules(
-                [ranked.exam_system for ranked in snapshot.ranked_schedules]
+            latest_settings = cache.get_ranking_settings()
+            final_outcome = self._ranking_service.rerank(snapshot.ranked_schedules, latest_settings)
+            final_ranked_schedules = final_outcome.ranked_schedules
+
+            cache.store_final_schedule_results(
+                [r.exam_system for r in final_ranked_schedules],
+                final_ranked_schedules,
+                latest_settings
             )
-            cache.set_ranked_schedules(snapshot.ranked_schedules)
+
+            import dataclasses
+            snapshot = dataclasses.replace(snapshot, ranked_schedules=final_ranked_schedules)
 
         self._emit(on_snapshot, snapshot)
         return snapshot

@@ -427,6 +427,24 @@ class CacheManager:
         return self._state.ranking_settings
 
     # ------------------------------------------------------------------
+    # Atomic Multi-save  (SCRUM-184)
+    # ------------------------------------------------------------------
+
+    def store_final_schedule_results(
+        self,
+        generated_schedules: list[ExamSystem],
+        ranked_schedules: list[RankedExamSystem],
+        ranking_settings: RankingSettings,
+    ) -> None:
+        """
+        Atomically save the final results from a progressive scheduling run.
+        """
+        self._state.generated_schedules = list(generated_schedules)
+        self._state.ranked_schedules = list(ranked_schedules)
+        self._state.ranking_settings = ranking_settings
+        self._persist()
+
+    # ------------------------------------------------------------------
     # Lifecycle
     # ------------------------------------------------------------------
 

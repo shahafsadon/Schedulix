@@ -416,11 +416,9 @@ class ScheduleNavigationPresenter:
         # intentionally skipped for session-only (no cache) callers so that
         # unit tests and headless code paths remain unaffected.
         if self._cache is not None:
-            # set_ranking_settings clears ranked_schedules as a side-effect;
-            # we immediately follow with set_ranked_schedules to restore them
-            # in the new order.  Both calls are write-through (pickle flush).
-            self._cache.set_ranking_settings(ranking_settings)
-            self._cache.set_ranked_schedules(ranked_schedules)
+            self._cache.set_ranking_settings(self._active_ranking)
+            if not self.is_partial:
+                self._cache.set_ranked_schedules(ranked_schedules)
 
         if ranking_settings.priority_list:
             message = f"Ranking applied to {len(ranked_schedules)} system(s)."

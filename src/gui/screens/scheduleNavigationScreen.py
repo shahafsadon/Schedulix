@@ -871,7 +871,7 @@ class ScheduleNavigationScreen(ctk.CTkFrame):
             [
                 RankingPreference(
                     criterion=criterion,
-                    descending=_RANKING_DIRECTION[criterion],
+                    descending=True,
                 )
                 for criterion in self._ranking_criteria
             ]
@@ -943,6 +943,201 @@ class ScheduleNavigationScreen(ctk.CTkFrame):
     ) -> None:
         """Create one calendar day cell."""
         iso = f"{year:04d}-{month:02d}-{day:02d}"
+        cell = ctk.CTkButton(
+            parent,
+            text=str(day),
+            height=30,
+            fg_color="transparent",
+            hover=False,
+            text_color=_REGULAR_DAY_TEXT,
+            command=lambda: None,
+            state="disabled",
+            corner_radius=7,
+        )
+        cell.grid(row=row, column=col, padx=3, pady=3, sticky="ew")
+        self._exam_cells[iso] = cell
+
+    def _paint_exam_days(
+        self,
+        exams_by_iso_date: dict[str, list[ExamRow]],
+    ) -> None:
+        """Highlight only exam days for the current system."""
+        for iso_date, cell in self._exam_cells.items():
+            cell.configure(
+                text=str(int(iso_date[-2:])),
+                fg_color="transparent",
+                hover=False,
+                text_color=_REGULAR_DAY_TEXT,
+                command=lambda: None,
+                state="disabled",
+            )
+
+            exams = exams_by_iso_date.get(iso_date)
+            if not exams:
+                continue
+
+            selected = iso_date == getattr(self, "_selected_iso_date", None)
+            cell.configure(
+                text=f"{int(iso_date[-2:])}  ({len(exams)})",
+                fg_color=_SELECTED_DAY_COLOR if selected else _EXAM_DAY_COLOR,
+                hover=True,
+                hover_color=_EXAM_DAY_HOVER,
+                text_color=_SELECTED_DAY_TEXT if selected else _EXAM_DAY_TEXT,
+                command=lambda d=iso_date, rows=exams: self._handle_exam_day_click(
+                    d,
+                    rows,
+                ),
+                state="normal",
+            )
+
+    def _handle_exam_day_click(
+        self,
+        iso_date: str,
+        exams: list[ExamRow],
+    ) -> None:
+        """Handle an exam-day click in full UI or headless compatibility mode."""
+        if hasattr(self, "_details_body"):
+            self._select_day(iso_date)
+            return
+
+        self._show_day_popup(iso_date, exams)
+
+    def _select_day(self, iso_date: str) -> None:
+        """Select a day and refresh the detail panel."""
+        self._selected_iso_date = iso_date
+        self._paint_exam_days(self._current_exams_by_iso_date)
+        self._render_selected_day()
+
+    def _show_day_popup(
+        self,
+        iso_date: str,
+        exams: list[ExamRow],
+    ) -> None:
+        """Legacy popup used by older headless tests and fallback UI paths."""
+        popup = ctk.CTkToplevel(self.winfo_toplevel())
+        popup.title(f"Exams on {iso_date}")
+        popup.geometry("460x320")
+        popup.transient(self.winfo_toplevel())
+        popup.grab_set()
+
+        body = ctk.CTkFrame(popup, fg_color="transparent")
+        body.pack(fill="both", expand=True, padx=18, pady=18)
+
+        ctk.CTkLabel(
+            body,
+            text=f"Exams scheduled on {iso_date}",
+            font=("Segoe UI", 16, "bold"),
+            text_color=_TEXT,
+        ).pack(anchor="w", pady=(0, 10))
+
+        for exam in exams:
+            ctk.CTkLabel(
+                body,
+                text=f"{exam.course_number}  -  {exam.course_name}",
+                font=("Segoe UI", 13, "bold"),
+                text_color=_TEXT,
+                anchor="w",
+            ).pack(anchor="w", pady=(6, 2))
+
+            ctk.CTkLabel(
+                body,
+                text=(
+                    f"Instructor: {exam.instructor}    "
+                    f"Requirement: {exam.status}    "
+                    f"Programs: {exam.program_numbers}"
+                ),
+                font=("Segoe UI", 11),
+                text_color=_MUTED,
+                anchor="w",
+            ).pack(anchor="w")
+
+    def _render_selected_day(self) -> None:
+        """Show selected-day exam details in the sidebar."""
+        for child in self._details_body.winfo_children():
+            child.destroy()
+
+        if self._selected_iso_date is None:
+            self._selected_day_label.configure(text="Select an exam day")
+            self._selected_day_hint.configure(text="Click a highlighted date to inspect its exams.")
+            return
+
+        exams = self._current_exams_by_iso_date.get(self._selected_iso_date, [])
+        self._selected_day_label.configure(
+            text=f"Exams on {self._format_iso_date(self._selected_iso_date)}"
+        )
+        self._selected_day_hint.configure(
+            text=f"{len(exams)} exam{'s' if len(exams) != 1 else ''} scheduled on this date."
+        )
+
+        for row_index, exam in enumerate(exams):
+            self._build_exam_detail_card(self._details_body, row_index, exam)
+
+    def _render_system_exam_list(self, sections) -> None:
+        """Render the full current system as compact grouped rows."""
+        for child in self._schedule_body.winfo_children():
+            child.destroy()
+
+        row = 0
+        for section in sections:
+            ctk.CTkLabel(
+                self._schedule_body,
+                text=f"{section.semester} | {section.moed}",
+                font=("Segoe UI", 11, "bold"),
+                text_color=_MUTED,
+                anchor="w",
+            ).grid(row=row, column=0, sticky="ew", padx=4, pady=(6, 2))
+            row += 1
+
+            for exam in section.exams:
+                ctk.CTkLabel(
+                    self._schedule_body,
+                    text=f"{exam.exam_date} - {exam.course_number} {exam.course_name}",
+                    font=("Segoe UI", 11),
+                    text_color=_TEXT,
+                    anchor="w",
+                    justify="left",
+                    wraplength=320,
+                ).grid(row=row, column=0, sticky="ew", padx=12, pady=1)
+                row += 1
+
+    def _build_exam_detail_card(
+        self,
+        master: ctk.CTkFrame,
+        row_index: int,
+        exam: ExamRow,
+    ) -> None:
+        """Render one selected-day exam detail card."""
+        card = ctk.CTkFrame(
+            master,
+            fg_color=_SURFACE,
+            border_width=1,
+            border_color=_BORDER,
+            corner_radius=8,
+        )
+        card.grid(row=row_index, column=0, sticky="ew", padx=4, pady=(4, 8))
+        card.grid_columnconfigure(0, weight=1)
+
+        ctk.CTkLabel(
+            card,
+            text=f"{exam.course_number} - {exam.course_name}",
+            font=("Segoe UI", 13, "bold"),
+            text_color=_TEXT,
+            anchor="w",
+            wraplength=320,
+        ).grid(row=0, column=0, sticky="ew", padx=12, pady=(10, 4))
+
+        ctk.CTkLabel(
+            card,
+            text=(
+                f"Instructor: {exam.instructor}\n"
+                f"Requirement: {exam.status}\n"
+                f"Programs: {exam.program_numbers}"
+            ),
+            font=("Segoe UI", 11),
+            text_color=_MUTED,
+            justify="left",
+            anchor="w",
+        ).grid(row=1, column=0, sticky="ew", padx=12, pady=(0, 10))
         cell = ctk.CTkButton(
             parent,
             text=str(day),

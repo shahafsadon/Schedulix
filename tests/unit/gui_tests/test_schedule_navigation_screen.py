@@ -47,7 +47,7 @@ def test_empty_state_disables_navigation_and_save() -> None:
     screen._refresh()
 
     assert screen._counter_label.options["text"] == (
-        "No schedules to display."
+        "Generating schedules… No preview available yet."
     )
 
     assert screen._prev_button.options["state"] == "disabled"
@@ -420,6 +420,7 @@ def test_apply_ranking_delegates_without_generation_and_refreshes() -> None:
     screen._grid_built = True
     screen._exam_cells = {"2026-01-05": object()}
     screen._selected_iso_date = "2026-01-05"
+    screen._body = MagicMock()
 
     screen._handle_apply_ranking()
 
