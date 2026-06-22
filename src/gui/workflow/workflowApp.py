@@ -299,8 +299,11 @@ class SchedulixWorkflow(ctk.CTkFrame):
 
         # Prefer ranked wrappers when metrics were calculated; fall back to the
         # raw systems so older cached sessions still open normally.
+        # Pass the shared cache so apply_ranking() can persist ranking settings
+        # and the new display order to disk (SCRUM-184).
         navigation_presenter = ScheduleNavigationPresenter(
-            ranked_schedules or schedules
+            ranked_schedules or schedules,
+            cache_manager=self.cache,
         )
         export_presenter = ExportPresenter(navigation_presenter)
 

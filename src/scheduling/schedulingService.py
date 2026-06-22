@@ -356,7 +356,17 @@ class SchedulingService:
         started_at: float,
         message: str,
     ) -> ProgressiveRankedSnapshot:
-        """Create, optionally persist, emit, and return the terminal snapshot."""
+        """Create, optionally persist, emit, and return the terminal snapshot.
+
+        Cache-safety contract (SCRUM-184)
+        ----------------------------------
+        ``CacheManager`` is written **only** on ``COMPLETE`` with
+        ``options.cache_final_preview`` set.  ``PARTIAL`` snapshots emitted
+        during the generation loop are intentionally *never* written to cache:
+        they are in-memory previews and must not corrupt the permanent session
+        store.  ``CANCELLED`` and ``FAILED`` terminal states are also excluded
+        so an aborted run leaves the previous (valid) schedules intact on disk.
+        """
         snapshot = self._build_snapshot(
             run_id=run_id,
             state=state,
@@ -368,10 +378,14 @@ class SchedulingService:
             message=message,
         )
 
+        # PARTIAL snapshots are dispatched via on_snapshot() in the main loop
+        # and never reach this helper; the guard below is an extra defensive
+        # layer ensuring that a future code path cannot accidentally persist a
+        # partial preview to the cache.
         if state == ProgressiveResultState.COMPLETE and options.cache_final_preview:
-            # Save only the final ranked preview.  The full result set may be
-            # huge; materializing it here would undo the optimization this flow
-            # exists to protect.
+            # Persist only the bounded top-N ranked preview, not the full set.
+            # Storing every generated system would undo the lazy-generation
+            # optimization that this progressive flow exists to protect.
             cache.set_generated_schedules(
                 [ranked.exam_system for ranked in snapshot.ranked_schedules]
             )

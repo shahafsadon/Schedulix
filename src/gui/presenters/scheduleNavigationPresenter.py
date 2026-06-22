@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from application.cache_manager import CacheManager
 from ranking_settings import RankedExamSystem, RankingSettings, ScheduleMetrics
 from scheduling.examScheduleGenerator import ExamSystem
 from scheduling.scheduleRankingService import ScheduleRankingService
@@ -115,13 +116,20 @@ class ScheduleNavigationPresenter:
     def __init__(
         self,
         schedules: list[ExamSystem | RankedExamSystem],
+        cache_manager: CacheManager | None = None,
     ) -> None:
         """Create the presenter over the list of generated exam systems.
 
         Args:
             schedules: raw exam systems or ranked wrappers read from the cache.
                 May be empty.
+            cache_manager: the shared application cache.  When provided,
+                successful ``apply_ranking()`` calls persist the new ranking
+                settings and ordered schedules to disk (SCRUM-184).  When
+                ``None`` the presenter still functions correctly but ranking
+                choices are session-only.
         """
+        self._cache = cache_manager
         self._schedules: list[ExamSystem] = []
         self._ranked_schedules: list[RankedExamSystem] = []
 
@@ -402,6 +410,17 @@ class ScheduleNavigationPresenter:
         # Persist the ranking so future live batches are re-ranked automatically
         # (SCRUM-183: support ranking changes during background generation).
         self._active_ranking = ranking_settings
+
+        # Durably persist the user's chosen ranking criteria and the newly
+        # ordered schedule list to the permanent cache (SCRUM-184).  This is
+        # intentionally skipped for session-only (no cache) callers so that
+        # unit tests and headless code paths remain unaffected.
+        if self._cache is not None:
+            # set_ranking_settings clears ranked_schedules as a side-effect;
+            # we immediately follow with set_ranked_schedules to restore them
+            # in the new order.  Both calls are write-through (pickle flush).
+            self._cache.set_ranking_settings(ranking_settings)
+            self._cache.set_ranked_schedules(ranked_schedules)
 
         if ranking_settings.priority_list:
             message = f"Ranking applied to {len(ranked_schedules)} system(s)."
