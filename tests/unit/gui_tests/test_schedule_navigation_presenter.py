@@ -1,7 +1,7 @@
 """Unit tests for ScheduleNavigationPresenter (SCRUM-126).
 
-These tests verify navigation state (next/previous/counter) and the
-display-ready view built from generated exam systems, without any GUI.
+These tests verify navigation state, display-ready schedule data, Part 4
+snapshot actions, manual moves, and undo/redo behavior without any GUI.
 """
 import sys
 import unittest
@@ -14,6 +14,12 @@ SRC = ROOT / "src"
 
 sys.path.insert(0, str(SRC))
 
+from constraint_settings import (
+    SchedulingConstraintSettings,
+    ThresholdConstraintSetting,
+    ThresholdConstraintType,
+)
+from models import ExamPeriod
 from models import Course, ProgramEnrollment
 from ranking_settings import (
     RankedExamSystem,
@@ -77,6 +83,26 @@ def make_ranked(
         ),
         key=key,
     )
+
+
+class FakeCache:
+    """Small cache double for Part 4 presenter tests."""
+
+    def __init__(
+        self,
+        settings=None,
+        periods=None,
+    ):
+        self._settings = settings or SchedulingConstraintSettings.default_configuration()
+        self._periods = periods or []
+
+    def get_constraint_settings(self):
+        """Return active constraint settings."""
+        return self._settings
+
+    def get_exam_periods(self):
+        """Return available exam periods."""
+        return self._periods
 
 
 class ScheduleNavigationPresenterTests(unittest.TestCase):
@@ -659,3 +685,108 @@ class ScheduleNavigationPresenterCacheFinalizationTests(unittest.TestCase):
         self.assertIs(cache.ranking_settings, settings)
         self.assertEqual(cache.set_ranked_calls, 0)
         self.assertIsNone(cache.ranked_schedules)
+
+
+class ScheduleNavigationPresenterPart4Tests(unittest.TestCase):
+    """Part 4 GUI-facing behavior without opening a desktop window."""
+
+    def _max_per_day_settings(self, value: int):
+        settings = SchedulingConstraintSettings.default_configuration()
+        settings.constraints[ThresholdConstraintType.max_exams_per_day] = (
+            ThresholdConstraintSetting(True, value)
+        )
+        return settings
+
+    def _fall_period(self):
+        return ExamPeriod(
+            semester="FALL",
+            moed="Aleph",
+            start_date=date(2026, 1, 1),
+            end_date=date(2026, 1, 3),
+            excluded_dates=[],
+        )
+
+    def test_current_view_marks_overloaded_days(self) -> None:
+        """A day above max_exams_per_day is visible to the GUI."""
+        system = make_system(
+            exams=[
+                make_exam("A", "83001", date(2026, 1, 1), status="Elective"),
+                make_exam("B", "83002", date(2026, 1, 1), status="Elective"),
+            ]
+        )
+        presenter = ScheduleNavigationPresenter(
+            [system],
+            cache_manager=FakeCache(settings=self._max_per_day_settings(1)),
+        )
+
+        status = presenter.current_view().day_status_by_iso_date["2026-01-01"]
+
+        self.assertEqual(status.status, "overloaded")
+        self.assertIn("maximum allowed is 1", status.details)
+
+    def test_current_view_marks_conflict_days_stronger_than_busy_days(self) -> None:
+        """Mandatory same-day conflicts are marked as conflict."""
+        system = make_system(
+            exams=[
+                make_exam("A", "83001", date(2026, 1, 1)),
+                make_exam("B", "83002", date(2026, 1, 1)),
+            ]
+        )
+        presenter = ScheduleNavigationPresenter([system])
+
+        status = presenter.current_view().day_status_by_iso_date["2026-01-01"]
+
+        self.assertEqual(status.status, "conflict")
+        self.assertIn("critical-conflict", status.details)
+
+    def test_snapshot_save_load_and_compare_use_active_schedule(self) -> None:
+        """Snapshots can be saved, compared, and loaded without regeneration."""
+        system = make_system(
+            exams=[make_exam("Algorithms", "83001", date(2026, 1, 1))]
+        )
+        presenter = ScheduleNavigationPresenter(
+            [system],
+            cache_manager=FakeCache(periods=[self._fall_period()]),
+        )
+
+        self.assertTrue(presenter.save_snapshot("base").success)
+
+        course = presenter.manual_move_course_options()[0]
+        move = presenter.apply_manual_move(course, "02-01-2026")
+        self.assertTrue(move.success)
+        self.assertTrue(presenter.save_snapshot("moved").success)
+
+        comparison = presenter.compare_snapshots("base", "moved")
+        self.assertTrue(comparison.success)
+        self.assertIn("83001 - Algorithms", comparison.details)
+        self.assertIn("01-01-2026 -> 02-01-2026", comparison.details)
+
+        load = presenter.load_snapshot("base")
+        self.assertTrue(load.success)
+        self.assertIn("2026-01-01", presenter.current_view().exams_by_iso_date)
+
+    def test_manual_move_undo_and_redo_update_visible_schedule(self) -> None:
+        """Undo and redo change only the active visible schedule."""
+        system = make_system(
+            exams=[make_exam("Algorithms", "83001", date(2026, 1, 1))]
+        )
+        presenter = ScheduleNavigationPresenter(
+            [system],
+            cache_manager=FakeCache(periods=[self._fall_period()]),
+        )
+
+        course = presenter.manual_move_course_options()[0]
+        result = presenter.apply_manual_move(course, "02-01-2026")
+
+        self.assertTrue(result.success)
+        self.assertTrue(presenter.can_undo_manual_move)
+        self.assertIn("2026-01-02", presenter.current_view().exams_by_iso_date)
+
+        undo = presenter.undo_manual_move()
+        self.assertTrue(undo.success)
+        self.assertTrue(presenter.can_redo_manual_move)
+        self.assertIn("2026-01-01", presenter.current_view().exams_by_iso_date)
+
+        redo = presenter.redo_manual_move()
+        self.assertTrue(redo.success)
+        self.assertIn("2026-01-02", presenter.current_view().exams_by_iso_date)

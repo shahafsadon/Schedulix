@@ -17,6 +17,8 @@ logic:
   dependencies injected via constructor arguments — no Singleton references.
 * ``undo()`` is supported on every command that mutates state, enabling the
   Presenter to offer a one-step revert.
+* Part 4 manual exam moves also use this file. The move command stores the old
+  and new schedule copies so Undo and Redo do not regenerate schedules.
 
 No Version 1.0 source files are modified by this module.
 """
@@ -24,9 +26,14 @@ No Version 1.0 source files are modified by this module.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from copy import deepcopy
 from dataclasses import dataclass, field
 from datetime import date
-from typing import Any
+from typing import Any, Callable
+
+from constraint_settings import SchedulingConstraintSettings
+from scheduling.examScheduleGenerator import ExamSystem
+from scheduling.manualScheduleEditor import ManualScheduleEditor
 
 
 # ---------------------------------------------------------------------------
@@ -491,3 +498,176 @@ class EditPeriodCommand(Command):
             message="Exam period edit reversed.",
             data=valid_dates,
         )
+
+
+class ScheduleModificationCommand(Command):
+    """Move one exam inside the active schedule and support undo/redo."""
+
+    def __init__(
+        self,
+        schedule_getter: Callable[[], ExamSystem],
+        schedule_setter: Callable[[ExamSystem], None],
+        course_id: str,
+        new_date: date | str,
+        *,
+        editor: ManualScheduleEditor | None = None,
+        constraint_settings: SchedulingConstraintSettings | None = None,
+        available_dates: set[date] | list[date] | tuple[date, ...] | None = None,
+    ) -> None:
+        self._schedule_getter = schedule_getter
+        self._schedule_setter = schedule_setter
+        self._course_id = course_id
+        self._new_date = new_date
+        self._editor = editor or ManualScheduleEditor()
+        self._constraint_settings = constraint_settings
+        self._available_dates = available_dates
+        self._old_schedule: ExamSystem | None = None
+        self._new_schedule: ExamSystem | None = None
+        self._old_date: date | None = None
+        self._applied = False
+
+    @property
+    def course_id(self) -> str:
+        """Return the moved course id."""
+        return self._course_id
+
+    @property
+    def old_date(self) -> date | None:
+        """Return the date captured before execute."""
+        return self._old_date
+
+    @property
+    def new_date(self) -> date | str:
+        """Return the requested new date."""
+        return self._new_date
+
+    def execute(self) -> CommandResult:
+        """Apply the move to the active schedule."""
+        current_schedule = self._schedule_getter()
+        result = self._editor.move_exam(
+            current_schedule,
+            self._course_id,
+            self._new_date,
+            constraint_settings=self._constraint_settings,
+            available_dates=self._available_dates,
+        )
+
+        if not result.success or result.schedule is None:
+            return CommandResult(
+                success=False,
+                message=result.message,
+                data=result,
+            )
+
+        self._old_schedule = deepcopy(current_schedule)
+        self._new_schedule = deepcopy(result.schedule)
+        self._old_date = result.old_date
+        self._schedule_setter(deepcopy(result.schedule))
+        self._applied = True
+
+        return CommandResult(
+            success=True,
+            message=result.message,
+            data=result,
+        )
+
+    def undo(self) -> CommandResult:
+        """Restore the schedule captured before execute."""
+        if not self._applied or self._old_schedule is None:
+            return CommandResult(
+                success=False,
+                message="ScheduleModificationCommand: nothing to undo.",
+            )
+
+        self._schedule_setter(deepcopy(self._old_schedule))
+        self._applied = False
+        return CommandResult(
+            success=True,
+            message=f"Manual move for course {self._course_id} was undone.",
+            data=deepcopy(self._old_schedule),
+        )
+
+    def redo(self) -> CommandResult:
+        """Apply the stored new schedule again without regenerating anything."""
+        if self._new_schedule is None:
+            return CommandResult(
+                success=False,
+                message="ScheduleModificationCommand: nothing to redo.",
+            )
+
+        self._schedule_setter(deepcopy(self._new_schedule))
+        self._applied = True
+        return CommandResult(
+            success=True,
+            message=f"Manual move for course {self._course_id} was redone.",
+            data=deepcopy(self._new_schedule),
+        )
+
+
+class UndoRedoManager:
+    """Stores the last successful manual move commands."""
+
+    def __init__(self, history_limit: int = 20) -> None:
+        if history_limit <= 0:
+            raise ValueError("history_limit must be greater than zero.")
+
+        self._history_limit = history_limit
+        self._undo_stack: list[ScheduleModificationCommand] = []
+        self._redo_stack: list[ScheduleModificationCommand] = []
+
+    @property
+    def undo_count(self) -> int:
+        """Return how many moves can be undone."""
+        return len(self._undo_stack)
+
+    @property
+    def redo_count(self) -> int:
+        """Return how many moves can be redone."""
+        return len(self._redo_stack)
+
+    def execute(self, command: ScheduleModificationCommand) -> CommandResult:
+        """Run a command and store it only when it succeeds."""
+        result = command.execute()
+        if not result.success:
+            return result
+
+        self._undo_stack.append(command)
+        self._redo_stack.clear()
+        self._trim_history()
+        return result
+
+    def undo(self) -> CommandResult:
+        """Undo the latest successful manual move."""
+        if not self._undo_stack:
+            return CommandResult(success=False, message="No manual move to undo.")
+
+        command = self._undo_stack.pop()
+        result = command.undo()
+        if result.success:
+            self._redo_stack.append(command)
+        else:
+            self._undo_stack.append(command)
+        return result
+
+    def redo(self) -> CommandResult:
+        """Redo the latest undone manual move."""
+        if not self._redo_stack:
+            return CommandResult(success=False, message="No manual move to redo.")
+
+        command = self._redo_stack.pop()
+        result = command.redo()
+        if result.success:
+            self._undo_stack.append(command)
+            self._trim_history()
+        else:
+            self._redo_stack.append(command)
+        return result
+
+    def clear(self) -> None:
+        """Forget all undo and redo history."""
+        self._undo_stack.clear()
+        self._redo_stack.clear()
+
+    def _trim_history(self) -> None:
+        while len(self._undo_stack) > self._history_limit:
+            self._undo_stack.pop(0)
