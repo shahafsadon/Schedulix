@@ -47,7 +47,7 @@ def test_empty_state_disables_navigation_and_save() -> None:
     screen._refresh()
 
     assert screen._counter_label.options["text"] == (
-        "Generating schedules… No preview available yet."
+        "No schedules to display."
     )
 
     assert screen._prev_button.options["state"] == "disabled"
