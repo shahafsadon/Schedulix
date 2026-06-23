@@ -75,10 +75,16 @@ def iter_fixed_size_batches(
     if batch_size <= 0:
         raise ValueError("batch_size must be greater than zero.")
 
+    iterator = iter(items)
     batch: list[T] = []
 
-    for item in items:
+    while True:
         if should_stop is not None and should_stop():
+            break
+
+        try:
+            item = next(iterator)
+        except StopIteration:
             break
 
         batch.append(item)
