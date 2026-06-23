@@ -281,3 +281,75 @@ def test_mandatory_span_is_calculated_per_semester_and_moed_group() -> None:
     )
 
     assert metrics.mandatory_span == 4
+
+
+def test_manual_metrics_for_ten_day_mandatory_span_and_average_gap() -> None:
+    """Hand-check all displayed ranking metrics for an easy three-exam system."""
+    mandatory_a = course(
+        "Algorithms",
+        "83400",
+        [("83101", 1, "FALL", "Obligatory")],
+    )
+    elective = course(
+        "Graphics",
+        "83401",
+        [("83101", 1, "FALL", "Elective")],
+    )
+    mandatory_b = course(
+        "Databases",
+        "83402",
+        [("83101", 1, "FALL", "Obligatory")],
+    )
+
+    metrics = ScheduleMetricsCalculator().calculate(
+        system(
+            [
+                exam(mandatory_a, date(2026, 1, 1)),
+                exam(elective, date(2026, 1, 5)),
+                exam(mandatory_b, date(2026, 1, 11)),
+            ]
+        ),
+        schedule_id=42,
+    )
+
+    assert metrics.schedule_id == 42
+    assert metrics.min_mandatory_gap == 10
+    assert metrics.average_all_gap == pytest.approx((4 + 10 + 6) / 3)
+    assert metrics.elective_collision_count == 0
+    assert metrics.mandatory_span == 10
+    assert metrics.max_exams_per_day == 1
+
+
+def test_manual_same_day_exams_affect_max_per_day_and_elective_collisions() -> None:
+    """Same-day elective pairs count as collisions and all exams count per day."""
+    mandatory = course(
+        "Mandatory",
+        "83410",
+        [("83101", 1, "FALL", "Obligatory")],
+    )
+    elective_a = course(
+        "Elective A",
+        "83411",
+        [("83101", 1, "FALL", "Elective")],
+    )
+    elective_b = course(
+        "Elective B",
+        "83412",
+        [("83101", 1, "FALL", "Elective")],
+    )
+
+    metrics = ScheduleMetricsCalculator().calculate(
+        system(
+            [
+                exam(mandatory, date(2026, 2, 1)),
+                exam(elective_a, date(2026, 2, 1)),
+                exam(elective_b, date(2026, 2, 1)),
+            ]
+        ),
+        schedule_id=7,
+    )
+
+    assert metrics.max_exams_per_day == 3
+    assert metrics.elective_collision_count == 1
+    assert metrics.min_mandatory_gap == MISSING_METRIC_VALUE
+    assert metrics.mandatory_span == MISSING_METRIC_VALUE

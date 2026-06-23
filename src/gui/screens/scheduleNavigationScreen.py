@@ -18,8 +18,14 @@ except ModuleNotFoundError as error:
         "Install it with: .venv\\Scripts\\python.exe -m pip install -r requirements.txt"
     ) from error
 
+from application.async_runner import AsyncScheduleRunner
 from gui.presenters.exportPresenter import ExportPresenter
-from gui.presenters.scheduleNavigationPresenter import ExamRow, ScheduleNavigationPresenter
+from gui.presenters.scheduleNavigationPresenter import (
+    ExamRow,
+    ProgressiveRankingUpdate,
+    ResultMode,
+    ScheduleNavigationPresenter,
+)
 from gui.screens.themeToggle import (
     THEME_BUTTON_WIDTH,
     ThemeButtonText,
@@ -88,6 +94,7 @@ class ScheduleNavigationScreen(ctk.CTkFrame):
         on_back: Callable[[], None] | None = None,
         on_theme_toggle: ThemeToggleCallback | None = None,
         theme_button_text: ThemeButtonText = None,
+        ranking_runner: AsyncScheduleRunner | None = None,
     ) -> None:
         super().__init__(master, corner_radius=0, fg_color=_PAGE_BG)
         self.presenter = presenter
@@ -95,6 +102,8 @@ class ScheduleNavigationScreen(ctk.CTkFrame):
         self._on_back = on_back
         self._on_theme_toggle = on_theme_toggle
         self._theme_button_text = theme_button_text
+        self._ranking_runner = ranking_runner or AsyncScheduleRunner()
+        self._ranking_run_id = 0
 
         self._exam_cells: dict[str, ctk.CTkButton] = {}
         self._selected_iso_date: str | None = None
@@ -186,7 +195,7 @@ class ScheduleNavigationScreen(ctk.CTkFrame):
         if self._export_presenter is not None:
             self._save_button = ctk.CTkButton(
                 actions,
-                text="Save System",
+                text="Save Final System",
                 width=122,
                 fg_color=_PRIMARY,
                 hover_color=_PRIMARY_HOVER,
@@ -314,22 +323,23 @@ class ScheduleNavigationScreen(ctk.CTkFrame):
         sidebar = ctk.CTkFrame(main, fg_color="transparent")
         sidebar.grid(row=0, column=1, sticky="nsew")
         sidebar.grid_columnconfigure(0, weight=1)
-        sidebar.grid_rowconfigure(0, weight=1)
+        sidebar.grid_rowconfigure(0, weight=2)
+        sidebar.grid_rowconfigure(1, weight=1)
 
-        details_card = ctk.CTkFrame(
+        details_card = ctk.CTkScrollableFrame(
             sidebar,
             fg_color=_SURFACE,
             border_width=1,
             border_color=_BORDER,
             corner_radius=8,
+            height=430,
         )
         details_card.grid(row=0, column=0, sticky="nsew", pady=(0, 12))
         details_card.grid_columnconfigure(0, weight=1)
-        details_card.grid_rowconfigure(2, weight=1)
 
         self._selected_day_label = ctk.CTkLabel(
             details_card,
-            text="Select an exam day",
+            text="Selected Date",
             font=("Segoe UI", 16, "bold"),
             text_color=_TEXT,
             anchor="w",
@@ -345,26 +355,25 @@ class ScheduleNavigationScreen(ctk.CTkFrame):
         )
         self._selected_day_hint.grid(row=1, column=0, sticky="ew", padx=16, pady=(0, 8))
 
-        self._details_body = ctk.CTkScrollableFrame(
+        self._details_body = ctk.CTkFrame(
             details_card,
             fg_color=_SUBTLE_SURFACE,
             corner_radius=8,
         )
-        self._details_body.grid(row=2, column=0, sticky="nsew", padx=12, pady=(0, 12))
+        self._details_body.grid(row=2, column=0, sticky="ew", padx=12, pady=(0, 12))
         self._details_body.grid_columnconfigure(0, weight=1)
 
         ctk.CTkLabel(
             details_card,
-            text="System exams",
+            text="Full Schedule",
             font=("Segoe UI", 13, "bold"),
             text_color=_TEXT,
             anchor="w",
         ).grid(row=3, column=0, sticky="ew", padx=16, pady=(0, 6))
 
-        self._schedule_body = ctk.CTkScrollableFrame(
+        self._schedule_body = ctk.CTkFrame(
             details_card,
             fg_color="transparent",
-            height=170,
         )
         self._schedule_body.grid(row=4, column=0, sticky="ew", padx=12, pady=(0, 12))
         self._schedule_body.grid_columnconfigure(0, weight=1)
@@ -373,14 +382,15 @@ class ScheduleNavigationScreen(ctk.CTkFrame):
 
     def _build_ranking_panel(self, sidebar: ctk.CTkFrame) -> None:
         """Build ranking controls and current-system metric readout."""
-        panel = ctk.CTkFrame(
+        panel = ctk.CTkScrollableFrame(
             sidebar,
             fg_color=_SURFACE,
             border_width=1,
             border_color=_BORDER,
             corner_radius=8,
+            height=320,
         )
-        panel.grid(row=1, column=0, sticky="ew")
+        panel.grid(row=1, column=0, sticky="nsew")
         panel.grid_columnconfigure(0, weight=1)
 
         ctk.CTkLabel(
@@ -393,7 +403,10 @@ class ScheduleNavigationScreen(ctk.CTkFrame):
 
         ctk.CTkLabel(
             panel,
-            text="Choose ranking criteria. Sorting applies immediately to all generated schedules.",
+            text=(
+                "Choose ranking criteria. During generation this reorders only "
+                "the temporary preview; final export is enabled after ranking completes."
+            ),
             font=("Segoe UI", 11),
             text_color=_MUTED,
             anchor="w",
@@ -504,6 +517,16 @@ class ScheduleNavigationScreen(ctk.CTkFrame):
 
     def _handle_save(self) -> None:
         """Ask for a destination file and export the currently shown system."""
+        if getattr(getattr(self, "presenter", None), "is_partial", False) is True:
+            self._status_label.configure(
+                text=(
+                    "Export is available after ranking completes. "
+                    "The current Top 50 is still a temporary live preview."
+                ),
+                text_color="#B00020",
+            )
+            return
+
         chosen = filedialog.asksaveasfilename(
             parent=self.winfo_toplevel(),
             title="Save Exam Schedule",
@@ -576,22 +599,125 @@ class ScheduleNavigationScreen(ctk.CTkFrame):
         self._set_ranking_status("Ranking order updated.", ok=None)
 
     def _handle_apply_ranking(self) -> None:
-        """Apply the active ranking order without generating schedules."""
-        result = self.presenter.apply_ranking(self._ranking_settings())
-        self._set_ranking_status(result.message, ok=result.success)
+        """Apply ranking in the background and stream a bounded preview."""
+        settings = self._ranking_settings()
 
-        if result.success:
-            # Force a full grid rebuild so the newly sorted systems are painted
-            # immediately (SCRUM-183: live re-ranking must be reflected at once).
-            body = getattr(self, "_body", None)
-            if body is not None:
-                for child in body.winfo_children():
-                    child.destroy()
-            self._exam_cells = {}
-            self._built_months = set()
-            self._selected_iso_date = None
-            self._grid_built = False
-            self._refresh()
+        if not settings.priority_list:
+            if getattr(self._ranking_runner, "is_running", False):
+                self._ranking_runner.cancel_current()
+                self._ranking_runner = AsyncScheduleRunner()
+            self._ranking_run_id = getattr(self, "_ranking_run_id", 0) + 1
+            result = self.presenter.apply_ranking(settings)
+            self._set_ranking_status(result.message, ok=result.success)
+            if result.success:
+                self._reset_calendar_grid()
+                self._refresh()
+            return
+
+        self._ranking_run_id = getattr(self, "_ranking_run_id", 0) + 1
+        run_id = self._ranking_run_id
+
+        if getattr(self._ranking_runner, "is_running", False):
+            self._ranking_runner.cancel_current()
+            self._ranking_runner = AsyncScheduleRunner()
+
+        def task(token, on_progress):
+            return self.presenter.rank_progressively(
+                settings,
+                run_id=run_id,
+                on_update=on_progress,
+                cancellation_token=token,
+                batch_size=1000,
+                preview_limit=50,
+                min_update_interval_seconds=0.35,
+            )
+
+        accepted = self._ranking_runner.run_with_progress(
+            task=task,
+            on_started=lambda: self._on_ranking_started(run_id),
+            on_progress=lambda update: self.after(
+                0,
+                lambda item=update: self._handle_ranking_update(item),
+            ),
+            on_complete=lambda update: self.after(
+                0,
+                lambda item=update: self._handle_ranking_complete(
+                    run_id,
+                    item,
+                ),
+            ),
+            on_error=lambda error: self.after(
+                0,
+                lambda exc=error: self._handle_ranking_error(run_id, exc),
+            ),
+        )
+
+        if not accepted:
+            self._set_ranking_status("Ranking is already running.", ok=False)
+
+    def _on_ranking_started(self, run_id: int) -> None:
+        """Show immediate feedback while the first ranked preview is computed."""
+        if run_id != self._ranking_run_id:
+            return
+        self._set_ranking_status(
+            "Ranking started. Live Top 50 preview will appear shortly.",
+            ok=None,
+        )
+        if getattr(self, "_apply_ranking_button", None) is not None:
+            self._apply_ranking_button.configure(text="Restart Ranking")
+
+    def _handle_ranking_update(
+        self,
+        update: ProgressiveRankingUpdate,
+    ) -> None:
+        """Apply one live ranked preview update from the active worker."""
+        if update.run_id != self._ranking_run_id:
+            return
+        self.push_live_update(
+            update.ranked_schedules,
+            is_partial=update.is_partial,
+            systems_seen=update.processed_count,
+        )
+        self._set_ranking_status(update.message, ok=None)
+
+    def _handle_ranking_complete(
+        self,
+        run_id: int,
+        update: ProgressiveRankingUpdate,
+    ) -> None:
+        """Switch to final ranked Top 50 after the active worker finishes."""
+        if run_id != self._ranking_run_id or update.run_id != self._ranking_run_id:
+            return
+        self.push_live_update(
+            update.ranked_schedules,
+            is_partial=False,
+            systems_seen=update.total_count,
+        )
+        self._set_ranking_status(update.message, ok=True)
+        if getattr(self, "_apply_ranking_button", None) is not None:
+            self._apply_ranking_button.configure(text="Apply Ranking")
+
+    def _handle_ranking_error(self, run_id: int, error: Exception) -> None:
+        """Show ranking failures without letting stale workers repaint state."""
+        if run_id != self._ranking_run_id:
+            return
+        self._set_ranking_status(
+            f"Ranking failed unexpectedly: {type(error).__name__}.",
+            ok=False,
+        )
+        if getattr(self, "_apply_ranking_button", None) is not None:
+            self._apply_ranking_button.configure(text="Apply Ranking")
+
+    def _reset_calendar_grid(self) -> None:
+        """Force the calendar grid to rebuild for a changed schedule order."""
+        body = getattr(self, "_body", None)
+        if body is not None:
+            for child in body.winfo_children():
+                child.destroy()
+        self._exam_cells = {}
+        self._built_months = set()
+        self._selected_iso_date = None
+        self._grid_built = False
 
     def push_live_error(self, error_message: str) -> None:
         """Display a fatal generation error in the status banner.
@@ -645,8 +771,8 @@ class ScheduleNavigationScreen(ctk.CTkFrame):
         self._update_status_banner(is_partial, systems_seen, displayed_count)
 
         if self.presenter.has_schedules():
-            self._grid_built = True
             self._build_relevant_months_grid()
+            self._grid_built = True
 
         self._refresh()
 
@@ -657,22 +783,40 @@ class ScheduleNavigationScreen(ctk.CTkFrame):
         displayed_count: int,
     ) -> None:
         """Paint the status banner with the correct colour and copy."""
+        mode = getattr(self.presenter, "result_mode", None)
+        if isinstance(mode, str):
+            try:
+                mode = ResultMode(mode)
+            except ValueError:
+                mode = None
+
+        if not is_partial and mode != ResultMode.FINAL_RANKED:
+            if self._status_banner.winfo_ismapped():
+                self._status_banner.grid_forget()
+            return
+
         if is_partial:
             bg = _BANNER_PARTIAL_BG
             text_color = _BANNER_PARTIAL_TEXT
             icon = "⏳"
-            state_word = "Generating"
+            msg = (
+                f"{icon}  Live preview: showing temporary Top {displayed_count:,} "
+                f"from {systems_seen:,} ranked so far."
+            )
         else:
             bg = _BANNER_FINAL_BG
             text_color = _BANNER_FINAL_TEXT
             icon = "✅"
-            state_word = "Complete"
-
-        msg = (
-            f"{icon}  {state_word} — "
-            f"{displayed_count} schedule{'s' if displayed_count != 1 else ''} displayed"
-            f"  |  {systems_seen} produced so far"
-        )
+            if displayed_count == systems_seen:
+                msg = (
+                    f"{icon}  Ranking complete. Showing "
+                    f"{displayed_count:,} ranked schedules."
+                )
+            else:
+                msg = (
+                    f"{icon}  Final Top {displayed_count:,} ranking complete. Showing "
+                    f"{displayed_count:,} of {systems_seen:,} ranked schedules."
+                )
         self._status_banner.configure(fg_color=bg)
         self._status_seen_label.configure(text=msg, text_color=text_color)
 
@@ -720,6 +864,36 @@ class ScheduleNavigationScreen(ctk.CTkFrame):
         self._counter_label.configure(
             text=f"System {view.position} of {view.total}"
         )
+        mode = getattr(self.presenter, "result_mode", None)
+        if isinstance(mode, str):
+            try:
+                mode = ResultMode(mode)
+            except ValueError:
+                mode = None
+        should_show_banner = (
+            getattr(self.presenter, "is_partial", False) is True
+            or mode == ResultMode.FINAL_RANKED
+        )
+        if self._status_banner.winfo_ismapped() and not should_show_banner:
+            self._status_banner.grid_forget()
+        if should_show_banner and not self._status_banner.winfo_ismapped():
+            raw_systems_seen = getattr(self.presenter, "systems_seen", 0)
+            raw_displayed_count = getattr(self.presenter, "displayed_count", 0)
+            systems_seen = (
+                raw_systems_seen
+                if isinstance(raw_systems_seen, int) and raw_systems_seen > 0
+                else view.total
+            )
+            displayed_count = (
+                raw_displayed_count
+                if isinstance(raw_displayed_count, int) and raw_displayed_count > 0
+                else view.total
+            )
+            self._update_status_banner(
+                getattr(self.presenter, "is_partial", False) is True,
+                systems_seen,
+                displayed_count,
+            )
         self._refresh_metrics(view)
         self._paint_exam_days(view.exams_by_iso_date)
         self._render_selected_day()
@@ -733,7 +907,13 @@ class ScheduleNavigationScreen(ctk.CTkFrame):
             state="normal" if self.presenter.can_go_next() else "disabled"
         )
         if self._save_button is not None:
-            self._save_button.configure(state="normal")
+            self._save_button.configure(
+                state=(
+                    "disabled"
+                    if getattr(self.presenter, "is_partial", False) is True
+                    else "normal"
+                )
+            )
         if getattr(self, "_apply_ranking_button", None) is not None:
             self._apply_ranking_button.configure(state="normal")
 
@@ -1041,9 +1221,9 @@ class ScheduleNavigationScreen(ctk.CTkFrame):
             ctk.CTkLabel(
                 body,
                 text=(
-                    f"Instructor: {exam.instructor}    "
-                    f"Requirement: {exam.status}    "
-                    f"Programs: {exam.program_numbers}"
+                    f"Type: {self._format_exam_type(exam.status)}    "
+                    f"Programs: {exam.program_numbers}    "
+                    f"Date: {exam.exam_date}"
                 ),
                 font=("Segoe UI", 11),
                 text_color=_MUTED,
@@ -1056,13 +1236,13 @@ class ScheduleNavigationScreen(ctk.CTkFrame):
             child.destroy()
 
         if self._selected_iso_date is None:
-            self._selected_day_label.configure(text="Select an exam day")
+            self._selected_day_label.configure(text="Selected Date")
             self._selected_day_hint.configure(text="Click a highlighted date to inspect its exams.")
             return
 
         exams = self._current_exams_by_iso_date.get(self._selected_iso_date, [])
         self._selected_day_label.configure(
-            text=f"Exams on {self._format_iso_date(self._selected_iso_date)}"
+            text=f"Selected date: {self._format_iso_date(self._selected_iso_date)}"
         )
         self._selected_day_hint.configure(
             text=f"{len(exams)} exam{'s' if len(exams) != 1 else ''} scheduled on this date."
@@ -1090,7 +1270,12 @@ class ScheduleNavigationScreen(ctk.CTkFrame):
             for exam in section.exams:
                 ctk.CTkLabel(
                     self._schedule_body,
-                    text=f"{exam.exam_date} - {exam.course_number} {exam.course_name}",
+                    text=(
+                        f"{exam.course_number} - {exam.course_name}\n"
+                        f"Type: {self._format_exam_type(exam.status)} | "
+                        f"Programs: {exam.program_numbers} | "
+                        f"Date: {exam.exam_date}"
+                    ),
                     font=("Segoe UI", 11),
                     text_color=_TEXT,
                     anchor="w",
@@ -1128,204 +1313,10 @@ class ScheduleNavigationScreen(ctk.CTkFrame):
         ctk.CTkLabel(
             card,
             text=(
-                f"Instructor: {exam.instructor}\n"
-                f"Requirement: {exam.status}\n"
-                f"Programs: {exam.program_numbers}"
-            ),
-            font=("Segoe UI", 11),
-            text_color=_MUTED,
-            justify="left",
-            anchor="w",
-        ).grid(row=1, column=0, sticky="ew", padx=12, pady=(0, 10))
-        cell = ctk.CTkButton(
-            parent,
-            text=str(day),
-            height=30,
-            fg_color="transparent",
-            hover=False,
-            text_color=_REGULAR_DAY_TEXT,
-            command=lambda: None,
-            state="disabled",
-            corner_radius=7,
-        )
-        cell.grid(row=row, column=col, padx=3, pady=3, sticky="ew")
-        self._exam_cells[iso] = cell
-
-    def _paint_exam_days(
-        self,
-        exams_by_iso_date: dict[str, list[ExamRow]],
-    ) -> None:
-        """Highlight only exam days for the current system."""
-        for iso_date, cell in self._exam_cells.items():
-            cell.configure(
-                text=str(int(iso_date[-2:])),
-                fg_color="transparent",
-                hover=False,
-                text_color=_REGULAR_DAY_TEXT,
-                command=lambda: None,
-                state="disabled",
-            )
-
-            exams = exams_by_iso_date.get(iso_date)
-            if not exams:
-                continue
-
-            selected = iso_date == getattr(self, "_selected_iso_date", None)
-            cell.configure(
-                text=f"{int(iso_date[-2:])}  ({len(exams)})",
-                fg_color=_SELECTED_DAY_COLOR if selected else _EXAM_DAY_COLOR,
-                hover=True,
-                hover_color=_EXAM_DAY_HOVER,
-                text_color=_SELECTED_DAY_TEXT if selected else _EXAM_DAY_TEXT,
-                command=lambda d=iso_date, rows=exams: self._handle_exam_day_click(
-                    d,
-                    rows,
-                ),
-                state="normal",
-            )
-
-    def _handle_exam_day_click(
-        self,
-        iso_date: str,
-        exams: list[ExamRow],
-    ) -> None:
-        """Handle an exam-day click in full UI or headless compatibility mode."""
-        if hasattr(self, "_details_body"):
-            self._select_day(iso_date)
-            return
-
-        self._show_day_popup(iso_date, exams)
-
-    def _select_day(self, iso_date: str) -> None:
-        """Select a day and refresh the detail panel."""
-        self._selected_iso_date = iso_date
-        self._paint_exam_days(self._current_exams_by_iso_date)
-        self._render_selected_day()
-
-    def _show_day_popup(
-        self,
-        iso_date: str,
-        exams: list[ExamRow],
-    ) -> None:
-        """Legacy popup used by older headless tests and fallback UI paths."""
-        popup = ctk.CTkToplevel(self.winfo_toplevel())
-        popup.title(f"Exams on {iso_date}")
-        popup.geometry("460x320")
-        popup.transient(self.winfo_toplevel())
-        popup.grab_set()
-
-        body = ctk.CTkFrame(popup, fg_color="transparent")
-        body.pack(fill="both", expand=True, padx=18, pady=18)
-
-        ctk.CTkLabel(
-            body,
-            text=f"Exams scheduled on {iso_date}",
-            font=("Segoe UI", 16, "bold"),
-            text_color=_TEXT,
-        ).pack(anchor="w", pady=(0, 10))
-
-        for exam in exams:
-            ctk.CTkLabel(
-                body,
-                text=f"{exam.course_number}  -  {exam.course_name}",
-                font=("Segoe UI", 13, "bold"),
-                text_color=_TEXT,
-                anchor="w",
-            ).pack(anchor="w", pady=(6, 2))
-
-            ctk.CTkLabel(
-                body,
-                text=(
-                    f"Instructor: {exam.instructor}    "
-                    f"Requirement: {exam.status}    "
-                    f"Programs: {exam.program_numbers}"
-                ),
-                font=("Segoe UI", 11),
-                text_color=_MUTED,
-                anchor="w",
-            ).pack(anchor="w")
-
-    def _render_selected_day(self) -> None:
-        """Show selected-day exam details in the sidebar."""
-        for child in self._details_body.winfo_children():
-            child.destroy()
-
-        if self._selected_iso_date is None:
-            self._selected_day_label.configure(text="Select an exam day")
-            self._selected_day_hint.configure(text="Click a highlighted date to inspect its exams.")
-            return
-
-        exams = self._current_exams_by_iso_date.get(self._selected_iso_date, [])
-        self._selected_day_label.configure(
-            text=f"Exams on {self._format_iso_date(self._selected_iso_date)}"
-        )
-        self._selected_day_hint.configure(
-            text=f"{len(exams)} exam{'s' if len(exams) != 1 else ''} scheduled on this date."
-        )
-
-        for row_index, exam in enumerate(exams):
-            self._build_exam_detail_card(self._details_body, row_index, exam)
-
-    def _render_system_exam_list(self, sections) -> None:
-        """Render the full current system as compact grouped rows."""
-        for child in self._schedule_body.winfo_children():
-            child.destroy()
-
-        row = 0
-        for section in sections:
-            ctk.CTkLabel(
-                self._schedule_body,
-                text=f"{section.semester} | {section.moed}",
-                font=("Segoe UI", 11, "bold"),
-                text_color=_MUTED,
-                anchor="w",
-            ).grid(row=row, column=0, sticky="ew", padx=4, pady=(6, 2))
-            row += 1
-
-            for exam in section.exams:
-                ctk.CTkLabel(
-                    self._schedule_body,
-                    text=f"{exam.exam_date} - {exam.course_number} {exam.course_name}",
-                    font=("Segoe UI", 11),
-                    text_color=_TEXT,
-                    anchor="w",
-                    justify="left",
-                    wraplength=320,
-                ).grid(row=row, column=0, sticky="ew", padx=12, pady=1)
-                row += 1
-
-    def _build_exam_detail_card(
-        self,
-        master: ctk.CTkFrame,
-        row_index: int,
-        exam: ExamRow,
-    ) -> None:
-        """Render one selected-day exam detail card."""
-        card = ctk.CTkFrame(
-            master,
-            fg_color=_SURFACE,
-            border_width=1,
-            border_color=_BORDER,
-            corner_radius=8,
-        )
-        card.grid(row=row_index, column=0, sticky="ew", padx=4, pady=(4, 8))
-        card.grid_columnconfigure(0, weight=1)
-
-        ctk.CTkLabel(
-            card,
-            text=f"{exam.course_number} - {exam.course_name}",
-            font=("Segoe UI", 13, "bold"),
-            text_color=_TEXT,
-            anchor="w",
-            wraplength=320,
-        ).grid(row=0, column=0, sticky="ew", padx=12, pady=(10, 4))
-
-        ctk.CTkLabel(
-            card,
-            text=(
-                f"Instructor: {exam.instructor}\n"
-                f"Requirement: {exam.status}\n"
-                f"Programs: {exam.program_numbers}"
+                f"Type: {self._format_exam_type(exam.status)}\n"
+                f"{self._lecturer_line(exam)}"
+                f"Programs: {exam.program_numbers}\n"
+                f"Date: {exam.exam_date}"
             ),
             font=("Segoe UI", 11),
             text_color=_MUTED,
@@ -1344,3 +1335,21 @@ class ScheduleNavigationScreen(ctk.CTkFrame):
         """Format YYYY-MM-DD as DD-MM-YYYY for display."""
         year, month, day = iso_date.split("-")
         return f"{day}-{month}-{year}"
+
+    @staticmethod
+    def _format_exam_type(status: str) -> str:
+        """Translate stored course status into user-facing requirement text."""
+        normalized = status.strip().lower()
+        if normalized == "obligatory":
+            return "Mandatory"
+        if normalized == "elective":
+            return "Elective"
+        return status or "Unknown"
+
+    @staticmethod
+    def _lecturer_line(exam: ExamRow) -> str:
+        """Return a lecturer line only when lecturer data exists."""
+        lecturer = exam.instructor.strip()
+        if not lecturer:
+            return ""
+        return f"Lecturer: {lecturer}\n"

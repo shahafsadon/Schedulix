@@ -24,7 +24,10 @@ from ranking_settings import (
 )
 from scheduling.examConflictDetector import ScheduledExam
 from scheduling.examScheduleGenerator import ExamSchedule, ExamSystem
-from gui.presenters.scheduleNavigationPresenter import ScheduleNavigationPresenter
+from gui.presenters.scheduleNavigationPresenter import (
+    ResultMode,
+    ScheduleNavigationPresenter,
+)
 
 
 def make_exam(name, number, exam_date, status="Obligatory"):
@@ -52,17 +55,25 @@ def make_system(semester="FALL", moed="Aleph", exams=None):
     )
 
 
-def make_ranked(system, key, min_gap=0):
+def make_ranked(
+    system,
+    key,
+    min_gap=0,
+    average_gap=0.0,
+    elective_collisions=0,
+    mandatory_span=0,
+    max_exams_per_day=1,
+):
     """Wrap an ExamSystem with simple metrics for navigation tests."""
     return RankedExamSystem(
         exam_system=system,
         metrics=ScheduleMetrics(
             schedule_id=key,
             min_mandatory_gap=min_gap,
-            average_all_gap=0,
-            elective_collision_count=0,
-            mandatory_span=0,
-            max_exams_per_day=1,
+            average_all_gap=average_gap,
+            elective_collision_count=elective_collisions,
+            mandatory_span=mandatory_span,
+            max_exams_per_day=max_exams_per_day,
         ),
         key=key,
     )
@@ -242,7 +253,15 @@ class ScheduleNavigationPresenterTests(unittest.TestCase):
         )
         presenter = ScheduleNavigationPresenter(
             [
-                make_ranked(system, key=4, min_gap=7)
+                make_ranked(
+                    system,
+                    key=4,
+                    min_gap=7,
+                    average_gap=4.5,
+                    elective_collisions=2,
+                    mandatory_span=10,
+                    max_exams_per_day=3,
+                )
             ]
         )
 
@@ -251,6 +270,10 @@ class ScheduleNavigationPresenterTests(unittest.TestCase):
         self.assertIsNotNone(metrics)
         self.assertEqual(metrics.schedule_id, 4)
         self.assertEqual(metrics.min_mandatory_gap, 7)
+        self.assertEqual(metrics.average_all_gap, 4.5)
+        self.assertEqual(metrics.elective_collision_count, 2)
+        self.assertEqual(metrics.mandatory_span, 10)
+        self.assertEqual(metrics.max_exams_per_day, 3)
 
     def test_apply_ranked_schedules_preserves_current_system_when_possible(self) -> None:
         """Re-ranking keeps the selected system even when its position changes."""
@@ -308,13 +331,30 @@ class ScheduleNavigationPresenterTests(unittest.TestCase):
         )
 
         self.assertTrue(result.success)
+        self.assertEqual(presenter.result_mode, ResultMode.FINAL_RANKED)
         self.assertFalse(service.rank_generated_schedules_called)
-        self.assertIs(presenter.current_system(), first)
-        self.assertEqual(presenter.position(), 2)
-
-        presenter.previous()
-
         self.assertIs(presenter.current_system(), second)
+        self.assertEqual(presenter.position(), 1)
+        self.assertEqual(
+            presenter.current_view().exams_by_iso_date["2026-01-02"][0].course_name,
+            "Second",
+        )
+        self.assertEqual(
+            presenter.current_view().metrics_summary.min_mandatory_gap,
+            9,
+        )
+
+        presenter.next()
+
+        self.assertIs(presenter.current_system(), first)
+        self.assertEqual(
+            presenter.current_view().exams_by_iso_date["2026-01-01"][0].course_name,
+            "First",
+        )
+        self.assertEqual(
+            presenter.current_view().metrics_summary.min_mandatory_gap,
+            2,
+        )
 
     def test_apply_empty_ranking_restores_generation_order_by_key(self) -> None:
         """Removing all criteria restores the original generated order."""
@@ -327,12 +367,224 @@ class ScheduleNavigationPresenterTests(unittest.TestCase):
         result = presenter.apply_ranking(RankingSettings([]))
 
         self.assertTrue(result.success)
+        self.assertEqual(presenter.result_mode, ResultMode.FINAL_RANKED)
+        self.assertIs(presenter.current_system(), first)
+        self.assertEqual(presenter.position(), 1)
+
+        presenter.next()
+
+        self.assertIs(presenter.current_system(), second)
+
+    def test_changing_ranking_criteria_updates_current_metrics_to_new_top_result(self) -> None:
+        """Apply Ranking reorders by the new criterion and exposes matching metrics."""
+        first = make_system(exams=[make_exam("First", "83001", date(2026, 1, 1))])
+        second = make_system(exams=[make_exam("Second", "83002", date(2026, 1, 2))])
+        presenter = ScheduleNavigationPresenter(
+            [
+                make_ranked(
+                    first,
+                    key=1,
+                    min_gap=10,
+                    average_gap=3.0,
+                    elective_collisions=0,
+                    mandatory_span=8,
+                    max_exams_per_day=1,
+                ),
+                make_ranked(
+                    second,
+                    key=2,
+                    min_gap=4,
+                    average_gap=9.0,
+                    elective_collisions=2,
+                    mandatory_span=12,
+                    max_exams_per_day=3,
+                ),
+            ]
+        )
+
+        presenter.apply_ranking(
+            RankingSettings(
+                [RankingPreference(RankingCriterion.min_mandatory_gap)]
+            )
+        )
+        first_metrics = presenter.current_view().metrics_summary
+        self.assertEqual(first_metrics.schedule_id, 1)
+        self.assertEqual(first_metrics.min_mandatory_gap, 10)
+
+        presenter.apply_ranking(
+            RankingSettings(
+                [RankingPreference(RankingCriterion.average_all_gap)]
+            )
+        )
+        second_metrics = presenter.current_view().metrics_summary
+
+        self.assertEqual(second_metrics.schedule_id, 2)
+        self.assertEqual(second_metrics.average_all_gap, 9.0)
+        self.assertEqual(second_metrics.elective_collision_count, 2)
+        self.assertEqual(second_metrics.mandatory_span, 12)
+        self.assertEqual(second_metrics.max_exams_per_day, 3)
+
+    def test_active_ranking_from_workflow_applies_to_live_updates(self) -> None:
+        """Incoming live batches honour ranking restored by the workflow."""
+        first = make_system(exams=[make_exam("First", "83001", date(2026, 1, 1))])
+        second = make_system(exams=[make_exam("Second", "83002", date(2026, 1, 2))])
+        settings = RankingSettings(
+            [RankingPreference(RankingCriterion.min_mandatory_gap)]
+        )
+        presenter = ScheduleNavigationPresenter(
+            [],
+            active_ranking=settings,
+        )
+
+        presenter.update_schedules(
+            [
+                make_ranked(first, key=1, min_gap=2),
+                make_ranked(second, key=2, min_gap=9),
+            ],
+            is_partial=True,
+            systems_seen=2,
+            displayed_count=2,
+        )
+
+        self.assertIs(presenter.current_system(), second)
+        self.assertEqual(presenter.result_mode, ResultMode.LIVE_RANKED_PREVIEW)
+
+    def test_progressive_ranking_emits_partial_top_preview_and_final_top_only(self) -> None:
+        """Progressive Apply Ranking keeps navigation bounded to computed preview."""
+        systems = [
+            make_system(
+                exams=[
+                    make_exam(
+                        f"Course {index}",
+                        f"83{index:03d}",
+                        date(2026, 1, 1 + index),
+                    )
+                ]
+            )
+            for index in range(6)
+        ]
+        presenter = ScheduleNavigationPresenter(systems)
+        updates = []
+
+        final = presenter.rank_progressively(
+            RankingSettings(
+                [RankingPreference(RankingCriterion.max_exams_per_day)]
+            ),
+            run_id=7,
+            on_update=updates.append,
+            batch_size=2,
+            preview_limit=3,
+        )
+
+        self.assertTrue(updates)
+        self.assertTrue(updates[0].is_partial)
+        self.assertLessEqual(updates[0].displayed_count, 3)
+        self.assertFalse(final.is_partial)
+        self.assertEqual(final.total_count, 6)
+        self.assertEqual(final.displayed_count, 3)
+        self.assertIn("Final Top 3", final.message)
+
+        presenter.update_schedules(
+            updates[0].ranked_schedules,
+            is_partial=True,
+            systems_seen=updates[0].processed_count,
+            displayed_count=updates[0].displayed_count,
+        )
+
+        self.assertLessEqual(presenter.total(), 3)
+        while presenter.can_go_next():
+            presenter.next()
+        self.assertEqual(presenter.position(), presenter.total())
+        presenter.next()
+        self.assertEqual(presenter.position(), presenter.total())
+
+    def test_progressive_ranking_throttles_partial_updates(self) -> None:
+        """Worker progress does not flood the Tk event queue every batch."""
+        systems = [
+            make_system(
+                exams=[
+                    make_exam(
+                        f"Course {index}",
+                        f"8{index:04d}",
+                        date(2026, 1, 1 + index),
+                    )
+                ]
+            )
+            for index in range(8)
+        ]
+        presenter = ScheduleNavigationPresenter(systems)
+        updates = []
+
+        final = presenter.rank_progressively(
+            RankingSettings(
+                [RankingPreference(RankingCriterion.max_exams_per_day)]
+            ),
+            run_id=11,
+            on_update=updates.append,
+            batch_size=1,
+            preview_limit=3,
+            min_update_interval_seconds=0.5,
+            clock=lambda: 10.0,
+        )
+
+        self.assertEqual(len(updates), 1)
+        self.assertTrue(updates[0].is_partial)
+        self.assertEqual(updates[0].processed_count, 1)
+        self.assertFalse(final.is_partial)
+        self.assertEqual(final.processed_count, 8)
+
+    def test_live_update_preserves_current_ranked_identity_when_still_present(self) -> None:
+        """Preview refresh keeps the same schedule when its key remains available."""
+        first = make_system(exams=[make_exam("First", "83001", date(2026, 1, 1))])
+        second = make_system(exams=[make_exam("Second", "83002", date(2026, 1, 2))])
+        third = make_system(exams=[make_exam("Third", "83003", date(2026, 1, 3))])
+        presenter = ScheduleNavigationPresenter(
+            [
+                make_ranked(first, key=1),
+                make_ranked(second, key=2),
+            ]
+        )
+        presenter.next()
+
+        presenter.update_schedules(
+            [
+                make_ranked(third, key=3),
+                make_ranked(second, key=2),
+                make_ranked(first, key=1),
+            ],
+            is_partial=True,
+            systems_seen=3,
+            displayed_count=3,
+        )
+
         self.assertIs(presenter.current_system(), second)
         self.assertEqual(presenter.position(), 2)
 
-        presenter.previous()
+    def test_live_update_resets_to_first_when_current_ranked_identity_disappears(self) -> None:
+        """If a browsed preview item drops out of Top 50, reset safely."""
+        first = make_system(exams=[make_exam("First", "83001", date(2026, 1, 1))])
+        second = make_system(exams=[make_exam("Second", "83002", date(2026, 1, 2))])
+        third = make_system(exams=[make_exam("Third", "83003", date(2026, 1, 3))])
+        presenter = ScheduleNavigationPresenter(
+            [
+                make_ranked(first, key=1),
+                make_ranked(second, key=2),
+            ]
+        )
+        presenter.next()
 
-        self.assertIs(presenter.current_system(), first)
+        presenter.update_schedules(
+            [
+                make_ranked(third, key=3),
+                make_ranked(first, key=1),
+            ],
+            is_partial=True,
+            systems_seen=3,
+            displayed_count=2,
+        )
+
+        self.assertIs(presenter.current_system(), third)
+        self.assertEqual(presenter.position(), 1)
 
 if __name__ == "__main__":
     unittest.main()

@@ -45,7 +45,7 @@ class SchedulingPresenter:
     def generate(self) -> GenerationResult:
         """Run scheduling on cached data and report a display-ready result."""
         try:
-            outcome = self._service.run(self._cache)
+            outcome = self._service.run(self._cache, rank_results=False)
         except ValueError as error:
             return GenerationResult(success=False, message=str(error))
         except Exception as error:  # noqa: BLE001 - last-resort UI guard
@@ -123,7 +123,7 @@ class SchedulingPresenter:
             success=True,
             message=f"{outcome.schedule_count} exam system(s) generated.",
             schedule_count=outcome.schedule_count,
-            displayed_count=len(outcome.ranked_schedules),
+            displayed_count=outcome.schedule_count,
         )
 
     @staticmethod

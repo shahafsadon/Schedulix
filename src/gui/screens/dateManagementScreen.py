@@ -514,44 +514,18 @@ class DateManagementScreen(ctk.CTkFrame):
             self._show_message("Schedule generator is not available.", ok=False)
             return
 
-        progressive_runner = getattr(self._runner, "run_with_progress", None)
-        progressive_generate = getattr(
-            self._scheduling_presenter,
-            "generate_progressive",
-            None,
+        accepted = self._runner.run(
+            task=self._scheduling_presenter.generate,
+            on_started=self._show_generation_started,
+            on_complete=lambda result: self.after(
+                0,
+                lambda: self._show_generation_result(result),
+            ),
+            on_error=lambda error: self.after(
+                0,
+                lambda: self._show_generation_error(error),
+            ),
         )
-
-        if callable(progressive_runner) and callable(progressive_generate):
-            accepted = progressive_runner(
-                task=lambda token, on_progress: progressive_generate(
-                    on_snapshot=on_progress,
-                    cancellation_token=token,
-                ),
-                on_started=self._show_generation_started_progressive,
-                on_progress=self._post_progress,
-                on_complete=lambda result: self.after(
-                    0,
-                    lambda: self._show_generation_result(result),
-                ),
-                on_error=lambda error: self.after(
-                    0,
-                    lambda: self._show_generation_error(error),
-                ),
-            )
-        else:
-            # Backward-compatible path used by older tests/fakes.
-            accepted = self._runner.run(
-                task=self._scheduling_presenter.generate,
-                on_started=self._show_generation_started,
-                on_complete=lambda result: self.after(
-                    0,
-                    lambda: self._show_generation_result(result),
-                ),
-                on_error=lambda error: self.after(
-                    0,
-                    lambda: self._show_generation_error(error),
-                ),
-            )
 
         if not accepted:
             self._show_message("Schedule generation is already running.", ok=False)
@@ -672,7 +646,7 @@ class DateManagementScreen(ctk.CTkFrame):
             if 0 < result.displayed_count < result.schedule_count:
                 message = (
                     f"{result.schedule_count:,} schedule systems generated. "
-                    f"Showing top {result.displayed_count:,} ranked preview."
+                    f"Final Top {result.displayed_count:,} ranking is ready."
                 )
             else:
                 message = (

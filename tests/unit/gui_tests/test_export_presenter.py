@@ -121,6 +121,24 @@ class ExportPresenterTests(unittest.TestCase):
         self.assertFalse(result.success)
         self.assertIn("permission denied", result.message)
 
+    def test_partial_live_preview_cannot_be_exported_as_final_ranked_result(self) -> None:
+        """Temporary Top 50 previews are not final exportable ranking output."""
+        navigation = ScheduleNavigationPresenter([make_system()])
+        navigation.update_schedules(
+            [make_system()],
+            is_partial=True,
+            systems_seen=10,
+            displayed_count=1,
+        )
+        service = _FakeService(ExportOutcome(success=True, path=Path("/tmp/x")))
+        presenter = ExportPresenter(navigation, service)
+
+        result = presenter.export_current(Path("/tmp/x.txt"))
+
+        self.assertFalse(result.success)
+        self.assertIn("Temporary ranking previews", result.message)
+        self.assertIsNone(service.exported_system)
+
 
 if __name__ == "__main__":
     unittest.main()

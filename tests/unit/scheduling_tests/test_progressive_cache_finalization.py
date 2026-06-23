@@ -198,9 +198,7 @@ def test_progressive_partial_snapshots_are_session_only_and_final_cache_is_atomi
     assert partial_seen
     assert final.state == ProgressiveResultState.COMPLETE
     assert isolated_cache.get_ranked_schedules() == final.ranked_schedules
-    assert isolated_cache.get_generated_schedules() == [
-        ranked.exam_system for ranked in final.ranked_schedules
-    ]
+    assert isolated_cache.get_generated_schedules() == [old_system]
 
 
 def test_progressive_finalization_uses_ranking_settings_changed_during_generation(

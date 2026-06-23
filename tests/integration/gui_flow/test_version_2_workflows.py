@@ -296,10 +296,11 @@ def test_part3_gui_flow_saves_settings_generates_and_reranks(
     generated_before_ranking = list(cache.get_generated_schedules())
 
     assert schedule_count > 0
-    assert cache.get_ranked_schedules()
+    assert cache.get_ranked_schedules() == []
 
     navigation = ScheduleNavigationPresenter(
-        cache.get_ranked_schedules()
+        cache.get_generated_schedules(),
+        cache_manager=cache,
     )
 
     ranking_result = navigation.apply_ranking(
