@@ -176,10 +176,15 @@ class SchedulingService:
             if schedule_batch.is_empty:
                 continue
 
+            latest_settings = cache.get_ranking_settings() or prepared.ranking_settings
+            if preview.ranking_settings != latest_settings:
+                preview.rerank(latest_settings)
+                ranking_version += 1
+
             self._rank_batch_into_preview(
                 preview=preview,
                 schedule_batch=schedule_batch,
-                ranking_settings=prepared.ranking_settings,
+                ranking_settings=latest_settings,
             )
 
             if self._is_cancelled(cancellation_token):

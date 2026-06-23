@@ -336,3 +336,74 @@ class ScheduleNavigationPresenterTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class _RecordingRankingCache:
+    def __init__(self) -> None:
+        self.ranking_settings = None
+        self.ranked_schedules = None
+        self.set_ranked_calls = 0
+
+    def set_ranking_settings(self, settings):
+        self.ranking_settings = settings
+
+    def set_ranked_schedules(self, ranked_schedules):
+        self.set_ranked_calls += 1
+        self.ranked_schedules = list(ranked_schedules)
+
+
+class ScheduleNavigationPresenterCacheFinalizationTests(unittest.TestCase):
+    """Cache behavior for ranking-only changes from the results screen."""
+
+    def test_completed_ranking_change_persists_settings_and_ranked_order(self) -> None:
+        first = make_system(exams=[make_exam("First", "83001", date(2026, 1, 1))])
+        second = make_system(exams=[make_exam("Second", "83002", date(2026, 1, 2))])
+        cache = _RecordingRankingCache()
+        presenter = ScheduleNavigationPresenter(
+            [
+                make_ranked(first, key=1, min_gap=2),
+                make_ranked(second, key=2, min_gap=9),
+            ],
+            cache_manager=cache,
+        )
+        settings = RankingSettings(
+            [RankingPreference(RankingCriterion.min_mandatory_gap)]
+        )
+
+        result = presenter.apply_ranking(settings)
+
+        self.assertTrue(result.success)
+        self.assertIs(cache.ranking_settings, settings)
+        self.assertEqual(cache.set_ranked_calls, 1)
+        self.assertEqual(cache.ranked_schedules, result.ranked_schedules)
+
+    def test_partial_ranking_change_persists_settings_but_not_preview_results(self) -> None:
+        first = make_system(exams=[make_exam("First", "83001", date(2026, 1, 1))])
+        second = make_system(exams=[make_exam("Second", "83002", date(2026, 1, 2))])
+        cache = _RecordingRankingCache()
+        presenter = ScheduleNavigationPresenter(
+            [
+                make_ranked(first, key=1, min_gap=2),
+                make_ranked(second, key=2, min_gap=9),
+            ],
+            cache_manager=cache,
+        )
+        presenter.update_schedules(
+            [
+                make_ranked(first, key=1, min_gap=2),
+                make_ranked(second, key=2, min_gap=9),
+            ],
+            is_partial=True,
+            systems_seen=2,
+            displayed_count=2,
+        )
+        settings = RankingSettings(
+            [RankingPreference(RankingCriterion.min_mandatory_gap)]
+        )
+
+        result = presenter.apply_ranking(settings)
+
+        self.assertTrue(result.success)
+        self.assertIs(cache.ranking_settings, settings)
+        self.assertEqual(cache.set_ranked_calls, 0)
+        self.assertIsNone(cache.ranked_schedules)
