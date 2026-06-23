@@ -16,6 +16,7 @@ from constraint_settings import (
     ThresholdConstraintType,
 )
 from models import ExamPeriod
+from ranking_settings import RankingSettings
 
 from .gui_test_support import FakeFrame, make_fake_ctk
 
@@ -317,3 +318,99 @@ def test_date_management_back_returns_to_settings_step() -> None:
         FakeDateManagementScreen.instances[0].kwargs["on_back"]
         is workflow.show_scheduling_settings
     )
+
+
+def test_output_navigation_passes_active_ranking_to_presenter() -> None:
+    module, _ = _load_workflow_module()
+    workflow = _workflow_shell(module)
+    ranking_settings = RankingSettings([])
+    workflow.cache = MagicMock()
+    workflow.cache.get_generated_schedules.return_value = ["generated"]
+    workflow.cache.get_ranked_schedules.return_value = ["ranked"]
+    workflow.cache.get_result_mode.return_value = "final_ranked"
+    workflow.cache.get_ranking_settings.return_value = ranking_settings
+
+    class FakeNavigationPresenter:
+        instances = []
+
+        def __init__(
+            self,
+            schedules,
+            cache_manager=None,
+            active_ranking=None,
+            result_mode=None,
+        ):
+            self.schedules = schedules
+            self.cache_manager = cache_manager
+            self.active_ranking = active_ranking
+            self.result_mode = result_mode
+            FakeNavigationPresenter.instances.append(self)
+
+    class FakeExportPresenter:
+        def __init__(self, navigation_presenter):
+            self.navigation_presenter = navigation_presenter
+
+    class FakeScheduleNavigationScreen(FakeFrame):
+        instances = []
+
+        def __init__(self, master, **kwargs):
+            super().__init__(master)
+            self.kwargs = kwargs
+            FakeScheduleNavigationScreen.instances.append(self)
+
+    module.ScheduleNavigationPresenter = FakeNavigationPresenter
+    module.ExportPresenter = FakeExportPresenter
+    module.ScheduleNavigationScreen = FakeScheduleNavigationScreen
+
+    module.SchedulixWorkflow.show_output_navigation(workflow)
+
+    presenter = FakeNavigationPresenter.instances[0]
+    assert presenter.schedules == ["ranked"]
+    assert presenter.cache_manager is workflow.cache
+    assert presenter.active_ranking is ranking_settings
+    assert presenter.result_mode == "final_ranked"
+    workflow._set_screen.assert_called_once_with(
+        FakeScheduleNavigationScreen.instances[0]
+    )
+
+
+def test_output_navigation_uses_generated_schedules_until_ranking_is_final() -> None:
+    module, _ = _load_workflow_module()
+    workflow = _workflow_shell(module)
+    workflow.cache = MagicMock()
+    workflow.cache.get_generated_schedules.return_value = ["generated"]
+    workflow.cache.get_ranked_schedules.return_value = ["preview"]
+    workflow.cache.get_result_mode.return_value = "unranked_generated"
+    workflow.cache.get_ranking_settings.return_value = RankingSettings([])
+
+    class FakeNavigationPresenter:
+        instances = []
+
+        def __init__(
+            self,
+            schedules,
+            cache_manager=None,
+            active_ranking=None,
+            result_mode=None,
+        ):
+            self.schedules = schedules
+            self.result_mode = result_mode
+            FakeNavigationPresenter.instances.append(self)
+
+    class FakeExportPresenter:
+        def __init__(self, navigation_presenter):
+            self.navigation_presenter = navigation_presenter
+
+    class FakeScheduleNavigationScreen(FakeFrame):
+        def __init__(self, master, **kwargs):
+            super().__init__(master)
+
+    module.ScheduleNavigationPresenter = FakeNavigationPresenter
+    module.ExportPresenter = FakeExportPresenter
+    module.ScheduleNavigationScreen = FakeScheduleNavigationScreen
+
+    module.SchedulixWorkflow.show_output_navigation(workflow)
+
+    presenter = FakeNavigationPresenter.instances[0]
+    assert presenter.schedules == ["generated"]
+    assert presenter.result_mode == "unranked_generated"

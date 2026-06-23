@@ -12,17 +12,30 @@ directly. It does not generate schedules and does not write files.
 """
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
+from enum import Enum
+from time import perf_counter
 
 from application.cache_manager import CacheManager
 from ranking_settings import RankedExamSystem, RankingSettings, ScheduleMetrics
+from scheduling.batchIterator import iter_exam_system_batches
 from scheduling.examScheduleGenerator import ExamSystem
+from scheduling.rankedResultsBuffer import RankedResultsBuffer
 from scheduling.scheduleRankingService import ScheduleRankingService
 
 # Stable display order for semesters and moedim, matching the Version 1.0 output
 # writer so the GUI shows systems in the same order as the exported file.
 SEMESTER_ORDER = {"FALL": 0, "SPRI": 1, "SUMM": 2}
 MOED_ORDER = {"Aleph": 0, "Bet": 1, "Gimel": 2}
+
+
+class ResultMode(str, Enum):
+    """Explicit display state for the output navigation screen."""
+
+    UNRANKED_GENERATED = "unranked_generated"
+    LIVE_RANKED_PREVIEW = "live_ranked_preview"
+    FINAL_RANKED = "final_ranked"
 
 
 @dataclass(frozen=True)
@@ -90,6 +103,19 @@ class RankingApplyResult:
 
 
 @dataclass(frozen=True)
+class ProgressiveRankingUpdate:
+    """One live or terminal update from background ranking."""
+
+    run_id: int
+    ranked_schedules: list[RankedExamSystem]
+    is_partial: bool
+    processed_count: int
+    total_count: int
+    displayed_count: int
+    message: str
+
+
+@dataclass(frozen=True)
 class SystemView:
     """A full, display-ready view of the currently shown exam system.
 
@@ -117,6 +143,8 @@ class ScheduleNavigationPresenter:
         self,
         schedules: list[ExamSystem | RankedExamSystem],
         cache_manager: CacheManager | None = None,
+        active_ranking: RankingSettings | None = None,
+        result_mode: str | ResultMode | None = None,
     ) -> None:
         """Create the presenter over the list of generated exam systems.
 
@@ -128,12 +156,17 @@ class ScheduleNavigationPresenter:
                 settings and ordered schedules to disk (SCRUM-184).  When
                 ``None`` the presenter still functions correctly but ranking
                 choices are session-only.
+            active_ranking: ranking criteria already chosen in the workflow.
+                Live preview batches use this order immediately.
         """
         self._cache = cache_manager
         self._schedules: list[ExamSystem] = []
         self._ranked_schedules: list[RankedExamSystem] = []
+        self._generated_schedules: list[ExamSystem] = []
 
         self._replace_schedules(schedules)
+        self._result_mode = self._normalize_result_mode(result_mode, schedules)
+        self._generated_schedules = list(self._schedules)
 
         # Start on the first system; stays at 0 when there are no systems.
         self._index = 0
@@ -145,7 +178,7 @@ class ScheduleNavigationPresenter:
 
         # The last ranking successfully applied by the user.  Used to
         # automatically re-rank every incoming live batch (SCRUM-183).
-        self._active_ranking: RankingSettings = RankingSettings([])
+        self._active_ranking: RankingSettings = active_ranking or RankingSettings([])
 
     # ------------------------------------------------------------------
     # Live preview metadata
@@ -155,6 +188,16 @@ class ScheduleNavigationPresenter:
     def is_partial(self) -> bool:
         """True while background generation is still running."""
         return self._is_partial
+
+    @property
+    def result_mode(self) -> ResultMode:
+        """Return whether the presenter is showing generated, preview, or ranked data."""
+        return self._result_mode
+
+    @property
+    def is_final_ranked(self) -> bool:
+        """True when the displayed order is a completed ranked result set."""
+        return self._result_mode == ResultMode.FINAL_RANKED
 
     @property
     def systems_seen(self) -> int:
@@ -208,16 +251,23 @@ class ScheduleNavigationPresenter:
                 # fall back silently to unranked order.
                 pass
 
+        current_key = self._current_ranked_key()
+        current_system = self.current_system()
+
         self._replace_schedules(new_schedules)
         self._is_partial = is_partial
+        self._result_mode = (
+            ResultMode.LIVE_RANKED_PREVIEW
+            if is_partial
+            else self._normalize_result_mode(None, new_schedules)
+        )
         self._systems_seen = systems_seen
         self._displayed_count = displayed_count
 
-        # Clamp index so it always points to a valid position.
-        if self._schedules:
-            self._index = min(self._index, len(self._schedules) - 1)
-        else:
-            self._index = 0
+        self._restore_or_reset_index(
+            current_key=current_key,
+            current_system=current_system,
+        )
 
     def has_schedules(self) -> bool:
         """Return True when there is at least one system to display."""
@@ -343,6 +393,7 @@ class ScheduleNavigationPresenter:
     def apply_ranked_schedules(
         self,
         ranked_schedules: list[RankedExamSystem],
+        preserve_current: bool = True,
     ) -> None:
         """
         Replace the display order while preserving the current system if found.
@@ -351,10 +402,11 @@ class ScheduleNavigationPresenter:
         and the presenter swaps to the new order without resetting the user's
         selected system unnecessarily.
         """
-        current_key = self._current_ranked_key()
-        current_system = self.current_system()
+        current_key = self._current_ranked_key() if preserve_current else None
+        current_system = self.current_system() if preserve_current else None
 
         self._replace_schedules(ranked_schedules)
+        self._result_mode = ResultMode.FINAL_RANKED
         self._index = 0
 
         if current_key is not None:
@@ -368,6 +420,124 @@ class ScheduleNavigationPresenter:
                 if system is current_system:
                     self._index = index
                     return
+
+    def rank_progressively(
+        self,
+        ranking_settings: RankingSettings,
+        run_id: int,
+        on_update: Callable[[ProgressiveRankingUpdate], None] | None = None,
+        cancellation_token=None,
+        batch_size: int = 1000,
+        preview_limit: int = 50,
+        min_update_interval_seconds: float = 0.35,
+        ranking_service: ScheduleRankingService | None = None,
+        clock: Callable[[], float] = perf_counter,
+    ) -> ProgressiveRankingUpdate:
+        """Rank generated schedules in bounded batches for live GUI preview.
+
+        This ranks the already generated schedule list without regenerating
+        dates. Only the current Top-N preview is retained and emitted. The
+        final update is therefore an explicit final Top-N result set.
+        """
+        source_schedules = self._ranking_source_schedules()
+        total_count = len(source_schedules)
+        if total_count == 0:
+            return ProgressiveRankingUpdate(
+                run_id=run_id,
+                ranked_schedules=[],
+                is_partial=False,
+                processed_count=0,
+                total_count=0,
+                displayed_count=0,
+                message="No schedules to rank.",
+            )
+
+        if batch_size <= 0:
+            raise ValueError("batch_size must be greater than zero.")
+        if preview_limit <= 0:
+            raise ValueError("preview_limit must be greater than zero.")
+        if min_update_interval_seconds < 0:
+            raise ValueError("min_update_interval_seconds cannot be negative.")
+
+        self._active_ranking = ranking_settings
+        if self._cache is not None:
+            self._cache.set_ranking_settings(ranking_settings)
+
+        service = ranking_service or ScheduleRankingService()
+        preview = RankedResultsBuffer(
+            ranking_settings=ranking_settings,
+            preview_limit=preview_limit,
+        )
+
+        final_update: ProgressiveRankingUpdate | None = None
+        last_emit_at: float | None = None
+        for batch in iter_exam_system_batches(
+            source_schedules,
+            batch_size,
+            should_stop=lambda: bool(getattr(cancellation_token, "is_cancelled", False)),
+        ):
+            if batch.is_empty:
+                continue
+
+            outcome = service.rank_generated_batch(
+                batch.schedules,
+                ranking_settings,
+                starting_schedule_id=batch.starting_schedule_id,
+            )
+            ranked_preview = preview.add_ranked_batch(
+                outcome.ranked_schedules,
+                generated_count=batch.size,
+                accepted_count=batch.size,
+                processed_count=batch.size,
+                ranking_seconds=outcome.elapsed_seconds,
+            )
+
+            if getattr(cancellation_token, "is_cancelled", False):
+                break
+
+            final_update = ProgressiveRankingUpdate(
+                run_id=run_id,
+                ranked_schedules=ranked_preview,
+                is_partial=True,
+                processed_count=preview.processed_schedules,
+                total_count=total_count,
+                displayed_count=len(ranked_preview),
+                message=(
+                    f"Live preview: showing temporary Top "
+                    f"{len(ranked_preview):,} from "
+                    f"{preview.processed_schedules:,} ranked so far."
+                ),
+            )
+            now = clock()
+            should_emit = (
+                last_emit_at is None
+                or now - last_emit_at >= min_update_interval_seconds
+            )
+            if on_update is not None and should_emit:
+                on_update(final_update)
+                last_emit_at = now
+
+        ranked_schedules = preview.current_preview()
+        final_update = ProgressiveRankingUpdate(
+            run_id=run_id,
+            ranked_schedules=ranked_schedules,
+            is_partial=False,
+            processed_count=preview.processed_schedules,
+            total_count=total_count,
+            displayed_count=len(ranked_schedules),
+            message=(
+                f"Final Top {len(ranked_schedules):,} ranking complete from "
+                f"{total_count:,} generated schedule(s)."
+            ),
+        )
+
+        if (
+            self._cache is not None
+            and not getattr(cancellation_token, "is_cancelled", False)
+        ):
+            self._cache.set_ranked_schedules(ranked_schedules)
+
+        return final_update
 
     def apply_ranking(
         self,
@@ -405,7 +575,7 @@ class ScheduleNavigationPresenter:
             ranked_schedules = outcome.ranked_schedules
             elapsed_seconds = outcome.elapsed_seconds
 
-        self.apply_ranked_schedules(ranked_schedules)
+        self.apply_ranked_schedules(ranked_schedules, preserve_current=False)
 
         # Persist the ranking so future live batches are re-ranked automatically
         # (SCRUM-183: support ranking changes during background generation).
@@ -460,6 +630,53 @@ class ScheduleNavigationPresenter:
 
         self._ranked_schedules = []
         self._schedules = list(schedules)
+
+    def _ranking_source_schedules(self) -> list[ExamSystem]:
+        """Return the full generated set that Apply Ranking should process."""
+        if self._generated_schedules:
+            return list(self._generated_schedules)
+        return list(self._schedules)
+
+    def _restore_or_reset_index(
+        self,
+        current_key: int | None,
+        current_system: ExamSystem | None,
+    ) -> None:
+        """Keep the same ranked item when possible, otherwise reset safely."""
+        if not self._schedules:
+            self._index = 0
+            return
+
+        if current_key is not None:
+            for index, ranked_system in enumerate(self._ranked_schedules):
+                if ranked_system.key == current_key:
+                    self._index = index
+                    return
+
+        if current_system is not None:
+            for index, system in enumerate(self._schedules):
+                if system is current_system:
+                    self._index = index
+                    return
+
+        self._index = 0
+
+    @staticmethod
+    def _normalize_result_mode(
+        result_mode: str | ResultMode | None,
+        schedules: list[ExamSystem | RankedExamSystem],
+    ) -> ResultMode:
+        """Resolve legacy/raw constructor input into an explicit display mode."""
+        if isinstance(result_mode, ResultMode):
+            return result_mode
+        if isinstance(result_mode, str):
+            try:
+                return ResultMode(result_mode)
+            except ValueError:
+                pass
+        if schedules and isinstance(schedules[0], RankedExamSystem):
+            return ResultMode.FINAL_RANKED
+        return ResultMode.UNRANKED_GENERATED
 
     def _current_metrics_summary(self) -> MetricsSummaryView | None:
         """Return display metrics for the current ranked system."""

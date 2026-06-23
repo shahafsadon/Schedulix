@@ -1,7 +1,7 @@
 """Presenter for exporting the currently navigated exam system (SCRUM-127).
 
-This presenter sits between the "Save System" action on the navigation screen
-and the ExportService. Following the MVP pattern it imports no GUI code: the
+This presenter sits between the "Save Final System" action on the navigation
+screen and the ExportService. Following the MVP pattern it imports no GUI code: the
 View asks for the path via a "Save As..." dialog (a customtkinter concern), then
 hands the chosen path here. The presenter reads the currently displayed system
 from the navigation presenter (single source of truth), runs the export, and
@@ -73,6 +73,15 @@ class ExportPresenter:
             return ExportResult(
                 success=False,
                 message="No schedule to export.",
+            )
+
+        if getattr(self._navigation, "is_partial", False) is True:
+            return ExportResult(
+                success=False,
+                message=(
+                    "Temporary ranking previews cannot be exported as final "
+                    "ranked results. Wait for ranking to complete."
+                ),
             )
 
         # Read the currently displayed system from the navigation presenter:

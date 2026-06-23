@@ -13,6 +13,7 @@ from scheduling.progressiveGeneration import (
     ProgressiveGenerationOptions,
     ProgressiveResultState,
 )
+from scheduling.scheduleRankingService import ScheduleRankingService
 from scheduling.schedulingService import SchedulingService
 
 
@@ -98,9 +99,7 @@ def test_real_service_progressive_generation_emits_partial_batches_and_finalizes
     assert final.counters.generated_schedules == 4
     assert final.counters.displayed_schedules == 4
     assert cache.get_ranked_schedules() == final.ranked_schedules
-    assert cache.get_generated_schedules() == [
-        ranked.exam_system for ranked in final.ranked_schedules
-    ]
+    assert cache.get_generated_schedules() == []
 
 
 def test_progressive_service_preserves_existing_full_ranking_order_when_not_limited(
@@ -120,10 +119,14 @@ def test_progressive_service_preserves_existing_full_ranking_order_when_not_limi
     )
 
     assert full_outcome.schedule_count == 4
+    full_ranked = ScheduleRankingService().rank_generated_schedules(
+        full_outcome.schedules,
+        RankingSettings([]),
+    ).ranked_schedules
     assert progressive_final.counters.generated_schedules == full_outcome.schedule_count
     assert [ranked.key for ranked in progressive_final.ranked_schedules] == [
-        ranked.key for ranked in full_outcome.ranked_schedules
+        ranked.key for ranked in full_ranked
     ]
     assert _scheduled_dates(progressive_final.ranked_schedules) == _scheduled_dates(
-        full_outcome.ranked_schedules
+        full_ranked
     )

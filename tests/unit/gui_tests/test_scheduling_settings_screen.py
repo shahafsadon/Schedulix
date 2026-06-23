@@ -31,13 +31,26 @@ def test_constructor_builds_all_requirement_rows_disabled_by_default() -> None:
         assert entry.options["state"] == "disabled"
 
     for expected_text in (
-        "Req 2.1 Mandatory Course Gap",
-        "Req 2.2 General Exam Gap",
-        "Req 2.3 Elective Collision Limit",
-        "Req 2.4 Mandatory Exam-Period Span",
-        "Req 2.5 Maximum Exams Per Day",
+        "Minimum days between mandatory exams",
+        "Minimum days between any exams",
+        "Maximum elective course conflicts",
+        "Minimum spread between first and last mandatory exam",
+        "Maximum exams on the same day",
+        "Days",
+        "Max Conflicts",
+        "Max Exams",
     ):
         assert widgets_with_text(fake_ctk.CTkLabel, expected_text)
+
+    visible_texts = {
+        widget.options.get("text")
+        for widget in fake_ctk.CTkLabel.created
+    }
+    assert not any(
+        isinstance(text, str) and "Req 2." in text
+        for text in visible_texts
+    )
+    assert "k value" not in visible_texts
 
 
 def test_constructor_restores_saved_enabled_values() -> None:
@@ -94,12 +107,71 @@ def test_continue_blocks_invalid_enabled_k_value() -> None:
     screen._handle_continue()
 
     on_next.assert_not_called()
-    assert "must be an integer" in screen._error_labels[constraint_type].options["text"]
+    assert (
+        screen._error_labels[constraint_type].options["text"]
+        == "Enter a whole number of conflicts."
+    )
     assert (
         screen._status_label.options["text"]
-        == "Fix the highlighted settings before continuing."
+        == "Fix this rule before continuing: Maximum elective course conflicts."
     )
     assert screen._status_label.options["text_color"] == module._ERROR
+    assert "Threshold" not in screen._error_labels[constraint_type].options["text"]
+    assert "k" not in screen._error_labels[constraint_type].options["text"]
+    assert "Req 2." not in screen._error_labels[constraint_type].options["text"]
+
+
+def test_negative_max_exams_shows_visible_user_friendly_error() -> None:
+    module, fake_ctk = load_screen_module("schedulingSettingsScreen.py")
+    constraint_type = ThresholdConstraintType.max_exams_per_day
+    on_next = MagicMock()
+
+    screen = module.SchedulingSettingsScreen(
+        fake_ctk.CTkFrame(),
+        on_next=on_next,
+    )
+    screen._enabled_vars[constraint_type].set(True)
+    screen._handle_enabled_toggle(constraint_type)
+    screen._k_entries[constraint_type].insert(0, "-1")
+
+    screen._handle_continue()
+
+    on_next.assert_not_called()
+    assert (
+        screen._error_labels[constraint_type].options["text"]
+        == "Enter at least 1 exam."
+    )
+    assert screen._status_label.options["text"] == (
+        "Fix this rule before continuing: Maximum exams on the same day."
+    )
+    assert "Threshold" not in screen._status_label.options["text"]
+    assert "k" not in screen._status_label.options["text"]
+    assert "Req 2." not in screen._status_label.options["text"]
+
+
+def test_zero_day_distance_shows_user_friendly_minimum_error() -> None:
+    module, fake_ctk = load_screen_module("schedulingSettingsScreen.py")
+    constraint_type = ThresholdConstraintType.mandatory_gap_days
+    on_next = MagicMock()
+
+    screen = module.SchedulingSettingsScreen(
+        fake_ctk.CTkFrame(),
+        on_next=on_next,
+    )
+    screen._enabled_vars[constraint_type].set(True)
+    screen._handle_enabled_toggle(constraint_type)
+    screen._k_entries[constraint_type].insert(0, "0")
+
+    screen._handle_continue()
+
+    on_next.assert_not_called()
+    assert (
+        screen._error_labels[constraint_type].options["text"]
+        == "Enter at least 1 day."
+    )
+    assert screen._status_label.options["text"] == (
+        "Fix this rule before continuing: Minimum days between mandatory exams."
+    )
 
 
 def test_continue_allows_disabled_requirement_without_k_value() -> None:
