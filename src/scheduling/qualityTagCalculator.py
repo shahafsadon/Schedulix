@@ -85,6 +85,7 @@ class QualityTagResult:
 
     tag: ScheduleQualityTag
     explanation: str
+    penalty_score: float | None = None
 
 
 # ---------------------------------------------------------------------------
