@@ -39,24 +39,55 @@ _SUCCESS = "#2E7D32"
 
 _REQUIREMENT_COPY: dict[ThresholdConstraintType, tuple[str, str]] = {
     ThresholdConstraintType.mandatory_gap_days: (
-        "Req 2.1 Mandatory Course Gap",
+        "Minimum days between mandatory exams",
         "Minimum days between mandatory exams that share a program and year.",
     ),
     ThresholdConstraintType.any_course_gap_days: (
-        "Req 2.2 General Exam Gap",
+        "Minimum days between any exams",
         "Minimum days between any exams that share a program and year.",
     ),
     ThresholdConstraintType.elective_conflicts_per_program: (
-        "Req 2.3 Elective Collision Limit",
-        "Maximum same-date elective collisions allowed inside one program.",
+        "Maximum elective course conflicts",
+        "Maximum same-date elective exam conflicts allowed inside one program.",
     ),
     ThresholdConstraintType.mandatory_span_days: (
-        "Req 2.4 Mandatory Exam-Period Span",
-        "Minimum spread, in days, for mandatory exams in each period group.",
+        "Minimum spread between first and last mandatory exam",
+        "Minimum number of days covered by mandatory exams in each exam period.",
     ),
     ThresholdConstraintType.max_exams_per_day: (
-        "Req 2.5 Maximum Exams Per Day",
+        "Maximum exams on the same day",
         "Maximum total exams that may be placed on a single calendar day.",
+    ),
+}
+
+_VALUE_LABELS: dict[ThresholdConstraintType, str] = {
+    ThresholdConstraintType.mandatory_gap_days: "Days",
+    ThresholdConstraintType.any_course_gap_days: "Days",
+    ThresholdConstraintType.elective_conflicts_per_program: "Max Conflicts",
+    ThresholdConstraintType.mandatory_span_days: "Days",
+    ThresholdConstraintType.max_exams_per_day: "Max Exams",
+}
+
+_VALUE_ERROR_COPY: dict[ThresholdConstraintType, tuple[str, str]] = {
+    ThresholdConstraintType.mandatory_gap_days: (
+        "Enter a whole number of days.",
+        "Enter at least 1 day.",
+    ),
+    ThresholdConstraintType.any_course_gap_days: (
+        "Enter a whole number of days.",
+        "Enter at least 1 day.",
+    ),
+    ThresholdConstraintType.elective_conflicts_per_program: (
+        "Enter a whole number of conflicts.",
+        "Enter 0 or more conflicts.",
+    ),
+    ThresholdConstraintType.mandatory_span_days: (
+        "Enter a whole number of days.",
+        "Enter at least 1 day.",
+    ),
+    ThresholdConstraintType.max_exams_per_day: (
+        "Enter a whole number of exams.",
+        "Enter at least 1 exam.",
     ),
 }
 
@@ -117,7 +148,7 @@ class SchedulingSettingsScreen(ctk.CTkFrame):
 
         ctk.CTkLabel(
             header,
-            text="Enable the Part 3 threshold requirements that should shape the generated schedules.",
+            text="Choose optional scheduling rules to shape the generated schedules.",
             font=("Segoe UI", 13),
             text_color=_MUTED,
         ).grid(row=1, column=0, sticky="w", pady=(2, 0))
@@ -217,7 +248,7 @@ class SchedulingSettingsScreen(ctk.CTkFrame):
 
         ctk.CTkLabel(
             k_area,
-            text="k value",
+            text=_VALUE_LABELS[constraint_type],
             font=("Segoe UI", 11, "bold"),
             text_color=_MUTED,
         ).grid(row=0, column=0, sticky="w")
@@ -237,7 +268,7 @@ class SchedulingSettingsScreen(ctk.CTkFrame):
         error_label = ctk.CTkLabel(
             row,
             text="",
-            font=("Segoe UI", 11),
+            font=("Segoe UI", 12),
             text_color=_ERROR,
             anchor="w",
             wraplength=720,
@@ -255,7 +286,7 @@ class SchedulingSettingsScreen(ctk.CTkFrame):
 
         self._status_label = ctk.CTkLabel(
             footer,
-            text="Disabled requirements are ignored and do not need a k value.",
+            text="Disabled rules are ignored and do not need a value.",
             text_color=_MUTED,
             anchor="w",
         )
@@ -291,7 +322,7 @@ class SchedulingSettingsScreen(ctk.CTkFrame):
         self._sync_row_state(constraint_type)
         self._clear_error(constraint_type)
         self._show_status(
-            "Update k values for the enabled requirements before continuing.",
+            "Update the values for enabled rules before continuing.",
             ok=None,
         )
 
@@ -310,18 +341,20 @@ class SchedulingSettingsScreen(ctk.CTkFrame):
         self._clear_errors()
 
         if not validation.is_valid:
+            affected_rules: list[ThresholdConstraintType] = []
             for error in validation.errors:
                 constraint_type = self._constraint_from_field_path(
                     error.field_path
                 )
                 if constraint_type is not None:
+                    affected_rules.append(constraint_type)
                     self._show_row_error(
                         constraint_type,
                         error.message,
                     )
 
             self._show_status(
-                "Fix the highlighted settings before continuing.",
+                self._invalid_settings_message(affected_rules),
                 ok=False,
             )
             return
@@ -381,7 +414,9 @@ class SchedulingSettingsScreen(ctk.CTkFrame):
         constraint_type: ThresholdConstraintType,
         message: str,
     ) -> None:
-        self._error_labels[constraint_type].configure(text=message)
+        self._error_labels[constraint_type].configure(
+            text=self._friendly_validation_message(constraint_type, message)
+        )
 
     def _show_status(
         self,
@@ -417,6 +452,41 @@ class SchedulingSettingsScreen(ctk.CTkFrame):
         if setting.enabled or setting.k not in (0, None):
             return str(setting.k)
         return ""
+
+    @staticmethod
+    def _friendly_validation_message(
+        constraint_type: ThresholdConstraintType,
+        raw_message: str,
+    ) -> str:
+        integer_message, range_message = _VALUE_ERROR_COPY[constraint_type]
+        if "must be an integer" in raw_message:
+            return integer_message
+        if "must be >=" in raw_message:
+            return range_message
+        return "Enter a valid value for this rule."
+
+    @staticmethod
+    def _invalid_settings_message(
+        affected_rules: list[ThresholdConstraintType],
+    ) -> str:
+        if not affected_rules:
+            return "Fix the highlighted rules before continuing."
+
+        seen: set[ThresholdConstraintType] = set()
+        titles: list[str] = []
+        for constraint_type in affected_rules:
+            if constraint_type in seen:
+                continue
+            seen.add(constraint_type)
+            titles.append(_REQUIREMENT_COPY[constraint_type][0])
+
+        if len(titles) == 1:
+            return f"Fix this rule before continuing: {titles[0]}."
+
+        shown = "; ".join(titles[:2])
+        if len(titles) > 2:
+            shown += f"; and {len(titles) - 2} more"
+        return f"Fix the highlighted rules before continuing: {shown}."
 
     @staticmethod
     def _constraint_from_field_path(

@@ -50,6 +50,7 @@ def test_ranked_schedules_round_trip_through_pickle(
     restored = CacheManager()
 
     assert restored.get_ranked_schedules() == [_ranked(1), _ranked(2)]
+    assert restored.get_result_mode() == "final_ranked"
 
 
 def test_setting_generated_schedules_clears_stale_ranked_order(
@@ -66,6 +67,7 @@ def test_setting_generated_schedules_clears_stale_ranked_order(
     cache.set_generated_schedules([ExamSystem(period_schedules=[])])
 
     assert cache.get_ranked_schedules() == []
+    assert cache.get_result_mode() == "unranked_generated"
 
 
 def test_invalidating_generated_schedules_also_clears_ranked_schedules(
@@ -84,6 +86,7 @@ def test_invalidating_generated_schedules_also_clears_ranked_schedules(
 
     assert cache.get_generated_schedules() == []
     assert cache.get_ranked_schedules() == []
+    assert cache.get_result_mode() == "unranked_generated"
 
 
 def test_old_cache_payload_without_ranked_field_loads_safely(
@@ -107,3 +110,29 @@ def test_old_cache_payload_without_ranked_field_loads_safely(
     restored = CacheManager()
 
     assert restored.get_ranked_schedules() == []
+
+
+def test_old_cache_payload_without_result_mode_does_not_masquerade_as_final_ranked(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """Missing mode defaults to generated output even if ranked data exists."""
+    pkl_path = tmp_path / "internal_data.pkl"
+    old_state = _CacheState()
+    old_state.generated_schedules = [ExamSystem(period_schedules=[])]
+    old_state.ranked_schedules = [_ranked(1)]
+    delattr(old_state, "result_mode")
+
+    with pkl_path.open("wb") as file:
+        pickle.dump(old_state, file)
+
+    monkeypatch.setattr(
+        CacheManager,
+        "_PKL_PATH",
+        pkl_path,
+    )
+
+    restored = CacheManager()
+
+    assert restored.get_ranked_schedules() == [_ranked(1)]
+    assert restored.get_result_mode() == "unranked_generated"

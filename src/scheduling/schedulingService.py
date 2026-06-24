@@ -80,7 +80,7 @@ class SchedulingService:
         self._clock = clock
         self._run_counter = 0
 
-    def run(self, cache: CacheManager) -> SchedulingOutcome:
+    def run(self, cache: CacheManager, rank_results: bool = True) -> SchedulingOutcome:
         """Generate all exam systems from cached data and store them back.
 
         This compatibility path still materializes the full list because older
@@ -95,21 +95,28 @@ class SchedulingService:
             prepared.exam_periods,
         )
 
-        ranking_outcome = self._ranking_service.rank_generated_schedules(
-            schedules,
-            prepared.ranking_settings,
-        )
+        if rank_results:
+            ranking_outcome = self._ranking_service.rank_generated_schedules(
+                schedules,
+                prepared.ranking_settings,
+            )
+            ranked_schedules = ranking_outcome.ranked_schedules
+            ranking_seconds = ranking_outcome.elapsed_seconds
+        else:
+            ranked_schedules = []
+            ranking_seconds = 0.0
 
         cache.set_generated_schedules(schedules)
-        cache.set_ranked_schedules(ranking_outcome.ranked_schedules)
+        if rank_results:
+            cache.set_ranked_schedules(ranked_schedules)
 
         diagnostics = self._diagnostics(generator)
         return SchedulingOutcome(
             relevant_course_count=len(prepared.relevant_courses),
             schedule_count=len(schedules),
             schedules=schedules,
-            ranked_schedules=ranking_outcome.ranked_schedules,
-            ranking_seconds=ranking_outcome.elapsed_seconds,
+            ranked_schedules=ranked_schedules,
+            ranking_seconds=ranking_seconds,
             generated_candidates=diagnostics.generated_candidates,
             accepted_candidates=diagnostics.accepted_candidates,
             pruned_candidates=diagnostics.pruned_candidates,
@@ -176,10 +183,15 @@ class SchedulingService:
             if schedule_batch.is_empty:
                 continue
 
+            latest_settings = cache.get_ranking_settings() or prepared.ranking_settings
+            if preview.ranking_settings != latest_settings:
+                preview.rerank(latest_settings)
+                ranking_version += 1
+
             self._rank_batch_into_preview(
                 preview=preview,
                 schedule_batch=schedule_batch,
-                ranking_settings=prepared.ranking_settings,
+                ranking_settings=latest_settings,
             )
 
             if self._is_cancelled(cancellation_token):
@@ -356,7 +368,17 @@ class SchedulingService:
         started_at: float,
         message: str,
     ) -> ProgressiveRankedSnapshot:
-        """Create, optionally persist, emit, and return the terminal snapshot."""
+        """Create, optionally persist, emit, and return the terminal snapshot.
+
+        Cache-safety contract (SCRUM-184)
+        ----------------------------------
+        ``CacheManager`` is written **only** on ``COMPLETE`` with
+        ``options.cache_final_preview`` set.  ``PARTIAL`` snapshots emitted
+        during the generation loop are intentionally *never* written to cache:
+        they are in-memory previews and must not corrupt the permanent session
+        store.  ``CANCELLED`` and ``FAILED`` terminal states are also excluded
+        so an aborted run leaves the previous (valid) schedules intact on disk.
+        """
         snapshot = self._build_snapshot(
             run_id=run_id,
             state=state,
@@ -368,14 +390,28 @@ class SchedulingService:
             message=message,
         )
 
+        # PARTIAL snapshots are dispatched via on_snapshot() in the main loop
+        # and never reach this helper; the guard below is an extra defensive
+        # layer ensuring that a future code path cannot accidentally persist a
+        # partial preview to the cache.
         if state == ProgressiveResultState.COMPLETE and options.cache_final_preview:
-            # Save only the final ranked preview.  The full result set may be
-            # huge; materializing it here would undo the optimization this flow
-            # exists to protect.
-            cache.set_generated_schedules(
-                [ranked.exam_system for ranked in snapshot.ranked_schedules]
+            # Persist only the bounded top-N ranked preview, not the full set.
+            # Storing every generated system would undo the lazy-generation
+            # optimization that this progressive flow exists to protect.
+            latest_settings = cache.get_ranking_settings()
+            final_outcome = self._ranking_service.rerank(
+                snapshot.ranked_schedules,
+                latest_settings,
             )
-            cache.set_ranked_schedules(snapshot.ranked_schedules)
+            final_ranked_schedules = final_outcome.ranked_schedules
+
+            if preview.systems_seen == 0:
+                cache.store_final_schedule_results([], [], latest_settings)
+            else:
+                cache.set_ranked_schedules(final_ranked_schedules)
+
+            import dataclasses
+            snapshot = dataclasses.replace(snapshot, ranked_schedules=final_ranked_schedules)
 
         self._emit(on_snapshot, snapshot)
         return snapshot
@@ -454,8 +490,8 @@ class SchedulingService:
     ) -> str:
         shown = min(len(preview.ranked_schedules), display_limit)
         return (
-            f"Preview: showing top {shown:,} from "
-            f"{preview.systems_seen:,} generated so far."
+            f"Live temporary Top {display_limit:,} preview: showing "
+            f"{shown:,} from {preview.systems_seen:,} ranked so far."
         )
 
     @staticmethod
@@ -466,8 +502,13 @@ class SchedulingService:
         if preview.systems_seen == 0:
             return "No valid exam systems could be generated."
         shown = min(len(preview.ranked_schedules), display_limit)
+        if shown >= preview.systems_seen:
+            return (
+                f"Final ranking complete for "
+                f"{preview.systems_seen:,} generated schedule(s)."
+            )
         return (
-            f"Complete: showing top {shown:,} from "
+            f"Final Top {shown:,} ranking complete from "
             f"{preview.systems_seen:,} generated schedule(s)."
         )
 

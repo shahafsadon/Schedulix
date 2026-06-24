@@ -284,6 +284,11 @@ class SchedulixWorkflow(ctk.CTkFrame):
         self._set_window_title("Schedulix - Generated Schedules")
         schedules = self.cache.get_generated_schedules()
         ranked_schedules = self.cache.get_ranked_schedules()
+        result_mode = getattr(
+            self.cache,
+            "get_result_mode",
+            lambda: "unranked_generated",
+        )()
 
         if not schedules:
             self._set_screen(
@@ -297,10 +302,20 @@ class SchedulixWorkflow(ctk.CTkFrame):
             )
             return
 
-        # Prefer ranked wrappers when metrics were calculated; fall back to the
-        # raw systems so older cached sessions still open normally.
+        display_schedules = (
+            ranked_schedules
+            if result_mode == "final_ranked" and ranked_schedules
+            else schedules
+        )
         navigation_presenter = ScheduleNavigationPresenter(
-            ranked_schedules or schedules
+            display_schedules,
+            cache_manager=self.cache,
+            active_ranking=self.cache.get_ranking_settings(),
+            result_mode=(
+                "final_ranked"
+                if result_mode == "final_ranked" and ranked_schedules
+                else "unranked_generated"
+            ),
         )
         export_presenter = ExportPresenter(navigation_presenter)
 

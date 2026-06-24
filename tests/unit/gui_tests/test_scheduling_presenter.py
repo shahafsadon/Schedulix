@@ -25,10 +25,12 @@ class _FakeService:
         """Store a scripted outcome to return, or an error to raise."""
         self._outcome = outcome
         self._error = error
+        self.run_kwargs = None
 
-    def run(self, cache):
+    def run(self, cache, **_kwargs):
         """Mimic SchedulingService.run: raise the scripted error or return
         the scripted outcome, ignoring the cache argument."""
+        self.run_kwargs = _kwargs
         if self._error is not None:
             raise self._error
         return self._outcome
@@ -50,6 +52,8 @@ class SchedulingPresenterTests(unittest.TestCase):
         result = presenter.generate()
         self.assertTrue(result.success)
         self.assertEqual(result.schedule_count, 5)
+        self.assertEqual(result.displayed_count, 5)
+        self.assertEqual(service.run_kwargs, {"rank_results": False})
 
     def test_zero_schedules_is_success_with_explanation(self) -> None:
         """Zero systems is still a success, with an explanatory message."""

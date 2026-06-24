@@ -56,6 +56,9 @@ class FakeWidget:
     def winfo_children(self):
         return list(self.children)
 
+    def winfo_ismapped(self):
+        return bool(self.grid_calls or self.pack_calls)
+
     def destroy(self):
         self.destroyed = True
 
@@ -67,6 +70,11 @@ class FakeWidget:
 
     def winfo_toplevel(self):
         return self
+
+    def after(self, _delay_ms, callback=None):
+        if callback is not None:
+            return callback()
+        return None
 
     def title(self, text):
         self.title_text = text

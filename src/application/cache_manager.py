@@ -74,6 +74,7 @@ class _CacheState:
         self.selected_programs: list[str] = []
         self.generated_schedules: list[ExamSystem] = []
         self.ranked_schedules: list[RankedExamSystem] = []
+        self.result_mode: str = "unranked_generated"
         # v3 fields — SCRUM-144
         self.constraint_settings: SchedulingConstraintSettings = (
             SchedulingConstraintSettings.default_configuration()
@@ -206,6 +207,8 @@ class CacheManager:
         # ranked_schedules was added between the original sentinel and v3.
         if not hasattr(state, "ranked_schedules"):
             state.ranked_schedules = []
+        if not hasattr(state, "result_mode"):
+            state.result_mode = "unranked_generated"
         # v3 new fields — SCRUM-144
         if not hasattr(state, "constraint_settings"):
             state.constraint_settings = (
@@ -227,6 +230,8 @@ class CacheManager:
 
         if not hasattr(state, "ranked_schedules"):
             state.ranked_schedules = []
+        if not hasattr(state, "result_mode"):
+            state.result_mode = "unranked_generated"
         if not hasattr(state, "constraint_settings"):
             state.constraint_settings = (
                 SchedulingConstraintSettings.default_configuration()
@@ -325,6 +330,7 @@ class CacheManager:
         """
         self._state.generated_schedules = list(schedules)
         self._state.ranked_schedules = []
+        self._state.result_mode = "unranked_generated"
         self._persist()
 
     def get_generated_schedules(self) -> list[ExamSystem]:
@@ -348,11 +354,16 @@ class CacheManager:
         not mutate the generator output.
         """
         self._state.ranked_schedules = list(schedules)
+        self._state.result_mode = "final_ranked"
         self._persist()
 
     def get_ranked_schedules(self) -> list[RankedExamSystem]:
         """Return cached ranked schedules (empty list if not calculated yet)."""
         return self._state.ranked_schedules
+
+    def get_result_mode(self) -> str:
+        """Return the explicit display mode for cached schedule results."""
+        return getattr(self._state, "result_mode", "unranked_generated")
 
     # ------------------------------------------------------------------
     # Constraint settings  (v3 — SCRUM-144)
@@ -379,6 +390,7 @@ class CacheManager:
         # Threshold change → stale generated schedules must be wiped.
         self._state.generated_schedules = []
         self._state.ranked_schedules = []
+        self._state.result_mode = "unranked_generated"
         self._persist()
 
     def get_constraint_settings(self) -> SchedulingConstraintSettings:
@@ -414,6 +426,7 @@ class CacheManager:
         self._state.ranking_settings = settings
         # Ranking-only change → only the ranked view is stale.
         self._state.ranked_schedules = []
+        self._state.result_mode = "unranked_generated"
         self._persist()
 
     def get_ranking_settings(self) -> RankingSettings:
@@ -425,6 +438,25 @@ class CacheManager:
         is returned.
         """
         return self._state.ranking_settings
+
+    # ------------------------------------------------------------------
+    # Atomic Multi-save  (SCRUM-184)
+    # ------------------------------------------------------------------
+
+    def store_final_schedule_results(
+        self,
+        generated_schedules: list[ExamSystem],
+        ranked_schedules: list[RankedExamSystem],
+        ranking_settings: RankingSettings,
+    ) -> None:
+        """
+        Atomically save the final results from a progressive scheduling run.
+        """
+        self._state.generated_schedules = list(generated_schedules)
+        self._state.ranked_schedules = list(ranked_schedules)
+        self._state.ranking_settings = ranking_settings
+        self._state.result_mode = "final_ranked"
+        self._persist()
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -508,6 +540,7 @@ class CacheManager:
         """
         self._state.generated_schedules.extend(schedules)
         self._state.ranked_schedules = []
+        self._state.result_mode = "unranked_generated"
         self._persist()
 
     # ------------------------------------------------------------------
@@ -557,6 +590,7 @@ class CacheManager:
         """
         self._state.generated_schedules = []
         self._state.ranked_schedules = []
+        self._state.result_mode = "unranked_generated"
         self._persist()
 
     def invalidate_ranked_schedules(self) -> None:
@@ -567,4 +601,5 @@ class CacheManager:
         remain valid but the previous display order should be discarded.
         """
         self._state.ranked_schedules = []
+        self._state.result_mode = "unranked_generated"
         self._persist()
