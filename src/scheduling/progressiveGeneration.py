@@ -11,6 +11,13 @@ schedule-generation flow.  They intentionally live outside the GUI and outside
 
 The goal is to expose partial ranked results without reintroducing the old
 "materialize every complete system before ranking/display" bottleneck.
+
+Academic-review orientation
+---------------------------
+The classes here are intentionally simple data contracts.  They make the
+progressive pipeline explainable during review: the scheduling service can
+publish a structured snapshot, the presenter can translate it into GUI text,
+and the GUI never needs to inspect mutable service internals.
 """
 from __future__ import annotations
 
@@ -29,7 +36,12 @@ from ranking_settings import RankedExamSystem
 
 
 class ProgressiveResultState(Enum):
-    """Lifecycle state of a progressive generation snapshot."""
+    """Lifecycle state of a progressive generation snapshot.
+
+    ``PARTIAL`` snapshots are temporary progress updates.  ``COMPLETE``,
+    ``CANCELLED``, and ``FAILED`` are terminal states that tell the presenter
+    the background run has ended and final UI state can be shown.
+    """
 
     PARTIAL = auto()
     COMPLETE = auto()
@@ -48,6 +60,19 @@ class ProgressiveGenerationOptions:
     The defaults are deliberately conservative: frequent enough to feel alive,
     but bounded enough to avoid turning the GUI cache into a giant materialized
     result set.
+
+    Parameters
+    ----------
+    batch_size:
+        Number of complete exam systems processed per ranking batch.
+    display_limit:
+        Maximum number of ranked schedules retained for preview.
+    min_update_interval_seconds:
+        Minimum time between emitted partial snapshots.  This protects the GUI
+        event queue from excessive updates on fast runs.
+    cache_final_preview:
+        Whether a complete progressive run should persist the final bounded
+        preview to ``CacheManager``.
     """
 
     batch_size: int = 100
@@ -56,6 +81,12 @@ class ProgressiveGenerationOptions:
     cache_final_preview: bool = True
 
     def __post_init__(self) -> None:
+        """Validate runtime knobs before a progressive run starts.
+
+        The checks are edge-case guards: invalid values would otherwise produce
+        confusing behavior such as empty previews, infinite loops, or negative
+        timing thresholds.
+        """
         if self.batch_size <= 0:
             raise ValueError("batch_size must be greater than zero.")
         if self.display_limit <= 0:
@@ -85,6 +116,13 @@ class ProgressiveCounters:
 
     Candidate counters still come from ``ExamScheduleGenerator.diagnostics`` and
     describe recursive placement attempts, not complete exam systems.
+
+    Important distinction
+    ---------------------
+    Candidate counters explain the internal scheduling algorithm.  Schedule
+    counters explain user-visible progress through complete ``ExamSystem``
+    objects.  Both are exposed because an academic review may ask about both
+    pruning efficiency and GUI progress.
     """
 
     systems_seen: int
@@ -101,6 +139,9 @@ class ProgressiveCounters:
 
     def __post_init__(self) -> None:
         """Fill explicit schedule counters from legacy fields when omitted."""
+        # ``object.__setattr__`` is required because the dataclass is frozen.
+        # The object remains immutable after construction, but this hook lets us
+        # normalize missing compatibility fields during initialization.
         if self.generated_schedule_count is None:
             object.__setattr__(
                 self,
@@ -149,7 +190,13 @@ class ProgressiveCounters:
 
 @dataclass(frozen=True)
 class ProgressiveRankedSnapshot:
-    """Immutable preview/final result emitted during progressive generation."""
+    """Immutable preview/final result emitted during progressive generation.
+
+    The snapshot is the contract between the scheduling service and the GUI
+    layer.  It carries the current ranked preview, progress counters, lifecycle
+    state, and a human-readable message.  Keeping it frozen prevents accidental
+    mutation after the service publishes it.
+    """
 
     run_id: int
     state: ProgressiveResultState
@@ -162,7 +209,11 @@ class ProgressiveRankedSnapshot:
 
     @property
     def is_final(self) -> bool:
-        """Return True for terminal snapshots."""
+        """Return True for terminal snapshots.
+
+        Presenters use this to decide whether the run is still producing live
+        updates or whether final UI controls can be enabled.
+        """
         return self.state in {
             ProgressiveResultState.COMPLETE,
             ProgressiveResultState.CANCELLED,
@@ -177,7 +228,14 @@ class ProgressiveRankedSnapshot:
 
 @dataclass
 class ProgressivePreviewBuffer:
-    """Small mutable helper that keeps only the current ranked preview."""
+    """Small mutable helper that keeps only the current ranked preview.
+
+    This class is retained for compatibility with earlier progressive helper
+    code.  The main Version 34 Top-N retention policy now lives in
+    ``RankedResultsBuffer``, which additionally knows how to merge and rerank
+    batches.  This simpler buffer still documents the minimal state needed for
+    a preview: retained ranked schedules plus counters.
+    """
 
     ranked_schedules: list[RankedExamSystem] = field(default_factory=list)
     generated_schedules: int = 0

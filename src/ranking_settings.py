@@ -1,3 +1,21 @@
+"""Shared data models for Version 34 ranking and optimization.
+
+This module does not calculate metrics and does not sort schedules.  It defines
+the vocabulary used by the rest of the ranking architecture:
+
+* which criteria are available;
+* how the user orders those criteria;
+* where calculated metric values are stored; and
+* how a raw ``ExamSystem`` is wrapped once metrics exist.
+
+Academic-review orientation
+---------------------------
+These models are deliberately small and mostly immutable/value-oriented.  They
+make it possible to keep schedule generation separate from schedule ranking:
+the generator produces ``ExamSystem`` objects, and the ranking layer attaches
+``ScheduleMetrics`` through ``RankedExamSystem`` without mutating the original
+domain object.
+"""
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -36,6 +54,10 @@ class RankingCriterion(Enum):
                                  Displayed in descending order.
     """
 
+    # Enum values are stable serialization keys. They are used by settings
+    # files, cached ranking preferences, GUI controls, and tests. Changing the
+    # string values would be a compatibility break even if member names stayed
+    # the same.
     min_mandatory_gap = "min_mandatory_gap"
     average_all_gap = "average_all_gap"
     elective_collision_count = "elective_collision_count"
@@ -78,6 +100,9 @@ class RankingPreference:
     """
 
     criterion: RankingCriterion
+    # Direction is currently descending in the Version 34 GUI, but keeping the
+    # field in the model documents the full sorting contract and keeps future
+    # direction changes out of ScheduleRanker internals.
     descending: bool = True
 
 
@@ -113,7 +138,12 @@ class RankingSettings:
     priority_list: list[RankingPreference]
 
     def __post_init__(self) -> None:
-        """Enforce that no RankingCriterion appears more than once."""
+        """Enforce that no RankingCriterion appears more than once.
+
+        Duplicate criteria would create ambiguous ordering: the same metric
+        could act as both a primary sort key and a later tie-breaker. Failing
+        fast here keeps invalid settings out of the ranking service.
+        """
         seen: set[RankingCriterion] = set()
         for preference in self.priority_list:
             if preference.criterion in seen:
@@ -130,6 +160,9 @@ class RankingSettings:
 # ---------------------------------------------------------------------------
 
 MISSING_METRIC_VALUE = -1
+# ``-1`` is safe as a sentinel because real metric values are non-negative.
+# It lets ranking/display code distinguish "metric unavailable" from a real
+# zero value such as "zero elective collisions".
 
 
 @dataclass(frozen=True)
@@ -168,6 +201,9 @@ class ScheduleMetrics:
     """
 
     schedule_id: int
+    # The fields below intentionally mirror ``RankingCriterion`` members.  This
+    # one-to-one mapping keeps ScheduleRanker straightforward: each criterion
+    # maps directly to one metric attribute.
     min_mandatory_gap: int
     average_all_gap: float
     elective_collision_count: int
@@ -198,5 +234,8 @@ class RankedExamSystem:
     """
 
     exam_system: ExamSystem
+    # Metrics are stored beside the schedule so reranking can reuse them without
+    # asking the generator or metrics calculator to run again.
     metrics: ScheduleMetrics
+    # Stable generation-order key used for deterministic tie-breaking.
     key: int

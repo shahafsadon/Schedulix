@@ -17,7 +17,7 @@ SRC = ROOT / "src"
 sys.path.insert(0, str(SRC))
 
 from models import Course, ProgramEnrollment
-from gui.presenters.exportPresenter import ExportPresenter
+from gui.presenters.exportPresenter import ExportPresenter, ExportStatus
 from gui.presenters.scheduleNavigationPresenter import ScheduleNavigationPresenter
 from output.exportService import ExportOutcome
 from scheduling.examConflictDetector import ScheduledExam
@@ -93,6 +93,7 @@ class ExportPresenterTests(unittest.TestCase):
 
         self.assertFalse(result.success)
         self.assertIn("cancelled", result.message.lower())
+        self.assertEqual(result.status, ExportStatus.CANCELLED)
         # The service must NOT be called when the user cancels.
         self.assertIsNone(service.exported_system)
 
@@ -107,6 +108,7 @@ class ExportPresenterTests(unittest.TestCase):
 
         self.assertFalse(result.success)
         self.assertIn("No schedule", result.message)
+        self.assertEqual(result.status, ExportStatus.BLOCKED)
 
     def test_service_failure_propagates_as_user_message(self) -> None:
         """A failed service outcome becomes a failure result with its message."""
@@ -120,6 +122,7 @@ class ExportPresenterTests(unittest.TestCase):
 
         self.assertFalse(result.success)
         self.assertIn("permission denied", result.message)
+        self.assertEqual(result.status, ExportStatus.FAILED)
 
     def test_partial_live_preview_cannot_be_exported_as_final_ranked_result(self) -> None:
         """Temporary Top 50 previews are not final exportable ranking output."""
@@ -137,6 +140,7 @@ class ExportPresenterTests(unittest.TestCase):
 
         self.assertFalse(result.success)
         self.assertIn("Temporary ranking previews", result.message)
+        self.assertEqual(result.status, ExportStatus.BLOCKED)
         self.assertIsNone(service.exported_system)
 
 

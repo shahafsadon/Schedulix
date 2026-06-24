@@ -131,6 +131,13 @@ class _CancellationToken:
     is_cancelled = False
 
 
+class _ListOnlyGenerator:
+    diagnostics = _Diagnostics()
+
+    def generate_exam_systems(self, _courses, _exam_periods):
+        raise AssertionError("Progressive generation must not materialize schedules.")
+
+
 @pytest.fixture()
 def isolated_cache(tmp_path: Path, monkeypatch) -> CacheManager:
     monkeypatch.setattr(CacheManager, "_PKL_PATH", tmp_path / "cache.pkl")
@@ -170,6 +177,15 @@ def _systems(count: int) -> list[ExamSystem]:
 
 def _keys(snapshot) -> list[int]:
     return [ranked.key for ranked in snapshot.ranked_schedules]
+
+
+def test_progressive_generation_requires_lazy_iterator(
+    isolated_cache: CacheManager,
+) -> None:
+    service = SchedulingService(schedule_generator=_ListOnlyGenerator())
+
+    with pytest.raises(TypeError, match="iter_exam_systems"):
+        service.run_progressive(isolated_cache)
 
 
 def test_progressive_reranks_processed_preview_and_future_batches_after_ranking_change(
