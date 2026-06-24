@@ -13,20 +13,10 @@ without a display.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from enum import Enum
 from pathlib import Path
 
 from gui.presenters.scheduleNavigationPresenter import ScheduleNavigationPresenter
 from output.exportService import ExportService
-
-
-class ExportStatus(str, Enum):
-    """Structured export result state used by the GUI for styling."""
-
-    SUCCESS = "success"
-    CANCELLED = "cancelled"
-    BLOCKED = "blocked"
-    FAILED = "failed"
 
 
 @dataclass(frozen=True)
@@ -40,7 +30,6 @@ class ExportResult:
     success: bool
     message: str
     path: Path | None = None
-    status: ExportStatus = ExportStatus.FAILED
 
 
 class ExportPresenter:
@@ -76,7 +65,6 @@ class ExportPresenter:
             return ExportResult(
                 success=False,
                 message="Export cancelled.",
-                status=ExportStatus.CANCELLED,
             )
 
         # Nothing to export if no system is currently displayed (defensive:
@@ -85,7 +73,6 @@ class ExportPresenter:
             return ExportResult(
                 success=False,
                 message="No schedule to export.",
-                status=ExportStatus.BLOCKED,
             )
 
         if getattr(self._navigation, "is_partial", False) is True:
@@ -95,7 +82,6 @@ class ExportPresenter:
                     "Temporary ranking previews cannot be exported as final "
                     "ranked results. Wait for ranking to complete."
                 ),
-                status=ExportStatus.BLOCKED,
             )
 
         # Read the currently displayed system from the navigation presenter:
@@ -105,20 +91,14 @@ class ExportPresenter:
             return ExportResult(
                 success=False,
                 message="No schedule to export.",
-                status=ExportStatus.BLOCKED,
             )
 
         outcome = self._service.export(current_system, output_path)
         if not outcome.success:
-            return ExportResult(
-                success=False,
-                message=outcome.error_message,
-                status=ExportStatus.FAILED,
-            )
+            return ExportResult(success=False, message=outcome.error_message)
 
         return ExportResult(
             success=True,
             message=f"Schedule saved to {outcome.path}.",
             path=outcome.path,
-            status=ExportStatus.SUCCESS,
         )

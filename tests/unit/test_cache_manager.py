@@ -37,7 +37,7 @@ sys.path.insert(0, str(_SRC))
 # Imports from the project under test
 # ---------------------------------------------------------------------------
 
-from application.cache_manager import CacheManager, MAX_PERSISTED_GENERATED_SCHEDULES
+from application.cache_manager import CacheManager
 from models import Course, ExamPeriod, ProgramEnrollment
 from scheduling.examScheduleGenerator import ExamSchedule, ExamSystem
 from scheduling.examConflictDetector import ScheduledExam
@@ -321,24 +321,6 @@ class TestCacheManagerClear(_CacheManagerTestBase):
         second = CacheManager()
 
         self.assertEqual(second.get_courses(), [])
-
-    def test_reload_invalidates_oversized_generated_schedule_cache(self) -> None:
-        """Restart should keep uploaded inputs but discard unsafe derived data."""
-        first = CacheManager()
-        first.set_courses([_make_course()])
-        first.set_generated_schedules(
-            [
-                _make_exam_system()
-                for _index in range(MAX_PERSISTED_GENERATED_SCHEDULES + 1)
-            ]
-        )
-
-        second = CacheManager()
-
-        self.assertEqual(len(second.get_courses()), 1)
-        self.assertEqual(second.get_generated_schedules(), [])
-        self.assertEqual(second.get_ranked_schedules(), [])
-        self.assertEqual(second.get_result_mode(), "unranked_generated")
 
 
 class TestCacheManagerIncrementalUpdates(_CacheManagerTestBase):

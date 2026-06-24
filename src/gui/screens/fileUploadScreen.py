@@ -74,7 +74,7 @@ class FileUploadScreen(ctk.CTkFrame):
         #the card layout expand when the window is resized.
         self.configure(fg_color=("#F3F6FB", "#0B1220"))
         self.grid_columnconfigure(0, weight=1)
-        self.grid_rowconfigure(2, weight=1, minsize=320)
+        self.grid_rowconfigure(2, weight=1)
 
         #main colors used by the screen.
         primary_color = "#2563EB"
@@ -374,7 +374,7 @@ class FileUploadScreen(ctk.CTkFrame):
         )
         preview_card.grid(row=2, column=0, sticky="nsew", padx=24, pady=(0, 16))
         preview_card.grid_columnconfigure(0, weight=1)
-        preview_card.grid_rowconfigure(2, weight=1, minsize=260)
+        preview_card.grid_rowconfigure(2, weight=1, minsize=240)
 
         #header row for the preview card.
         header = ctk.CTkFrame(preview_card, fg_color="transparent")
@@ -420,7 +420,7 @@ class FileUploadScreen(ctk.CTkFrame):
         #textbox shows the detailed preview of all uploaded data.
         self.preview_textbox = ctk.CTkTextbox(
             preview_card,
-            height=300,
+            height=380,
             font=("Segoe UI", 13),
             wrap="word",
             fg_color=("#F8FAFC", "#101826"),

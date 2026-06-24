@@ -290,9 +290,7 @@ class SchedulixWorkflow(ctk.CTkFrame):
             lambda: "unranked_generated",
         )()
 
-        has_final_ranked_results = result_mode == "final_ranked" and bool(ranked_schedules)
-
-        if not schedules and not has_final_ranked_results:
+        if not schedules:
             self._set_screen(
                 _MessageScreen(
                     self,
@@ -306,7 +304,7 @@ class SchedulixWorkflow(ctk.CTkFrame):
 
         display_schedules = (
             ranked_schedules
-            if has_final_ranked_results
+            if result_mode == "final_ranked" and ranked_schedules
             else schedules
         )
         navigation_presenter = ScheduleNavigationPresenter(
@@ -315,7 +313,7 @@ class SchedulixWorkflow(ctk.CTkFrame):
             active_ranking=self.cache.get_ranking_settings(),
             result_mode=(
                 "final_ranked"
-                if has_final_ranked_results
+                if result_mode == "final_ranked" and ranked_schedules
                 else "unranked_generated"
             ),
         )

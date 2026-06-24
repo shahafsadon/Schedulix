@@ -29,7 +29,6 @@ v3 (SCRUM-144) – adds ``constraint_settings`` and ``ranking_settings`` to the
 No existing Version 1.0 files are imported or modified by this module.
 """
 
-import logging
 import pickle
 from pathlib import Path
 
@@ -37,9 +36,6 @@ from constraint_settings import SchedulingConstraintSettings
 from models import Course, ExamPeriod
 from ranking_settings import RankedExamSystem, RankingSettings
 from scheduling.examScheduleGenerator import ExamSystem
-
-
-logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -54,13 +50,6 @@ _SENTINEL = "CacheManager_v3"
 # The v2 sentinel value is retained so that old files can be identified and
 # up-migrated rather than silently discarded.
 _SENTINEL_V2 = "CacheManager_v1"
-
-# Generated schedule lists can become very large and make restart sluggish or
-# impossible after an interrupted run. The GUI now persists final ranked Top-N
-# previews instead of the full generated universe, so caches above this limit
-# are treated as unsafe derived data and invalidated during load.
-MAX_PERSISTED_GENERATED_SCHEDULES = 500
-MAX_PERSISTED_RANKED_SCHEDULES = 500
 
 
 class _CacheState:
@@ -159,9 +148,8 @@ class CacheManager:
 
         If ``internal_data.pkl`` does not exist yet, all state fields start
         as empty/default values. If the file exists but is unreadable or was
-        written by an incompatible version, the manager logs the reason and
-        starts with a clean state (the damaged file is left untouched for
-        manual inspection).
+        written by an incompatible version, the manager silently starts with a
+        clean state (the damaged file is left untouched for manual inspection).
 
         Old v2 files are up-migrated transparently; the application will not
         crash when the two new v3 settings fields are absent in the pickle.
@@ -188,43 +176,22 @@ class CacheManager:
                 loaded = pickle.load(fh)
 
             if not isinstance(loaded, _CacheState):
-                logger.warning(
-                    "Ignoring cache file %s: expected _CacheState, got %s.",
-                    pkl_path,
-                    type(loaded).__name__,
-                )
                 return _CacheState()
 
             # Current v3 file.
             if loaded.sentinel == _SENTINEL:
                 self._ensure_current_state_shape(loaded)
-                self._invalidate_unsafe_derived_state(loaded, pkl_path)
                 return loaded
 
             # Old v2 file: sentinel is the legacy string.
             if loaded.sentinel == _SENTINEL_V2:
                 self._migrate_v2_to_v3(loaded)
-                self._invalidate_unsafe_derived_state(loaded, pkl_path)
                 return loaded
 
-            logger.warning(
-                "Ignoring cache file %s: unsupported sentinel %r.",
-                pkl_path,
-                getattr(loaded, "sentinel", None),
-            )
-
-        except (pickle.PickleError, EOFError, AttributeError, ImportError, ValueError, TypeError) as error:
-            logger.warning(
-                "Ignoring unreadable cache file %s: %s.",
-                pkl_path,
-                error,
-            )
-        except OSError as error:
-            logger.warning(
-                "Could not read cache file %s: %s.",
-                pkl_path,
-                error,
-            )
+        except Exception:
+            # Covers PickleError, EOFError, AttributeError, and any other
+            # deserialisation problem.  Fall back to a clean state.
+            pass
 
         return _CacheState()
 
@@ -249,51 +216,6 @@ class CacheManager:
             )
         if not hasattr(state, "ranking_settings"):
             state.ranking_settings = RankingSettings(priority_list=[])
-
-    @staticmethod
-    def _invalidate_unsafe_derived_state(
-        state: _CacheState,
-        pkl_path: Path,
-    ) -> None:
-        """Discard stale/heavy generated results loaded from disk.
-
-        Uploaded input data and user settings are durable session state.
-        Generated/ranked schedules are derived state and may be huge or
-        incomplete after an interrupted background run, so they are validated
-        separately and cleared when unsafe.
-        """
-        generated = getattr(state, "generated_schedules", [])
-        ranked = getattr(state, "ranked_schedules", [])
-
-        unsafe_reason: str | None = None
-        if not isinstance(generated, list):
-            unsafe_reason = "generated_schedules is not a list"
-        elif not isinstance(ranked, list):
-            unsafe_reason = "ranked_schedules is not a list"
-        elif len(generated) > MAX_PERSISTED_GENERATED_SCHEDULES:
-            unsafe_reason = (
-                "generated_schedules contains "
-                f"{len(generated)} items, above the safe persisted limit "
-                f"of {MAX_PERSISTED_GENERATED_SCHEDULES}"
-            )
-        elif len(ranked) > MAX_PERSISTED_RANKED_SCHEDULES:
-            unsafe_reason = (
-                "ranked_schedules contains "
-                f"{len(ranked)} items, above the safe persisted limit "
-                f"of {MAX_PERSISTED_RANKED_SCHEDULES}"
-            )
-
-        if unsafe_reason is None:
-            return
-
-        logger.warning(
-            "Invalidating unsafe generated cache data from %s: %s.",
-            pkl_path,
-            unsafe_reason,
-        )
-        state.generated_schedules = []
-        state.ranked_schedules = []
-        state.result_mode = "unranked_generated"
 
     @staticmethod
     def _migrate_v2_to_v3(state: _CacheState) -> None:

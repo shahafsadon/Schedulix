@@ -14,7 +14,6 @@ and it does not write exported files.
 """
 from __future__ import annotations
 
-import logging
 from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from datetime import date, timedelta
@@ -40,7 +39,6 @@ from scheduling.scheduleRankingService import ScheduleRankingService
 # writer so the GUI shows systems in the same order as the exported file.
 SEMESTER_ORDER = {"FALL": 0, "SPRI": 1, "SUMM": 2}
 MOED_ORDER = {"Aleph": 0, "Bet": 1, "Gimel": 2}
-logger = logging.getLogger(__name__)
 
 
 class ResultMode(str, Enum):
@@ -313,10 +311,10 @@ class ScheduleNavigationPresenter:
                         new_schedules, self._active_ranking
                     )
                 new_schedules = outcome.ranked_schedules
-            except (AttributeError, TypeError, ValueError) as error:
+            except Exception:
                 # Never crash the live-update pipeline due to a ranking error;
-                # log the reason and keep the incoming generation order.
-                logger.warning("Live preview ranking failed: %s", error)
+                # fall back silently to unranked order.
+                pass
 
         current_key = self._current_ranked_key()
         current_system = self.current_system()

@@ -284,7 +284,6 @@ def test_save_cancel_is_neutral_not_red(monkeypatch) -> None:
     screen._export_presenter.export_current.return_value = ExportResult(
         False,
         "Export cancelled.",
-        status=module.ExportStatus.CANCELLED,
     )
 
     screen._status_label = FakeLabel()
