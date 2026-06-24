@@ -80,6 +80,23 @@ class ExamScheduleGenerator:
     Complete exam systems are exposed both as a compatibility list method and
     as a lazy iterator. File output should consume iter_exam_systems() so the
     program does not retain every Cartesian-product result in memory.
+
+    Academic-review orientation
+    ---------------------------
+    This class is the scheduling-domain producer used by Version 34's
+    progressive flow.  The important architectural point is that it answers
+    only one question: "which ``ExamSystem`` objects are valid under the active
+    constraints?"  It does not rank schedules and does not know about GUI
+    previews.  Ranking and Top-N retention are handled later by
+    ``ScheduleRankingService`` and ``RankedResultsBuffer``.
+
+    Algorithmic idea
+    ----------------
+    The generator uses recursive backtracking with incremental constraint
+    checks.  For each candidate exam/date placement, it updates compact indexes
+    such as occupancy by date and program/year.  These indexes let constraints
+    reject invalid branches early instead of generating every combination and
+    filtering afterward.
     """
 
     def __init__(
@@ -89,6 +106,24 @@ class ExamScheduleGenerator:
         constraint_registry: ConstraintRegistry | None = None,
         constraint_settings: SchedulingConstraintSettings | None = None,
     ) -> None:
+        """Create a generator with injectable helpers and active constraints.
+
+        Parameters
+        ----------
+        date_handler:
+            Builds valid date lists for exam periods.
+        conflict_detector:
+            Kept for compatibility and final conflict checks.
+        constraint_registry:
+            Optional explicit registry, mainly useful for tests.
+        constraint_settings:
+            Version 34 settings used to build the default registry.
+
+        Side effects
+        ------------
+        Initializes ``diagnostics`` counters used by higher-level callers to
+        explain generated/accepted/pruned candidate counts.
+        """
         self.date_handler = (
             date_handler
             or ExamDateHandler()
@@ -133,7 +168,13 @@ class ExamScheduleGenerator:
         courses: list[Course],
         exam_period: ExamPeriod,
     ) -> Iterator[ExamSchedule]:
-        """Yield valid schedules for one period without storing them first."""
+        """Yield valid schedules for one period without storing them first.
+
+        The method is lazy: it yields each valid ``ExamSchedule`` as soon as the
+        recursive search completes that option.  This behavior is essential for
+        Version 34 because progressive generation can consume schedules without
+        materializing a full list.
+        """
         valid_dates = (
             self.date_handler.get_valid_dates(
                 exam_period
@@ -151,6 +192,9 @@ class ExamScheduleGenerator:
             not valid_dates
             or not period_courses
         ):
+            # No valid dates or no courses for the semester means there is no
+            # period schedule to yield.  Returning early avoids entering the
+            # recursive search with impossible input.
             return
 
         self._ensure_unique_course_numbers(
@@ -159,6 +203,8 @@ class ExamScheduleGenerator:
 
         # Place constrained courses first so impossible branches fail earlier.
         # This changes search order, but not the set of results.
+        # The profile weight approximates how many program/year resources a
+        # course touches.  More constrained courses are better pruning anchors.
         profiles = sorted(
             (
                 self._profile(course)
@@ -256,7 +302,17 @@ class ExamScheduleGenerator:
         When usable date sets are pairwise disjoint, cross-period conflicts are
         impossible under the Version 1.0 same-date rule. In that common case,
         a lazy Cartesian product is sufficient.
+
+        Version 34 relevance
+        --------------------
+        ``SchedulingService.run_progressive()`` consumes this iterator directly
+        and batches the yielded systems.  The generator therefore remains
+        responsible only for validity, while ranking/preview logic stays outside
+        this class.
         """
+        # Ignore periods that have no relevant courses.  This keeps the
+        # Cartesian combination smaller and avoids creating empty period
+        # schedules that would not change the final exam system.
         relevant_periods = [
             exam_period
             for exam_period in exam_periods
@@ -267,6 +323,7 @@ class ExamScheduleGenerator:
         ]
 
         if not relevant_periods:
+            # Nothing schedulable exists for the selected courses/periods.
             return
 
         # With one relevant period there is no Cartesian combination. Stream
@@ -285,6 +342,9 @@ class ExamScheduleGenerator:
                 if self._is_valid_complete_system(
                     exam_system
                 ):
+                    # Final-system evaluation is still applied because Version
+                    # 34 constraints may include rules that cannot be proven
+                    # during a single candidate placement.
                     yield exam_system
 
             return
@@ -298,6 +358,9 @@ class ExamScheduleGenerator:
         ] = []
 
         for exam_period in relevant_periods:
+            # Period options are still materialized per period for the
+            # multi-period Cartesian product.  Complete exam systems, however,
+            # are yielded lazily instead of accumulated in one large list.
             schedules = list(
                 self.iter_for_period(
                     courses,
@@ -306,6 +369,8 @@ class ExamScheduleGenerator:
             )
 
             if not schedules:
+                # If one relevant period has no valid options, no complete exam
+                # system can exist.
                 return
 
             period_options.append(
@@ -323,6 +388,8 @@ class ExamScheduleGenerator:
         if self._date_sets_are_pairwise_disjoint(
             period_date_sets
         ):
+            # Fast path: disjoint date sets cannot create same-date conflicts
+            # across periods, so a lazy Cartesian product is enough.
             for combination in product(
                 *period_options
             ):
@@ -406,6 +473,9 @@ class ExamScheduleGenerator:
         if course_index == len(
             profiles
         ):
+            # Base case: every course in the period has been placed.  Sorting
+            # keeps output deterministic regardless of recursive placement
+            # order.
             yield ExamSchedule(
                 semester=exam_period.semester,
                 moed=exam_period.moed,
@@ -425,6 +495,9 @@ class ExamScheduleGenerator:
         ]
 
         for exam_date in valid_dates:
+            # Try one candidate date for the current course.  The registry is
+            # consulted before mutating state so invalid branches are pruned
+            # before deeper recursion.
             if not self._can_place(
                 profile=profile,
                 exam_date=exam_date,
@@ -442,6 +515,9 @@ class ExamScheduleGenerator:
             ):
                 continue
 
+            # Place the candidate into all incremental indexes, recurse, then
+            # remove it.  This is the standard backtracking pattern: mutate,
+            # explore, undo.
             self._place(
                 profile,
                 exam_date,
@@ -484,6 +560,9 @@ class ExamScheduleGenerator:
 
             current_schedule.pop()
 
+            # The remove call must mirror _place exactly.  If the indexes were
+            # not restored, later branches would be evaluated against stale
+            # schedule state.
             self._remove(
                 profile,
                 exam_date,
@@ -531,6 +610,9 @@ class ExamScheduleGenerator:
         if period_index == len(
             period_options
         ):
+            # Base case: one option has been chosen for every relevant period.
+            # The completed ExamSystem may still need final-system constraint
+            # checks before it is yielded.
             exam_system = ExamSystem(
                 period_schedules=list(
                     current_periods
@@ -547,6 +629,9 @@ class ExamScheduleGenerator:
         for option in period_options[
             period_index
         ]:
+            # ``placed`` records all temporary placements made for this period
+            # option so they can be rolled back if the option is rejected or
+            # after recursion returns.
             placed: list[
                 tuple[
                     _CourseProfile,
@@ -566,6 +651,9 @@ class ExamScheduleGenerator:
                 )
 
                 if profile is None:
+                    # Profiles are immutable resource summaries.  Caching them
+                    # avoids recomputing program/year keys for the same Course
+                    # object while combining period options.
                     profile = self._profile(
                         exam.course
                     )
@@ -598,6 +686,9 @@ class ExamScheduleGenerator:
                     semester=option.semester,
                     moed=option.moed,
                 ):
+                    # The current period option conflicts with already selected
+                    # period options.  Break out and roll back anything placed
+                    # from this option.
                     break
 
                 self._place(
@@ -623,6 +714,9 @@ class ExamScheduleGenerator:
                 )
 
             else:
+                # The for-loop did not break, so this period option is
+                # compatible with all previous choices.  Recurse to choose an
+                # option for the next period.
                 current_periods.append(
                     option
                 )
@@ -650,6 +744,8 @@ class ExamScheduleGenerator:
                 profile,
                 exam_date,
             ) in reversed(placed):
+                # Roll back in reverse placement order to restore indexes to
+                # exactly the state they had before this option was tried.
                 self._remove(
                     profile,
                     exam_date,
@@ -671,6 +767,8 @@ class ExamScheduleGenerator:
     ) -> bool:
         """Return True when all enabled final-system constraints accept it."""
         if not self.constraint_registry.requires_final_system_evaluation():
+            # Avoid building/evaluating a final context when all enabled
+            # constraints have already been enforced incrementally.
             return True
 
         result = self.constraint_registry.evaluate_final(
@@ -717,9 +815,18 @@ class ExamScheduleGenerator:
         semester: str | None,
         moed: str | None,
     ) -> bool:
-        """Return True when all enabled constraints accept the candidate."""
+        """Return True when all enabled constraints accept the candidate.
+
+        This is the central pruning gate in the backtracking algorithm.  Every
+        candidate placement passes through the active ``ConstraintRegistry``.
+        Accepted/rejected counters are recorded so Version 34 callers can
+        explain how much work was pruned.
+        """
         self.diagnostics.generated_candidates += 1
 
+        # The metadata dictionary provides constraints with fast indexes built
+        # by _place/_remove.  This avoids repeatedly scanning the whole partial
+        # schedule for common checks such as same-date occupancy or gap rules.
         result = self.constraint_registry.evaluate_incremental(
             ConstraintEvaluationContext(
                 candidate_exam=profile.course,
@@ -744,8 +851,11 @@ class ExamScheduleGenerator:
         )
 
         if result.accepted:
+            # "accepted candidates" are candidate placements accepted by
+            # incremental constraints, not necessarily complete schedules.
             self.diagnostics.accepted_candidates += 1
         else:
+            # "pruned candidates" are branches avoided before deeper recursion.
             self.diagnostics.pruned_candidates += 1
 
         return result.accepted
@@ -771,7 +881,12 @@ class ExamScheduleGenerator:
         semester: str | None,
         moed: str | None,
     ) -> None:
-        """Record one temporary recursive placement."""
+        """Record one temporary recursive placement.
+
+        The method updates every incremental index that constraints may need.
+        These updates are temporary: the matching ``_remove`` call must reverse
+        them after the recursive branch is explored.
+        """
         day_usage = occupancy.setdefault(
             exam_date,
             {},
@@ -786,6 +901,9 @@ class ExamScheduleGenerator:
 
         exam_counts_by_date[exam_date] = exam_counts_by_date.get(exam_date, 0) + 1
 
+        # Gap/span constraints need to know prior dates by program/year.  The
+        # indexes are updated at placement time so _can_place can evaluate the
+        # next candidate cheaply.
         for key in profile.obligatory_keys:
             mandatory_dates_by_key.setdefault(key, []).append(exam_date)
             mandatory_period_dates_by_key.setdefault(
@@ -798,6 +916,8 @@ class ExamScheduleGenerator:
 
         date_elective_counts = elective_counts_by_date_program.setdefault(exam_date, {})
         for program_number in profile.elective_programs:
+            # Adding one elective exam creates one new elective collision with
+            # each existing elective exam for the same program on that date.
             existing_count = date_elective_counts.get(program_number, 0)
             elective_collisions_by_program[program_number] = (
                 elective_collisions_by_program.get(program_number, 0)
@@ -806,6 +926,8 @@ class ExamScheduleGenerator:
             date_elective_counts[program_number] = existing_count + 1
 
         for key in profile.obligatory_keys:
+            # Usage format is [total exams, obligatory exams].  It lets the
+            # same-date conflict rule distinguish mandatory/elective cases.
             usage = day_usage.setdefault(
                 key,
                 [0, 0],
@@ -843,7 +965,12 @@ class ExamScheduleGenerator:
         semester: str | None,
         moed: str | None,
     ) -> None:
-        """Undo one temporary recursive placement."""
+        """Undo one temporary recursive placement.
+
+        This method is the exact inverse of ``_place``.  Backtracking depends on
+        this symmetry: after a branch is explored, all indexes must return to
+        their previous state before the next candidate date/option is tried.
+        """
         day_usage = occupancy[
             exam_date
         ]
@@ -867,6 +994,8 @@ class ExamScheduleGenerator:
 
         date_elective_counts = elective_counts_by_date_program.get(exam_date, {})
         for program_number in profile.elective_programs:
+            # Removing one elective exam removes the collisions it created with
+            # the remaining electives for the same program/date.
             current_count = date_elective_counts[program_number]
             remaining_count = current_count - 1
             new_collision_count = (
@@ -935,7 +1064,11 @@ class ExamScheduleGenerator:
     def _profile(
         course: Course,
     ) -> _CourseProfile:
-        """Precompute program/year conflict resources for one course."""
+        """Precompute program/year conflict resources for one course.
+
+        Profiles are immutable summaries used during recursive search.  They
+        avoid repeatedly walking ``course.programs`` for every candidate date.
+        """
         obligatory_keys = {
             (
                 program.program_number,
@@ -961,6 +1094,8 @@ class ExamScheduleGenerator:
         }
 
         # A contradictory duplicate row is treated as obligatory.
+        # This conservative rule prevents an elective copy of the same
+        # program/year from weakening a mandatory conflict requirement.
         elective_keys.difference_update(
             obligatory_keys
         )
@@ -1003,7 +1138,12 @@ class ExamScheduleGenerator:
     def _profile_weight(
         profile: _CourseProfile,
     ) -> tuple[int, int]:
-        """Place courses with more conflict resources earlier in the search."""
+        """Place courses with more conflict resources earlier in the search.
+
+        This heuristic does not change which schedules are valid.  It only
+        changes search order so highly constrained courses are placed earlier,
+        causing impossible branches to fail sooner.
+        """
         return (
             (
                 2
@@ -1025,7 +1165,11 @@ class ExamScheduleGenerator:
             set[date]
         ],
     ) -> bool:
-        """Return True when no usable date belongs to two exam periods."""
+        """Return True when no usable date belongs to two exam periods.
+
+        Disjoint period date sets allow a cheaper Cartesian-product path
+        because same-date cross-period conflicts cannot occur.
+        """
         seen: set[
             date
         ] = set()
@@ -1046,7 +1190,12 @@ class ExamScheduleGenerator:
     def _ensure_unique_course_numbers(
         courses: list[Course],
     ) -> None:
-        """Reject duplicated course IDs before recursion creates bad output."""
+        """Reject duplicated course IDs before recursion creates bad output.
+
+        The output and manual-edit flows identify exams by course number.  A
+        duplicate course number would make later selection, comparison, and
+        undo/redo behavior ambiguous.
+        """
         seen: set[
             str
         ] = set()
@@ -1067,7 +1216,12 @@ class ExamScheduleGenerator:
         courses: list[Course],
         semester: str,
     ) -> list[Course]:
-        """Return course copies containing only rows for one semester."""
+        """Return course copies containing only rows for one semester.
+
+        A course can appear in multiple program/semester rows.  For period
+        generation, only enrollments matching the period semester are relevant,
+        so this helper creates narrowed course copies before recursion starts.
+        """
         period_courses: list[
             Course
         ] = []
@@ -1102,6 +1256,11 @@ def _remove_one_date(
     key,
     exam_date: date,
 ) -> None:
+    """Remove one date from an index and delete empty buckets.
+
+    The helper keeps _remove concise and ensures indexes do not retain empty
+    lists that could later be mistaken for active constraint state.
+    """
     dates = index[key]
     dates.remove(exam_date)
     if not dates:

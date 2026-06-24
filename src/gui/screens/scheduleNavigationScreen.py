@@ -20,7 +20,7 @@ except ModuleNotFoundError as error:
     ) from error
 
 from application.async_runner import AsyncScheduleRunner
-from gui.presenters.exportPresenter import ExportPresenter
+from gui.presenters.exportPresenter import ExportPresenter, ExportStatus
 from gui.presenters.scheduleNavigationPresenter import (
     DayStatusView,
     ExamRow,
@@ -939,9 +939,9 @@ class ScheduleNavigationScreen(ctk.CTkFrame):
         )
         result = self._export_presenter.export_current(chosen or None)
 
-        if result.success:
+        if result.status == ExportStatus.SUCCESS or result.success:
             color = "#2e7d32"
-        elif "cancelled" in result.message.lower():
+        elif result.status == ExportStatus.CANCELLED:
             color = "#666666"
         else:
             color = _ERROR
@@ -1963,7 +1963,7 @@ class ScheduleNavigationScreen(ctk.CTkFrame):
             return
         try:
             parent = self.winfo_toplevel()
-        except Exception:
+        except (AttributeError, RuntimeError, TypeError):
             return
 
         accent = _ERROR if kind == "error" else _INFO
@@ -2045,7 +2045,7 @@ class ScheduleNavigationScreen(ctk.CTkFrame):
                 x = parent_x + (parent_width - width) // 2
                 y = parent_y + (parent_height - height) // 2
                 return f"{width}x{height}+{max(x, 0)}+{max(y, 0)}"
-        except Exception:
+        except (AttributeError, RuntimeError, TypeError, ValueError):
             pass
 
         try:
@@ -2054,7 +2054,7 @@ class ScheduleNavigationScreen(ctk.CTkFrame):
             x = (screen_width - width) // 2
             y = (screen_height - height) // 2
             return f"{width}x{height}+{max(x, 0)}+{max(y, 0)}"
-        except Exception:
+        except (AttributeError, RuntimeError, TypeError, ValueError):
             return f"{width}x{height}"
 
     @staticmethod
