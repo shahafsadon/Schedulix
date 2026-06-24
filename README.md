@@ -1,178 +1,275 @@
 # Schedulix
 
-Schedulix is a Python exam-scheduling system for the Software Engineering
-project. It reads course data, exam-period data, and selected study programs
-from text files, then generates valid exam-system options that avoid the
-critical conflicts defined for the project.
+Schedulix is a Python desktop and file-based exam scheduling system. It reads
+course data, selected study programs, exam-period windows, unavailable dates,
+optional scheduling constraints, and optional ranking preferences. It then
+generates valid exam-system alternatives, ranks them, previews the best results,
+and lets the user review, edit, compare, and export schedules.
 
-The project supports two flows:
+The current project version includes the Version 34 scheduling work:
 
-- **Version 1.0 file flow**: run from `src/main.py`, read the default example
-  files, generate schedules, and write all schedule options to a text file.
-- **Version 2.0 GUI flow**: run the customTkinter application, upload/preview
-  data, select up to five programs, edit exam dates in a calendar, generate
-  schedules, browse them with previous/next, and export the chosen schedule.
+- configurable threshold constraints for valid schedules;
+- ranking and optimization criteria for valid schedules;
+- progressive batch generation with a bounded Top-N preview;
+- schedule snapshots, manual editing, impact analysis, and comparison reports;
+- a customTkinter GUI workflow plus a simpler file-based CLI flow;
+- unit, integration, and system tests for the main workflows.
 
-## Version 2.0 GUI Workflow
+## Current User Workflows
 
-The Version 2.0 desktop app guides the user through the complete scheduling
-process:
+Schedulix supports two practical entry points.
+
+### GUI Workflow
+
+The GUI is the main user-facing workflow. It guides the user through uploading
+data, selecting programs, configuring scheduling settings, editing exam dates,
+generating schedules, reviewing ranked results, and exporting the selected
+schedule.
 
 ```text
 Upload Files -> Select Programs -> Scheduling Settings -> Manage Exam Dates -> Generate Schedules -> Review Results
 ```
 
-Generated schedules are created on a background worker so the GUI remains
-responsive during heavier scheduling runs.
+The GUI runs scheduling work away from the direct screen logic so the interface
+can stay responsive during heavier generation runs.
 
-### 1. Upload Files
+### File-Based CLI Workflow
+
+The CLI flow is useful for quick checks, automated tests, and simple example
+runs. It reads the default files under `data/examples/`, runs the shared
+scheduling services, and writes a readable schedule output file.
+
+## Version 34 Highlights
+
+Version 34 is focused on making schedule generation more useful and more
+reviewable, not only on producing any valid schedule.
+
+### 1. New Scheduling Constraints
+
+The scheduling engine supports five configurable threshold constraints:
+
+| Constraint | Meaning |
+| --- | --- |
+| `mandatory_gap_days` | Requires a minimum gap between related mandatory exams. |
+| `any_course_gap_days` | Requires a minimum gap between any related course exams. |
+| `elective_conflicts_per_program` | Limits elective same-day conflicts per program. |
+| `mandatory_span_days` | Limits the total date span of mandatory exams. |
+| `max_exams_per_day` | Limits how many exams can be scheduled on the same day. |
+
+The settings are represented by `SchedulingConstraintSettings` in
+`src/constraint_settings.py` and enforced through the constraint registry in
+`src/scheduling/constraints.py`.
+
+### 2. Ranking and Optimization
+
+Valid schedules can be ranked by a priority list of optimization criteria:
+
+| Ranking Criterion | Meaning |
+| --- | --- |
+| `min_mandatory_gap` | Prefer schedules with larger minimum mandatory gaps. |
+| `average_all_gap` | Prefer schedules with better average spacing. |
+| `elective_collision_count` | Prefer fewer elective collisions. |
+| `mandatory_span` | Prefer a better mandatory exam span. |
+| `max_exams_per_day` | Prefer a lower daily load. |
+
+Ranking settings live in `src/ranking_settings.py`. Metric calculation is
+handled by `src/scheduling/scheduleMetricsCalculator.py`, ordering by
+`src/scheduling/scheduleRanker.py`, and orchestration by
+`src/scheduling/scheduleRankingService.py`.
+
+### 3. Progressive Top-N Preview
+
+The progressive generation flow avoids waiting until every possible schedule is
+generated before the user sees useful results.
+
+```text
+lazy generator -> batches -> ranking -> Top-N buffer -> snapshot -> GUI
+```
+
+Important files:
+
+- `src/scheduling/schedulingService.py`
+- `src/scheduling/progressiveGeneration.py`
+- `src/scheduling/rankedResultsBuffer.py`
+- `src/scheduling/scheduleRankingService.py`
+- `src/gui/presenters/schedulingPresenter.py`
+
+The key design choice is that the system keeps only a bounded ranked preview
+instead of storing every generated schedule during preview. This protects memory
+and responsiveness while still showing the strongest schedules found so far.
+
+### 4. Snapshots, Manual Editing, and Comparison
+
+After schedules are generated, the project supports user-centered review tools:
+
+- save named schedule snapshots;
+- manually move an exam date on a copied schedule;
+- validate the edited schedule against active constraints;
+- analyze the impact of a move;
+- compare two snapshots;
+- export a readable diff report.
+
+Important files:
+
+- `src/scheduling/scheduleSnapshot.py`
+- `src/scheduling/manualScheduleEditor.py`
+- `src/scheduling/impactAnalysisService.py`
+- `src/scheduling/scheduleDiffService.py`
+- `src/output/diffReportWriter.py`
+
+This feature is important because it turns the scheduler from a one-shot
+generator into an interactive decision-support tool.
+
+## Screenshots
+
+### Upload Files
 
 ![File upload and data preview](images/file-upload-preview-screen.png)
 
-The first screen loads the three required inputs: courses, study programs, and
-exam periods. The user can replace or append each dataset, export the currently
-loaded data, and confirm that the uploaded data is ready before continuing.
-The preview panel summarizes the cached data so the user can verify the input
-state before moving to program selection.
+The upload screen loads courses, study programs, and exam periods. The user can
+replace or append data and preview the loaded state before continuing.
 
 ![Loaded files control center](images/input-control-center-loaded-files.png)
 
-This focused view shows the input control center after all required files have
-been loaded successfully. Once the status is ready, the user continues to choose
-which study programs should participate in scheduling.
-
-### 2. Select Programs
+### Select Programs
 
 ![Program selection and course details](images/program-selection-details-screen.png)
 
 The program selection screen lets the user choose up to five study programs and
-inspect the courses attached to each selected program. Expanding a program shows
-courses grouped by year and semester, including requirement type and evaluation
-method. After selecting the relevant programs, the user continues to review and
-edit exam dates.
+inspect the courses connected to those programs.
 
-### 3. Scheduling Settings
-
-The scheduling settings screen lets the user enable or disable the five Part 3
-threshold requirements and enter the matching `k` value for each enabled rule.
-Disabled requirements are ignored by the generator. The screen also keeps the
-flow compatible with Version 2.0: when all requirements are disabled and no
-ranking criteria are selected, generation behaves like the old flow.
-
-### 4. Manage Exam Dates
+### Manage Exam Dates
 
 ![Date management and direct generation](images/date-management-generate-screen.png)
 
-Date Management is the final review step before schedule generation. The user
-can switch between exam periods, edit start/end dates, exclude unavailable days,
-re-enable dates, and undo the latest edit. The summary cards show the current
-period count, window length, active days, excluded days, and hidden exclusions.
-When the calendar is ready, the user clicks **Generate Exam Schedules** directly
-from this screen.
+The date management screen lets the user inspect exam-period windows, exclude
+unavailable dates, undo changes, and start schedule generation.
 
-### 5. Generate Schedules
-
-The generation action runs asynchronously from the Date Management screen. While
-generation is running, calendar editing controls are disabled to prevent
-conflicting changes or duplicate generation requests. If generation succeeds,
-the generated schedule systems are saved in the GUI cache and the app opens the
-results screen automatically. If generation fails, the user stays on Date
-Management and receives a clear error message.
-
-### 6. Review Results
+### Review Results
 
 ![Generated schedules review screen](images/generated-schedules-review-screen.png)
 
-The results screen lets the user review one generated exam-system option at a
-time. The calendar highlights scheduled exam dates, and the side panel lists the
-exams on the selected date plus the full system grouped by semester and moed.
-The user can move between generated systems with previous/next controls.
+The results screen shows generated schedule alternatives and highlights the
+selected schedule in a calendar-style view.
 
 ![Generated schedules navigation controls](images/generated-schedules-navigation-header.png)
 
-The navigation header shows the current system number out of the total generated
-options. After reviewing the alternatives, the user can save the selected system
-to a readable output file.
+## Architecture Overview
 
+Schedulix is organized around a lightweight layered architecture.
+
+```text
+GUI Screens
+    |
+Presenters
+    |
+Application and Scheduling Services
+    |
+Domain Scheduling, Constraints, Ranking, Snapshots
+    |
+Models, File Readers, Output Writers
+```
+
+The GUI screens are intentionally kept close to view logic. Presenters convert
+user actions into service calls. Scheduling services coordinate the generation,
+constraint, ranking, and cache workflows. Domain modules hold the scheduling
+logic and are tested independently.
+
+### Core Design Patterns
+
+- **MVP-style GUI separation:** screens render UI, presenters coordinate user
+  actions and service calls.
+- **Service Layer:** `SchedulingService` coordinates filtering, generation,
+  ranking, buffering, and cache updates.
+- **Strategy/Registry style constraints:** constraints are configured and
+  evaluated through a central registry.
+- **Batch processing:** generated schedules are processed in batches for
+  progressive preview.
+- **Bounded buffer:** `RankedResultsBuffer` keeps only the current Top-N ranked
+  schedules.
+- **Immutable result objects:** many workflow results use dataclasses to make
+  state transitions easier to test and reason about.
+- **Snapshot pattern:** saved schedules are copied so later edits do not mutate
+  earlier versions.
 
 ## Project Structure
 
 ```text
 Schedulix/
 |-- data/
-|   |-- examples/
-|   |   |-- CourseExample.txt        # Example course records
-|   |   |-- DatesExample.txt         # Example exam periods and excluded dates
-|   |   |-- ProgramsExample.txt      # Example selected study programs
-|   |   `-- SettingsExample.txt      # Example Part 3 scheduling-settings file (optional)
-|   |-- outputs/
-|   |   `-- exam_schedules.txt       # Generated output file after running the system
-|   `-- output/                      # Old/unused output folder placeholder
-|-- images/                          # README screenshots for the GUI workflow
+|   |-- examples/                    # Example input files
+|   `-- outputs/                     # Generated output files
+|-- images/                          # README screenshots
 |-- src/
-|   |-- main.py                      # Main file to run from PyCharm or terminal
-|   |-- models.py                    # Shared data classes: Course, ProgramEnrollment, ExamPeriod
+|   |-- main.py                      # CLI entry point
+|   |-- models.py                    # Course, ProgramEnrollment, ExamPeriod
+|   |-- constraint_settings.py       # Threshold constraint configuration
+|   |-- ranking_settings.py          # Ranking criteria, metrics, ranked wrapper
 |   |-- application/
-|   |   `-- schedulixApp.py          # Connects readers, filtering, scheduling, and output
+|   |   |-- schedulixApp.py          # File-based app orchestration
+|   |   |-- cache_manager.py         # GUI/app state cache
+|   |   |-- settings_validator.py    # Constraint/ranking validation
+|   |   |-- commands.py              # Undo/redo command support
+|   |   `-- async_runner.py          # Background task helper
 |   |-- fileReader/
-|   |   |-- baseFileReader.py        # Shared reader base class and reader factory
-|   |   `-- fileTypeReaders/
-|   |       |-- coursesReader.py             # Parses CourseExample-style course files
-|   |       |-- examPeriodsReader.py         # Parses DatesExample-style exam-period files
-|   |       |-- programReader.py             # Parses selected program files
-|   |       |-- schedulingSettingsReader.py  # Parses optional Part 3 settings files
-|   |       `-- schedulingSettingsWriter.py  # Writes Part 3 settings files
-|   |-- output/
-|   |   |-- exportService.py         # Exports one chosen generated schedule
-|   |   `-- outputWriter.py          # Formats and writes readable schedule output
+|   |   |-- baseFileReader.py
+|   |   `-- fileTypeReaders/         # Courses, programs, periods, settings
 |   |-- gui/
-|   |   |-- workflow/
-|   |   |   |-- mainGui.py            # Opens the Version 2.0 desktop app
-|   |   |   `-- workflowApp.py       # Owns the multi-step GUI workflow
-|   |   |-- screens/                 # customTkinter views only
-|   |   |   |-- fileUploadScreen.py
-|   |   |   |-- programConfigScreen.py
-|   |   |   |-- schedulingSettingsScreen.py
-|   |   |   |-- dateManagementScreen.py
-|   |   |   `-- scheduleNavigationScreen.py
-|   |   |-- presenters/              # Testable MVP presenter logic
-|   |   |   |-- dateManagementPresenter.py
-|   |   |   |-- exportPresenter.py
-|   |   |   |-- programSelectionPresenter.py
-|   |   |   |-- schedulingSettingsPresenter.py
-|   |   |   |-- schedulingPresenter.py
-|   |   |   |-- scheduleNavigationPresenter.py
-|   |   |   `-- uploadedDataPresenter.py
-|   |   |-- services/                # GUI-facing data services
-|   |   |   |-- uploadService.py
-|   |   |   `-- uploadedDataExportService.py
-|   |   `-- factories/               # View/presenter factories
-|   |       |-- presenter_factory.py
-|   |       `-- view_factory.py
+|   |   |-- workflow/                # GUI app shell and navigation
+|   |   |-- screens/                 # customTkinter screens
+|   |   |-- presenters/              # Testable presenter logic
+|   |   |-- services/                # GUI-facing upload/export services
+|   |   `-- factories/               # View and presenter factories
+|   |-- output/
+|   |   |-- outputWriter.py          # Writes generated schedules
+|   |   |-- exportService.py         # Exports selected schedules
+|   |   `-- diffReportWriter.py      # Writes snapshot comparison reports
 |   `-- scheduling/
-|       |-- courseFilter.py          # Keeps only selected-program exam courses
-|       |-- examDateHandler.py       # Builds valid exam dates and removes blocked dates
-|       |-- examConflictDetector.py  # Detects critical same-date conflicts
-|       `-- examScheduleGenerator.py # Generates valid exam-system options
+|       |-- examScheduleGenerator.py       # Constraint-aware schedule generation
+|       |-- schedulingService.py           # Main scheduling use-case service
+|       |-- constraints.py                 # Threshold constraint evaluation
+|       |-- batchIterator.py               # Batch helper for generated schedules
+|       |-- progressiveGeneration.py       # Progressive result state models
+|       |-- rankedResultsBuffer.py         # Bounded Top-N preview buffer
+|       |-- scheduleRankingService.py      # Metric calculation + ranking flow
+|       |-- scheduleMetricsCalculator.py   # Ranking metric calculation
+|       |-- scheduleRanker.py              # Ranking comparator/order logic
+|       |-- scheduleSnapshot.py            # Named schedule snapshots
+|       |-- manualScheduleEditor.py        # Safe manual exam movement
+|       |-- impactAnalysisService.py       # Impact summary for edits
+|       |-- scheduleDiffService.py         # Snapshot comparison
+|       |-- qualityTagCalculator.py        # Quality labels for schedules
+|       |-- scheduleIntrospection.py       # Schedule traversal/copy helpers
+|       |-- courseFilter.py
+|       |-- examDateHandler.py
+|       |-- examConflictDetector.py
+|       `-- dayLoadAnalyzer.py
 `-- tests/
-    |-- README.md                    # Notes for the tester
-    |-- unit/                        # Tests for one module at a time
-    |-- integration/                 # Tests for several parts working together
-    `-- system/                      # End-to-end example-file tests
+    |-- unit/
+    |-- integration/
+    `-- system/
 ```
 
 ## How To Run
 
-### Run The Version 2.0 GUI App
+### 1. Install Dependencies
 
-Install the GUI dependency once from the project root:
+From the project root:
 
 ```powershell
 cd C:\Users\user\Desktop\Schedulix
+python -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
 ```
 
-The Version 2.0 GUI workflow can be opened from the project root:
+The project currently depends on:
+
+```text
+customtkinter==5.2.2
+pytest==9.0.3
+```
+
+### 2. Run the GUI
 
 ```powershell
 cd C:\Users\user\Desktop\Schedulix
@@ -180,34 +277,14 @@ $env:PYTHONPATH="src"
 .\.venv\Scripts\python.exe -m gui.workflow.mainGui
 ```
 
-The app opens the full workflow: upload input files, select study programs,
-review and edit exam dates, generate schedules directly from the Date Management
-screen, review generated schedule systems, and export the chosen result.
-
-The upload window uses `customtkinter`, as planned in the Version 2.0 software
-design document. If a teammate does not have a `.venv` folder yet, create it
-first and then install the dependencies:
+### 3. Run the CLI Example Flow
 
 ```powershell
-python -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+cd C:\Users\user\Desktop\Schedulix
+.\.venv\Scripts\python.exe .\src\main.py
 ```
 
-## GUI State Cache
-
-The GUI stores uploaded data, selected programs, edited exam periods, and
-generated schedules in a local pickle file:
-
-```text
-src/application/internal_data.pkl
-```
-
-This file is runtime state and is ignored by git. It lets the GUI reopen with
-the last saved data, but teammates do not need to commit or share it.
-
-## What The Run Prints
-
-A successful run prints a summary like this:
+A successful CLI run prints a summary similar to:
 
 ```text
 Schedulix run completed successfully.
@@ -222,98 +299,31 @@ Output file: C:\Users\user\Desktop\Schedulix\data\outputs\exam_schedules.txt
 Runtime seconds: 1.42
 ```
 
-`Runtime seconds` is useful for checking the Version 1.0 performance requirement.
-The requirement says the system should create the output within 30 seconds.
-
-`Active constraints` and `Active ranking criteria` reflect the optional Part 3
-settings file passed via `settings_path` (see "Scheduling Settings File" under
-Input File Format). When no settings file is supplied, both show `none` and
-`Valid exam systems` behaves exactly as the old `Schedules generated` count.
-
-## Default Example Files
-
-The normal run uses these files automatically:
-
-```text
-data/examples/CourseExample.txt
-data/examples/DatesExample.txt
-data/examples/ProgramsExample.txt
-```
-
-The output is written to:
+The default output file is:
 
 ```text
 data/outputs/exam_schedules.txt
 ```
 
-## Output Format
+## Input Files
 
-The output starts with a title, an optional settings summary, the count of
-valid systems, and then lists schedule options in ranked order:
-
-```text
-Schedulix Exam Schedules
-========================================
-Settings: constraints[mandatory_gap_days=3, max_exams_per_day=2] | ranking[min_mandatory_gap desc, average_all_gap desc]
-Valid systems: 12
-========================================
-
-Schedule 1
-========================================
-Metrics: min_gap=7 | avg_gap=5.0 | elective_collisions=0 | mand_span=15 | max_per_day=2
-Quality: Excellent — comfortable spacing: min gap 7d, span 15d, no elective collisions
-Semester: FALL
-Moed: Aleph
-29-01-2026 | Physics 1 | Prof. O. Some
-30-01-2026 | Calculus 1 | Dr. Erez Scheiner
-Moed: Bet
-10-04-2026 | Physics 1 | Prof. O. Some
-12-04-2026 | Calculus 1 | Dr. Erez Scheiner
-```
-
-The `Settings:` line is omitted when no Part 3 constraints are enabled and no
-ranking criteria are active; it then reads:
+The default example inputs are:
 
 ```text
-Settings: none (all constraints disabled, no ranking)
-```
-
-Each `Schedule N` represents one complete exam-system option, ordered
-according to the active ranking criteria (or generation order if none are
-set). The `Metrics:` line summarizes the five Part 3 metrics for that system;
-a value of `n/a` means the metric could not be calculated for that system
-(e.g. fewer than two exams). The `Quality:` line (SCRUM-191) classifies each
-system into one of four bands based on those metrics:
-
-| Tag | Meaning |
-|-----|---------|
-| `Excellent` | All metrics clearly exceed good benchmarks (min gap ≥ 7 days, span ≤ 20 days, no elective collisions, ≤ 3 exams/day) |
-| `Good` | Metrics comfortably satisfy requirements (min gap ≥ 4 days, span ≤ 35 days, ≤ 2 collisions, ≤ 5 exams/day) |
-| `Needs Review` | Borderline values — min gap exactly 3 days, or span/collision/load just outside Good thresholds |
-| `Risky` | At least one metric violates a hard threshold (min gap < 3 days violates Req 2.1, collisions > 5, or > 6 exams/day) |
-
-Inside each schedule, exams are separated by semester and moed. Each exam
-line contains:
-
-```text
-exam date | course name | instructor name
-```
-
-This exam-line format is unchanged from Version 2.0.
-
-## Input File Format
-
-All input files are text files. Save them as UTF-8.
-
-### 1. Selected Programs File
-
-File:
-
-```text
+data/examples/CourseExample.txt
+data/examples/DatesExample.txt
 data/examples/ProgramsExample.txt
+data/examples/SettingsExample.txt
+data/examples/commands.txt        # Optional, user-created command file
 ```
 
-Format:
+The settings file is optional. If it is not supplied, all threshold constraints
+are disabled and ranking is not applied. The command file is also optional and
+is only used by the file-based flow when `commands_path` is supplied.
+
+### Selected Programs File
+
+Example:
 
 ```text
 83101, 83102, 83108
@@ -321,26 +331,13 @@ Format:
 
 Rules:
 
-- Up to 5 programs.
-- Each program must be a 5-digit ID.
-- Supported program IDs:
+- up to five programs;
+- every program ID must be five digits;
+- only supported program IDs are accepted.
 
-```text
-83101, 83102, 83104, 83107, 83108,
-83109, 83105, 83182, 83103, 83115
-```
-
-### 2. Courses File
-
-File:
-
-```text
-data/examples/CourseExample.txt
-```
+### Courses File
 
 Each course record starts with `$$$$`.
-
-Format:
 
 ```text
 $$$$
@@ -366,26 +363,16 @@ Exam
 
 Rules:
 
-- Course number must be 5 digits.
-- Program must be 5 digits.
-- Year must be one of: `1`, `2`, `3`, `4`.
-- Semester must be one of: `FALL`, `SPRI`, `SUMM`.
-- Requirement must be one of: `Obligatory`, `Elective`.
-- Evaluation must be one of: `Exam`, `Project`, `Attendance`.
-- Only courses with `Exam` are scheduled.
-- Courses with `Project` or `Attendance` are read but not scheduled.
+- course numbers and program IDs must be five digits;
+- year must be `1`, `2`, `3`, or `4`;
+- semester must be `FALL`, `SPRI`, or `SUMM`;
+- requirement must be `Obligatory` or `Elective`;
+- evaluation must be `Exam`, `Project`, or `Attendance`;
+- only courses with `Exam` are scheduled.
 
-### 3. Exam Periods File
-
-File:
-
-```text
-data/examples/DatesExample.txt
-```
+### Exam Periods File
 
 Each exam-period record starts with `$$$$`.
-
-Format:
 
 ```text
 $$$$
@@ -407,179 +394,194 @@ FALL, Aleph
 
 Rules:
 
-- Dates use `DD-MM-YYYY`.
-- Semester must be one of: `FALL`, `SPRI`, `SUMM`.
-- Moed must be one of: `Aleph`, `Bet`, `Gimel`.
-- The exam-period start date must be before or equal to the end date.
-- Excluded dates can be single dates or date ranges.
-- The leading `-` before excluded dates is optional.
-- Comments after excluded dates are ignored by the scheduler.
+- dates use `DD-MM-YYYY`;
+- semester must be `FALL`, `SPRI`, or `SUMM`;
+- moed must be `Aleph`, `Bet`, or `Gimel`;
+- excluded dates can be single dates or date ranges;
+- comments after excluded dates are ignored by the scheduler.
 
-### 4. Scheduling Settings File (optional, Part 3)
+### Scheduling Settings File
 
-File:
+The optional settings file configures Version 34 constraints and ranking.
 
 ```text
-data/examples/SettingsExample.txt
-```
-
-This optional fourth file configures the Part 3 threshold constraints
-(Section 2 of the requirements) and the ranking-criteria priority order
-(Section 3). It is parsed by `SchedulingSettingsFileReader` into the same
-`SchedulingConstraintSettings` and `RankingSettings` models used by the GUI.
-
-> **Status:** This file is parsed, validated, and can be passed to
-> `SchedulixApp.run(settings_path=...)`. When no settings file is supplied,
-> the CLI flow keeps the old behavior.
-
-Format:
-
-```text
-# Comments start with '#'. Blank lines are ignored.
-#
-# Threshold constraints (Section 2).
-# Each line:  <constraint_type> = <enabled>, <k>
+# Constraint lines:
+# <constraint_type> = <enabled>, <k>
 mandatory_gap_days             = on,  3
 any_course_gap_days            = off, 0
 elective_conflicts_per_program = off, 0
 mandatory_span_days            = off, 0
 max_exams_per_day              = on,  2
 
-# Ranking criteria (Section 3), in priority order.
-# Each line:  ranking: <criterion> [ : desc ]
+# Ranking criteria in priority order:
 ranking: min_mandatory_gap
 ranking: average_all_gap : desc
 ```
 
-Rules:
-
-- Enabled tokens: `on` / `off` (also accepted: `true`/`false`, `yes`/`no`, `1`/`0`).
-- Constraint names: `mandatory_gap_days`, `any_course_gap_days`,
-  `elective_conflicts_per_program`, `mandatory_span_days`, `max_exams_per_day`.
-- `k` must be positive (>= 1) for enabled gap/span/day-count constraints.
-  Requirement 2.3 (`elective_conflicts_per_program`) accepts non-negative
-  values, so `k=0` is valid there.
-- Ranking criteria: `min_mandatory_gap`, `average_all_gap`,
-  `elective_collision_count`, `mandatory_span`, `max_exams_per_day`.
-- Ranking direction is fixed to descending; `desc` may be written explicitly.
-- Ranking order can be changed after schedules are generated; this reorders
-  existing results without running schedule generation again.
-- Each constraint and each ranking criterion may appear at most once.
-- Omitting the file preserves Version 2.0 behavior (all constraints
-  disabled, generation order preserved).
-
-## How To Make Your Own Example
-There are two simple options.
-
-### Option A: Replace The Default Example Files
-
-Edit these files directly:
+Supported constraint names:
 
 ```text
-data/examples/CourseExample.txt
-data/examples/DatesExample.txt
-data/examples/ProgramsExample.txt
+mandatory_gap_days
+any_course_gap_days
+elective_conflicts_per_program
+mandatory_span_days
+max_exams_per_day
 ```
 
-Then run:
+Supported ranking criteria:
 
 ```text
-src/main.py
+min_mandatory_gap
+average_all_gap
+elective_collision_count
+mandatory_span
+max_exams_per_day
 ```
 
-This is the easiest way when you just want to test a new dataset.
+### File-Based Commands File
 
-### Option B: Create Separate Files And Run Them From Code
-
-Create new files, for example:
-
-```text
-data/examples/MyCourses.txt
-data/examples/MyDates.txt
-data/examples/MyPrograms.txt
-```
-
-Then call the application with custom paths:
+The optional commands file extends the CLI flow with Part 4 snapshot and manual
+editing actions. It is parsed by `CommandsFileReader` and can be passed to:
 
 ```python
-from pathlib import Path
-
-from application.schedulixApp import PROJECT_ROOT, SchedulixApp
-
-app = SchedulixApp()
-result = app.run(
-    courses_path=PROJECT_ROOT / "data" / "examples" / "MyCourses.txt",
-    exam_periods_path=PROJECT_ROOT / "data" / "examples" / "MyDates.txt",
-    programs_path=PROJECT_ROOT / "data" / "examples" / "MyPrograms.txt",
-    output_path=PROJECT_ROOT / "data" / "outputs" / "my_exam_schedules.txt",
-)
-
-print(result)
+SchedulixApp().run(commands_path="data/examples/commands.txt")
 ```
+
+Supported commands:
+
+```text
+SAVE_SNAPSHOT SnapA
+MOVE 83110 TO 03-02-2026
+SAVE_SNAPSHOT SnapB
+LOAD_SNAPSHOT SnapA
+COMPARE SnapA SnapB
+```
+
+Rules:
+
+- blank lines and `#` comments are ignored;
+- `MOVE` changes one course date in the active schedule;
+- `SAVE_SNAPSHOT` stores the current schedule in memory under a name;
+- `LOAD_SNAPSHOT` restores a saved snapshot;
+- `COMPARE` writes a `diff_report.txt` file with only changed course dates and
+  penalty-score delta when available.
+
+## Output Format
+
+The output begins with a title, settings summary, valid-system count, and then
+the generated schedule options.
+
+```text
+Schedulix Exam Schedules
+========================================
+Settings: constraints[mandatory_gap_days=3, max_exams_per_day=2] | ranking[min_mandatory_gap desc, average_all_gap desc]
+Valid systems: 12
+========================================
+
+Schedule 1
+========================================
+Metrics: min_gap=3 | avg_gap=5.0 | elective_collisions=0 | mand_span=2 | max_per_day=1
+Quality: Good - balanced schedule with manageable spacing and load
+Semester: FALL
+Moed: Aleph
+29-01-2026 | Physics 1 | Prof. O. Some
+30-01-2026 | Calculus 1 | Dr. Erez Scheiner
+```
+
+Each `Schedule N` represents one complete exam-system option. If ranking is
+active, schedules are ordered by the selected ranking criteria. If ranking is
+inactive, schedules remain in generation order. The `Quality:` line summarizes
+schedule quality from the calculated metrics or penalty score.
 
 ## Conflict Rule
 
 Two exams are a critical conflict when:
 
-- they are on the same date
-- they belong to the same program
-- they belong to the same year
-- they are not both elective courses
+- they are scheduled on the same date;
+- they belong to the same program;
+- they belong to the same year;
+- they are not both elective courses.
 
-Two elective courses in the same program/year may be scheduled on the same date
-in Version 1.0.
+This base conflict rule works together with the optional Version 34 threshold
+constraints.
 
-## Performance Notes
+## Important Files for Code Review
 
-Schedulix generates every valid schedule option. This can grow very quickly when
-you add more exam courses or more valid dates.
+If you are preparing for an academic code review, these files are the strongest
+starting points:
 
-For example:
-
-- 2 exam courses across many dates can generate many schedules.
-- 5 or 6 exam courses across long exam periods can generate a very large output.
-- Large outputs can take time to open in an editor even if generation is fast.
-
-When testing performance, check the printed line:
-
-```text
-Runtime seconds: X.XX
-```
-
-Version 1.0 should stay under 30 seconds for the required dataset.
+| File | Why it matters |
+| --- | --- |
+| `src/scheduling/schedulingService.py` | Main Version 34 orchestration: generation, ranking, buffering, snapshots, and cache updates. |
+| `src/scheduling/examScheduleGenerator.py` | Core recursive/backtracking schedule generation with constraint pruning. |
+| `src/scheduling/rankedResultsBuffer.py` | Bounded Top-N preview and memory-management tradeoff. |
+| `src/scheduling/scheduleRankingService.py` | Separates metric calculation and ranking from generation. |
+| `src/gui/presenters/schedulingPresenter.py` | GUI-facing presenter that converts service outcomes into user-facing results. |
+| `src/scheduling/manualScheduleEditor.py` | Safe schedule editing on copied schedules with validation. |
+| `src/scheduling/scheduleSnapshot.py` | Snapshot management and immutability-by-copy. |
+| `src/scheduling/scheduleDiffService.py` | Snapshot comparison for customer-value review features. |
 
 ## Running Tests
 
-The intended full test command is:
+Run the full test suite from the project root:
 
 ```powershell
-python -m pytest
+cd C:\Users\user\Desktop\Schedulix
+$env:PYTHONPATH="src"
+.\.venv\Scripts\python.exe -m pytest
 ```
 
-Some unit tests can also run with:
+The suite is organized into:
 
-```powershell
-python -m unittest discover -s tests -p "test*.py"
+```text
+tests/unit/          # focused module tests
+tests/integration/   # multi-module workflow tests
+tests/system/        # end-to-end example-file tests
 ```
 
-The full suite uses `pytest` features such as temporary folders, so `pytest`
-must be installed to run every test normally.
+Some tests can also be run with `unittest`, but the full suite expects
+`pytest` because it uses pytest fixtures such as `tmp_path`.
+
+## GUI State Cache
+
+The GUI stores runtime state in:
+
+```text
+src/application/internal_data.pkl
+```
+
+This file is runtime state and should not be committed. It lets the GUI reopen
+with cached uploaded data, selected programs, edited periods, and generated
+results.
+
+## Performance Notes
+
+The scheduling search space can grow quickly because a complete exam system is
+a combination of course exam dates across relevant exam periods.
+
+The current design uses several techniques to keep the app usable:
+
+- lazy generation through `ExamScheduleGenerator.iter_exam_systems()`;
+- batch iteration through `iter_exam_system_batches()`;
+- progressive ranking through `SchedulingService.run_progressive()`;
+- bounded preview retention through `RankedResultsBuffer`;
+- direct streaming output in the CLI path when ranking is inactive.
+
+The main tradeoff is intentional: when ranking is required, the system needs
+metrics for schedules being compared. Version 34 reduces the user-facing cost
+by ranking progressively and keeping a Top-N preview instead of forcing the GUI
+to wait for a full materialized result set before showing anything.
 
 ## Common Problems
 
-### File Not Found
-
-Run `src/main.py` from PyCharm or from the project root. The code now resolves
-default paths from the project folder, so normal PyCharm runs should work.
-
 ### Invalid Program Number
 
-Check `ProgramsExample.txt`. Program IDs must be five digits and must appear in
-the supported program list.
+Check the selected programs file. Program IDs must be five digits and must be
+part of the supported program list.
 
 ### Invalid Date
 
-Use this date format:
+Use this format:
 
 ```text
 DD-MM-YYYY
@@ -590,3 +592,9 @@ Example:
 ```text
 29-01-2026
 ```
+
+### No Schedules Generated
+
+This usually means the active constraints are too strict for the available exam
+periods and relevant courses. Try disabling one constraint or lowering its `k`
+value, then generate again.
