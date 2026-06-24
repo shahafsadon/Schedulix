@@ -19,6 +19,7 @@ class FileReaderType(Enum):
     COURSES = auto()      # Courses data file
     EXAM_PERIODS = auto() # Exam periods and blocked dates file
     SCHEDULING_SETTINGS = auto()  # Part 3 optional settings file
+    COMMANDS = auto()             # Snapshot and edit commands file (SCRUM-197)
 
 
 
@@ -84,6 +85,7 @@ class FileReaderFactory:
         from fileReader.fileTypeReaders.coursesReader import CoursesFileReader
         from fileReader.fileTypeReaders.examPeriodsReader import ExamPeriodsFileReader
         from fileReader.fileTypeReaders.schedulingSettingsReader import SchedulingSettingsFileReader
+        from fileReader.fileTypeReaders.commandsFileReader import CommandsFileReader
         
         # Maps each file type to its matching reader implementation.
         registry: dict[FileReaderType, type[BaseFileReader]] = {
@@ -91,6 +93,7 @@ class FileReaderFactory:
             FileReaderType.COURSES:             CoursesFileReader,
             FileReaderType.EXAM_PERIODS:        ExamPeriodsFileReader,
             FileReaderType.SCHEDULING_SETTINGS: SchedulingSettingsFileReader,
+            FileReaderType.COMMANDS:            CommandsFileReader,
         }
 
         cls = registry.get(reader_type)
