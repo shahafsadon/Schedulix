@@ -4,6 +4,24 @@ The synchronous ``run()`` method is kept for compatibility with the existing
 screens/tests.  The progressive ``run_progressive()`` method adds lazy batched
 ranking on top of ``ExamScheduleGenerator.iter_exam_systems()`` so the GUI can
 show a ranked preview without materializing the full Cartesian product.
+
+Academic-review orientation
+---------------------------
+This file is the central Version 34 use-case coordinator.  It intentionally
+does not implement the low-level schedule-generation algorithm, the metric
+calculator, or the GUI widgets.  Its job is to connect those separate parts:
+
+1. read validated state from ``CacheManager``;
+2. filter the course list down to the selected programs;
+3. create a constraint-aware ``ExamScheduleGenerator``;
+4. stream generated systems lazily;
+5. rank each generated batch;
+6. retain only a bounded Top-N preview; and
+7. emit immutable progress snapshots to the GUI.
+
+This separation is important for code review: the file demonstrates the
+Service Layer pattern and explains why Version 34 ranking/progressive preview
+logic was kept out of the customTkinter screens.
 """
 from __future__ import annotations
 
@@ -35,6 +53,11 @@ class SchedulingOutcome:
     ``schedules`` is also stored in the cache as a side effect; it is returned
     here too so the caller can react without a second cache read. The counts let
     the UI show a short status line without recomputing anything.
+
+    This object belongs to the older full-materialization path.  It is still
+    useful for compatibility and tests, but Version 34's preferred GUI path is
+    ``ProgressiveRankedSnapshot`` because a snapshot can represent partial
+    progress without requiring the complete schedule list.
     """
 
     relevant_course_count: int
@@ -50,7 +73,14 @@ class SchedulingOutcome:
 
 @dataclass(frozen=True)
 class _PreparedSchedulingInput:
-    """Validated and filtered inputs for one scheduling run."""
+    """Validated and filtered inputs for one scheduling run.
+
+    The service gathers these values once at the beginning of a run so the
+    generation code receives a coherent input set: courses, exam periods,
+    active constraints, and ranking preferences are all from the same cache
+    state.  This avoids scattering validation and cache reads throughout the
+    progressive loop.
+    """
 
     relevant_courses: list[Any]
     exam_periods: list[Any]
@@ -60,7 +90,24 @@ class _PreparedSchedulingInput:
 
 
 class SchedulingService:
-    """Runs the scheduling core on data held in ``CacheManager``."""
+    """Runs the scheduling core on data held in ``CacheManager``.
+
+    Responsibility
+    --------------
+    ``SchedulingService`` is an application service, not a domain algorithm.
+    It coordinates the scheduling use case and delegates specialized work to
+    collaborators:
+
+    * ``CourseFilter`` decides which courses matter for selected programs.
+    * ``ExamScheduleGenerator`` produces valid ``ExamSystem`` objects.
+    * ``ScheduleRankingService`` calculates metrics and orders schedules.
+    * ``RankedResultsBuffer`` owns Top-N preview retention.
+    * ``CacheManager`` persists only durable, final results.
+
+    Side effects are intentionally limited to cache writes at well-defined
+    points.  In the progressive flow, partial previews are emitted to callbacks
+    but are not persisted as final schedule state.
+    """
 
     def __init__(
         self,
@@ -71,7 +118,12 @@ class SchedulingService:
         settings_validator: SchedulingSettingsValidator | None = None,
         clock: Callable[[], float] = perf_counter,
     ) -> None:
-        """Create the service with its scheduling collaborators."""
+        """Create the service with its scheduling collaborators.
+
+        Parameters are injectable so unit tests can replace expensive or
+        stateful collaborators with fakes.  This is why the service is easy to
+        review independently from the GUI and from the recursive generator.
+        """
         self._course_filter = course_filter or CourseFilter()
         self._injected_generator = schedule_generator
         self._ranking_service = ranking_service or ScheduleRankingService()
@@ -86,16 +138,32 @@ class SchedulingService:
         This compatibility path still materializes the full list because older
         callers expect ``SchedulingOutcome.schedules`` to contain every system.
         New GUI preview flows should use ``run_progressive()``.
+
+        Side effects
+        ------------
+        Writes generated schedules to ``CacheManager`` and, when requested,
+        writes ranked schedules as well.  This is safe for the old path because
+        the method only returns after full generation completes.
         """
+        # Step 1: normalize all cache state into a single prepared input object.
+        # This keeps validation, filtering, and settings lookup outside the
+        # generator so the generator can focus only on schedule construction.
         prepared = self._prepare_inputs(cache)
         generator = self._create_generator(prepared.constraint_settings)
 
+        # Compatibility path: this deliberately materializes all systems.  The
+        # method remains for older screens/tests that expect a complete list,
+        # while Version 34's scalable path uses run_progressive().
         schedules = generator.generate_exam_systems(
             prepared.relevant_courses,
             prepared.exam_periods,
         )
 
         if rank_results:
+            # Ranking is a separate service because "valid" and "best" are two
+            # different questions.  The generator answers validity; this
+            # service delegates schedule preference ordering to the ranking
+            # layer after generation has completed.
             ranking_outcome = self._ranking_service.rank_generated_schedules(
                 schedules,
                 prepared.ranking_settings,
@@ -139,19 +207,37 @@ class SchedulingService:
 
         Partial snapshots are delivered through ``on_snapshot``.  The returned
         value is always the terminal snapshot: ``COMPLETE`` or ``CANCELLED``.
+
+        Algorithmic idea
+        ----------------
+        The method is a streaming pipeline:
+
+        ``lazy generator`` -> ``fixed-size batches`` -> ``rank batch`` ->
+        ``merge into Top-N buffer`` -> ``emit immutable snapshot``.
+
+        This avoids the old bottleneck of "generate every schedule, store every
+        schedule, then rank every schedule" before the user sees anything.
         """
+        # Options control the user-facing responsiveness/memory tradeoff.  A
+        # small batch size gives frequent updates; a large batch size reduces
+        # callback overhead.  display_limit bounds the ranked preview.
         options = options or ProgressiveGenerationOptions()
         run_id = self._next_run_id()
         ranking_version = run_id
         started_at = self._clock()
         prepared = self._prepare_inputs(cache)
         generator = self._create_generator(prepared.constraint_settings)
+        # The buffer is the memory-safety boundary: it retains only the current
+        # Top-N schedules rather than the full generated history.
         preview = RankedResultsBuffer(
             ranking_settings=prepared.ranking_settings,
             preview_limit=options.display_limit,
         )
 
         if self._is_cancelled(cancellation_token):
+            # Edge case: cancellation can be requested before the worker enters
+            # the generation loop.  Returning a terminal snapshot gives the GUI
+            # one consistent code path for all cancellation timings.
             snapshot = self._build_snapshot(
                 run_id=run_id,
                 state=ProgressiveResultState.CANCELLED,
@@ -179,12 +265,25 @@ class SchedulingService:
             should_stop=lambda: self._is_cancelled(cancellation_token),
         )
 
+        # Main progressive loop:
+        # 1. pull the next generated batch from the lazy iterator;
+        # 2. re-read ranking settings so the GUI can change ranking preference
+        #    while generation is active;
+        # 3. rank and merge into the bounded preview;
+        # 4. optionally emit a throttled PARTIAL snapshot.
         for schedule_batch in batches:
             if schedule_batch.is_empty:
+                # Empty batches should not normally occur, but tolerating them
+                # keeps the batch iterator contract defensive and avoids
+                # emitting meaningless progress updates.
                 continue
 
             latest_settings = cache.get_ranking_settings() or prepared.ranking_settings
             if preview.ranking_settings != latest_settings:
+                # Only the schedules still retained in the buffer can be
+                # reranked here.  This is the deliberate Top-N memory tradeoff:
+                # global reranking under brand-new criteria would require
+                # storing all discarded schedules or restarting generation.
                 preview.rerank(latest_settings)
                 ranking_version += 1
 
@@ -195,6 +294,10 @@ class SchedulingService:
             )
 
             if self._is_cancelled(cancellation_token):
+                # Cancellation after a batch is ranked still returns the latest
+                # in-memory preview, but does not persist it as final cache
+                # state.  This protects previous valid results from being
+                # replaced by an incomplete run.
                 return self._finish_progressive_run(
                     cache=cache,
                     options=options,
@@ -214,6 +317,8 @@ class SchedulingService:
 
             now = self._clock()
             if now - last_emit_at >= options.min_update_interval_seconds:
+                # Throttling prevents the background worker from flooding the
+                # Tk event queue with too many GUI updates on very fast batches.
                 snapshot = self._build_snapshot(
                     run_id=run_id,
                     state=ProgressiveResultState.PARTIAL,
@@ -228,6 +333,8 @@ class SchedulingService:
                 last_emit_at = now
 
         if self._is_cancelled(cancellation_token):
+            # A second cancellation check after the loop covers cancellation
+            # requested between the final batch and terminal completion.
             return self._finish_progressive_run(
                 cache=cache,
                 options=options,
@@ -264,11 +371,28 @@ class SchedulingService:
     # ------------------------------------------------------------------
 
     def _prepare_inputs(self, cache: CacheManager) -> _PreparedSchedulingInput:
-        """Read, validate, and filter all inputs needed by scheduling."""
+        """Read, validate, and filter all inputs needed by scheduling.
+
+        Returns
+        -------
+        _PreparedSchedulingInput
+            A coherent bundle of filtered courses, exam periods, constraint
+            settings, ranking settings, and a flag describing whether any
+            threshold constraint is enabled.
+
+        Raises
+        ------
+        ValueError
+            If required GUI state is missing or if Version 34 settings are
+            invalid.  The presenter catches these errors and turns them into
+            user-facing messages.
+        """
         courses = cache.get_courses()
         exam_periods = cache.get_exam_periods()
         selected_programs = cache.get_selected_programs()
 
+        # These guards fail early with actionable messages.  Without them the
+        # generator would fail later with less helpful errors or empty output.
         if not courses:
             raise ValueError("No courses loaded. Load a courses file first.")
         if not exam_periods:
@@ -286,6 +410,8 @@ class SchedulingService:
             ranking_settings=ranking_settings,
         )
         if not validation_result.is_valid:
+            # Validation is kept before filtering/generation so invalid user
+            # settings never reach the scheduling domain.
             raise ValueError(
                 "Invalid scheduling settings:\n"
                 + "\n".join(validation_result.error_messages)
@@ -309,7 +435,12 @@ class SchedulingService:
         )
 
     def _create_generator(self, constraint_settings: Any) -> Any:
-        """Create the correct generator for the current run."""
+        """Create the correct generator for the current run.
+
+        Injected generators support tests; production runs build a fresh
+        ``ExamScheduleGenerator`` so each run receives the active constraint
+        settings and independent diagnostics counters.
+        """
         return self._injected_generator or ExamScheduleGenerator(
             constraint_settings=constraint_settings,
         )
@@ -320,16 +451,20 @@ class SchedulingService:
         relevant_courses: list[Any],
         exam_periods: list[Any],
     ) -> Iterator[ExamSystem]:
-        """Use the lazy generator when available, with a test-double fallback."""
-        iter_method = getattr(generator, "iter_exam_systems", None)
-        if callable(iter_method):
-            yield from iter_method(relevant_courses, exam_periods)
-            return
+        """Return the lazy exam-system iterator required by progressive mode.
 
-        # Compatibility fallback for old fakes.  Production ExamScheduleGenerator
-        # always exposes iter_exam_systems(), so this should not run in real GUI
-        # generation.
-        yield from generator.generate_exam_systems(relevant_courses, exam_periods)
+        Progressive generation must never call the list-returning
+        ``generate_exam_systems()`` compatibility wrapper. If a test double or
+        custom generator lacks ``iter_exam_systems()``, failing fast is safer
+        than accidentally materializing every possible schedule in memory.
+        """
+        iter_method = getattr(generator, "iter_exam_systems", None)
+        if not callable(iter_method):
+            raise TypeError(
+                "Progressive scheduling requires a lazy iter_exam_systems() method."
+            )
+
+        yield from iter_method(relevant_courses, exam_periods)
 
     def _rank_batch_into_preview(
         self,
@@ -337,15 +472,37 @@ class SchedulingService:
         schedule_batch: GeneratedScheduleBatch,
         ranking_settings: RankingSettings,
     ) -> None:
-        """Rank one generated batch and merge it into the bounded preview."""
+        """Rank one generated batch and merge it into the bounded preview.
+
+        Parameters
+        ----------
+        preview:
+            The mutable Top-N buffer for the current run.
+        schedule_batch:
+            A generated batch with stable global schedule IDs.
+        ranking_settings:
+            The ranking settings that should be applied to this batch.
+
+        Side effects
+        ------------
+        Mutates ``preview`` by updating counters and possibly replacing the
+        retained Top-N schedules.  It does not write to cache.
+        """
         if schedule_batch.is_empty:
             return
 
+        # The ranking service calculates metrics for this batch and assigns
+        # stable IDs starting at schedule_batch.starting_schedule_id.  Stable
+        # IDs matter because they keep tie-breaking and GUI labels consistent
+        # across progressive batches.
         ranking_outcome = self._ranking_service.rank_generated_batch(
             schedule_batch.schedules,
             ranking_settings,
             starting_schedule_id=schedule_batch.starting_schedule_id,
         )
+        # The buffer owns the "current preview + new batch -> rerank -> trim"
+        # policy.  Keeping that policy outside the service makes the memory
+        # tradeoff explicit and testable.
         preview.add_ranked_batch(
             ranking_outcome.ranked_schedules,
             generated_count=schedule_batch.size,
@@ -379,6 +536,9 @@ class SchedulingService:
         store.  ``CANCELLED`` and ``FAILED`` terminal states are also excluded
         so an aborted run leaves the previous (valid) schedules intact on disk.
         """
+        # Build the terminal view of the run first.  If we later persist final
+        # ranking with the latest ranking settings, the snapshot is replaced
+        # with an equivalent copy containing that final ranked order.
         snapshot = self._build_snapshot(
             run_id=run_id,
             state=state,
@@ -406,11 +566,16 @@ class SchedulingService:
             final_ranked_schedules = final_outcome.ranked_schedules
 
             if preview.systems_seen == 0:
+                # Even an empty complete run is a meaningful final result: it
+                # tells the cache that the current input/settings combination
+                # produced no valid schedules.
                 cache.store_final_schedule_results([], [], latest_settings)
             else:
                 cache.set_ranked_schedules(final_ranked_schedules)
 
             import dataclasses
+            # ``ProgressiveRankedSnapshot`` is frozen, so replacing the ranked
+            # list uses dataclasses.replace instead of mutating the object.
             snapshot = dataclasses.replace(snapshot, ranked_schedules=final_ranked_schedules)
 
         self._emit(on_snapshot, snapshot)
@@ -428,9 +593,19 @@ class SchedulingService:
         message: str,
         error: str | None = None,
     ) -> ProgressiveRankedSnapshot:
-        """Build an immutable snapshot from the current mutable state."""
+        """Build an immutable snapshot from the current mutable state.
+
+        The preview buffer is mutable because it is updated batch-by-batch.
+        The GUI receives a frozen snapshot instead, so screen code cannot
+        accidentally mutate the service's internal progress state.
+        """
         diagnostics = self._diagnostics(generator)
         displayed_count = len(preview.ranked_schedules)
+        # Candidate counters describe recursive placement attempts inside the
+        # generator.  Schedule counters describe complete ExamSystem objects in
+        # the progressive pipeline.  Both are useful during academic review:
+        # one explains algorithmic pruning, the other explains user-visible
+        # progress.
         counters = ProgressiveCounters(
             systems_seen=preview.systems_seen,
             displayed_count=displayed_count,
@@ -460,11 +635,16 @@ class SchedulingService:
         callback: Callable[[ProgressiveRankedSnapshot], None] | None,
         snapshot: ProgressiveRankedSnapshot,
     ) -> None:
+        # The service deliberately knows nothing about Tkinter.  The callback
+        # boundary lets the presenter/screen decide how to marshal updates onto
+        # the GUI thread.
         if callback is not None:
             callback(snapshot)
 
     @staticmethod
     def _is_cancelled(cancellation_token: Any | None) -> bool:
+        # The token is intentionally duck-typed so tests and different runner
+        # implementations only need to expose an ``is_cancelled`` attribute.
         return bool(getattr(cancellation_token, "is_cancelled", False))
 
     @staticmethod
@@ -473,6 +653,9 @@ class SchedulingService:
         diagnostics = getattr(generator, "diagnostics", None)
         if diagnostics is not None:
             return diagnostics
+        # Some tests inject lightweight fakes that do not expose diagnostics.
+        # Returning an object with zero-valued fields preserves the presenter
+        # contract without forcing every fake to mirror the real generator.
         return type(
             "EmptySchedulingDiagnostics",
             (),
@@ -488,6 +671,8 @@ class SchedulingService:
         preview: RankedResultsBuffer,
         display_limit: int,
     ) -> str:
+        # The wording intentionally says "temporary" so users understand this
+        # is a live preview, not the final complete ranked result.
         shown = min(len(preview.ranked_schedules), display_limit)
         return (
             f"Live temporary Top {display_limit:,} preview: showing "
@@ -499,6 +684,8 @@ class SchedulingService:
         preview: RankedResultsBuffer,
         display_limit: int,
     ) -> str:
+        # Completion messages distinguish between "all generated schedules fit
+        # in the display limit" and "we are showing a bounded final Top-N".
         if preview.systems_seen == 0:
             return "No valid exam systems could be generated."
         shown = min(len(preview.ranked_schedules), display_limit)
@@ -513,5 +700,7 @@ class SchedulingService:
         )
 
     def _next_run_id(self) -> int:
+        # Monotonic run IDs let the GUI ignore stale updates if future screens
+        # allow overlapping or rapidly restarted progressive runs.
         self._run_counter += 1
         return self._run_counter
