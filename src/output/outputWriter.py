@@ -16,6 +16,7 @@ from scheduling.examScheduleGenerator import (
     ExamSchedule,
     ExamSystem,
 )
+from scheduling.qualityTagCalculator import QualityTagCalculator
 
 
 DEFAULT_OUTPUT_PATH = (
@@ -466,6 +467,7 @@ class OutputWriter:
         output_path: str | Path = DEFAULT_OUTPUT_PATH,
         constraint_settings: SchedulingConstraintSettings | None = None,
         ranking_settings: RankingSettings | None = None,
+        quality_tag_calculator: QualityTagCalculator | None = None,
     ) -> tuple[Path, int]:
         """
         Stream ranked exam systems to disk, preserving their given order.
@@ -476,8 +478,23 @@ class OutputWriter:
         write_with_count() instead of collecting every output line and joining
         one giant string at the end.
 
-        Returns (path, written_count), where written_count is the number of
-        ranked systems written (== len(ranked_schedules)).
+        Args:
+            ranked_schedules: Ordered list of ranked exam systems to write.
+            output_path: Destination file path.
+            constraint_settings: When supplied, the Settings: header line
+                summarizes enabled threshold constraints.
+            ranking_settings: When supplied, the Settings: header line
+                summarizes active ranking criteria.
+            quality_tag_calculator: Optional SCRUM-191 calculator.  When
+                provided, a ``Quality: <tag> — <explanation>`` line is
+                inserted after each ``Metrics:`` line.  When None (the
+                default), the output is identical to the pre-SCRUM-191
+                format — no Quality line is written and no existing tests
+                are affected.
+
+        Returns:
+            (path, written_count), where written_count equals
+            len(ranked_schedules).
         """
         path = Path(output_path)
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -510,6 +527,17 @@ class OutputWriter:
                     f"{TITLE_LINE}\n",
                     f"{self._format_metrics_line(ranked)}\n",
                 ]
+
+                # Optional SCRUM-191 quality tag line, inserted immediately
+                # after the Metrics line so it is easy to spot at a glance.
+                # The calculator is called once per schedule; its result is
+                # pure-functional (same metrics → same tag) so no caching
+                # is needed.
+                if quality_tag_calculator is not None:
+                    result = quality_tag_calculator.calculate(ranked.metrics)
+                    schedule_parts.append(
+                        f"Quality: {result.tag.value} — {result.explanation}\n"
+                    )
 
                 current_semester: str | None = None
 
