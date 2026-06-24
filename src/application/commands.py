@@ -17,6 +17,8 @@ logic:
   dependencies injected via constructor arguments — no Singleton references.
 * ``undo()`` is supported on every command that mutates state, enabling the
   Presenter to offer a one-step revert.
+* Part 4 manual exam moves also use this file. The move command stores the old
+  and new schedule copies so Undo and Redo do not regenerate schedules.
 
 No Version 1.0 source files are modified by this module.
 """
@@ -497,10 +499,6 @@ class EditPeriodCommand(Command):
             data=valid_dates,
         )
 
-
-# ---------------------------------------------------------------------------
-# Manual schedule move commands
-# ---------------------------------------------------------------------------
 
 class ScheduleModificationCommand(Command):
     """Move one exam inside the active schedule and support undo/redo."""

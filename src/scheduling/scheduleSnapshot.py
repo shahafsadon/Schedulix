@@ -1,3 +1,10 @@
+"""Store named in-memory versions of exam schedules.
+
+Snapshots let the user keep several schedule versions during the current GUI
+session. The manager copies schedules on save and load so later edits cannot
+silently change an older snapshot.
+"""
+
 from __future__ import annotations
 
 from copy import deepcopy
@@ -30,12 +37,12 @@ class SnapshotManager:
 
     @property
     def active_schedule(self) -> ExamSystem | None:
-        """Return the active schedule copy, if one was loaded or set."""
+        """Return the active schedule copy, if one exists."""
         return deepcopy(self._active_schedule)
 
     @property
     def active_metrics(self) -> ScheduleMetrics | None:
-        """Return the active metrics copy, if present."""
+        """Return the active metrics copy, if one exists."""
         return deepcopy(self._active_metrics)
 
     def set_active_schedule(
@@ -43,7 +50,7 @@ class SnapshotManager:
         schedule: ExamSystem,
         metrics: ScheduleMetrics | None = None,
     ) -> None:
-        """Set the schedule that snapshot operations work on."""
+        """Set the schedule that snapshot actions use."""
         self._active_schedule = deepcopy(schedule)
         self._active_metrics = deepcopy(metrics)
 
@@ -78,7 +85,7 @@ class SnapshotManager:
         penalty_score: float | None = None,
         created_at: datetime | None = None,
     ) -> ScheduleSnapshot:
-        """Create a new snapshot without changing exported files."""
+        """Create a snapshot without touching exported files."""
         clean_name = self._validate_new_name(name)
         snapshot = ScheduleSnapshot(
             name=clean_name,
@@ -92,29 +99,29 @@ class SnapshotManager:
         return self._copy_snapshot(snapshot)
 
     def load(self, name: str) -> ScheduleSnapshot:
-        """Load a snapshot and make it the active schedule."""
+        """Load a snapshot and make it active."""
         snapshot = self._snapshot_by_name(name)
         self._active_schedule = deepcopy(snapshot.schedule)
         self._active_metrics = deepcopy(snapshot.metrics)
         return self._copy_snapshot(snapshot)
 
     def rename(self, old_name: str, new_name: str) -> ScheduleSnapshot:
-        """Rename a saved snapshot while keeping its schedule copy."""
+        """Rename a saved snapshot."""
         snapshot = self._snapshot_by_name(old_name)
-        clean_new_name = self._validate_new_name(new_name)
+        clean_name = self._validate_new_name(new_name)
 
         del self._snapshots[snapshot.name]
-        renamed = replace(snapshot, name=clean_new_name)
-        self._snapshots[clean_new_name] = renamed
+        renamed = replace(snapshot, name=clean_name)
+        self._snapshots[clean_name] = renamed
         return self._copy_snapshot(renamed)
 
     def delete(self, name: str) -> None:
-        """Delete one saved snapshot from the current session."""
+        """Delete one saved snapshot."""
         snapshot = self._snapshot_by_name(name)
         del self._snapshots[snapshot.name]
 
     def list_snapshots(self) -> list[ScheduleSnapshot]:
-        """Return saved snapshots ordered by creation time then name."""
+        """Return snapshots ordered by creation time and name."""
         return [
             self._copy_snapshot(snapshot)
             for snapshot in sorted(
@@ -125,18 +132,14 @@ class SnapshotManager:
 
     def _validate_new_name(self, name: str) -> str:
         clean_name = name.strip()
-
         if not clean_name:
             raise ValueError("Snapshot name cannot be empty.")
-
         if clean_name in self._snapshots:
             raise ValueError(f"Snapshot name already exists: {clean_name}.")
-
         return clean_name
 
     def _snapshot_by_name(self, name: str) -> ScheduleSnapshot:
         clean_name = name.strip()
-
         try:
             return self._snapshots[clean_name]
         except KeyError as error:

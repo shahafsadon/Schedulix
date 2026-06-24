@@ -1,8 +1,16 @@
+"""Headless tests for the schedule results screen.
+
+The tests use fake customTkinter widgets. This lets us check calendar colors,
+snapshot buttons, manual-move buttons, and ranking controls without opening a
+real desktop window.
+"""
+
 from unittest.mock import MagicMock
 from types import SimpleNamespace
 
 from gui.exportPresenter import ExportResult
 from gui.scheduleNavigationPresenter import (
+    DayStatusView,
     ExamRow,
     MetricsSummaryView,
     MoedSection,
@@ -243,6 +251,30 @@ def test_painted_exam_day_opens_popup_with_bound_date_and_rows() -> None:
     )
 
 
+def test_conflict_day_uses_stronger_calendar_indicator() -> None:
+    module, _ = load_screen_module("scheduleNavigationScreen.py")
+
+    screen = object.__new__(module.ScheduleNavigationScreen)
+    screen._exam_cells = {"2026-01-05": FakeButton()}
+    screen._show_day_popup = MagicMock()
+    screen._current_day_status_by_iso_date = {
+        "2026-01-05": DayStatusView(
+            iso_date="2026-01-05",
+            status="conflict",
+            label="Conflict",
+            exam_count=2,
+            details="Critical conflict.",
+        )
+    }
+
+    screen._paint_exam_days({"2026-01-05": [_exam(), _exam("54321", "Logic")]})
+
+    cell = screen._exam_cells["2026-01-05"]
+    assert cell.options["text"].startswith("!!")
+    assert cell.options["fg_color"] == module._CONFLICT_DAY_COLOR
+    assert cell.options["border_width"] == 1
+
+
 def test_save_cancel_is_neutral_not_red(monkeypatch) -> None:
     module, _ = load_screen_module("scheduleNavigationScreen.py")
 
@@ -271,6 +303,157 @@ def test_save_cancel_is_neutral_not_red(monkeypatch) -> None:
         "text": "Export cancelled.",
         "text_color": "#666666",
     }
+
+
+def test_save_snapshot_action_refreshes_snapshot_controls() -> None:
+    module, _ = load_screen_module("scheduleNavigationScreen.py")
+
+    screen = object.__new__(module.ScheduleNavigationScreen)
+    screen.presenter = MagicMock()
+    screen.presenter.save_snapshot.return_value = SimpleNamespace(
+        success=True,
+        message="Snapshot saved.",
+    )
+    screen._snapshot_name_entry = FakeLabel()
+    screen._snapshot_name_entry.content = "Version A"
+    screen._snapshot_status_label = FakeLabel()
+    screen._refresh_part4_controls = MagicMock()
+
+    screen._handle_save_snapshot()
+
+    screen.presenter.save_snapshot.assert_called_once_with("Version A")
+    assert screen._snapshot_status_label.options["text"] == "Snapshot saved."
+    assert screen._snapshot_status_label.options["text_color"] == module._SUCCESS
+    assert screen._snapshot_name_entry.content == ""
+    screen._refresh_part4_controls.assert_called_once()
+
+
+def test_snapshot_failure_opens_clear_modal_message() -> None:
+    module, fake_ctk = load_screen_module("scheduleNavigationScreen.py")
+
+    class FakeRoot(FakeLabel):
+        def update_idletasks(self):
+            return None
+
+        def winfo_width(self):
+            return 1200
+
+        def winfo_height(self):
+            return 800
+
+        def winfo_rootx(self):
+            return 100
+
+        def winfo_rooty(self):
+            return 80
+
+    screen = object.__new__(module.ScheduleNavigationScreen)
+    screen._snapshot_status_label = FakeLabel()
+    screen.winfo_toplevel = lambda: FakeRoot()
+
+    screen._set_snapshot_status("Snapshot name cannot be empty.", success=False)
+
+    assert screen._snapshot_status_label.options["text_color"] == module._ERROR
+    popup = fake_ctk.CTkToplevel.created[-1]
+    assert popup.title_text == "Snapshot action needs attention"
+    assert popup.geometry_text == "430x190+485+385"
+    assert popup.grabbed is True
+    assert widgets_with_text(
+        fake_ctk.CTkLabel,
+        "Snapshot name cannot be empty.",
+    )
+
+
+def test_part4_empty_snapshot_buttons_start_disabled() -> None:
+    module, fake_ctk = load_screen_module("scheduleNavigationScreen.py")
+
+    view = SystemView(
+        1,
+        1,
+        [],
+        2026,
+        {"2026-01-05": [_exam()]},
+    )
+    presenter = _presenter(view)
+    presenter.snapshot_summaries.return_value = []
+    presenter.manual_move_course_options.return_value = []
+    presenter.manual_move_date_options.return_value = []
+
+    screen = module.ScheduleNavigationScreen(fake_ctk.CTkFrame(), presenter)
+
+    assert screen._load_snapshot_button.options["state"] == "disabled"
+    assert screen._delete_snapshot_button.options["state"] == "disabled"
+    assert screen._compare_snapshot_button.options["state"] == "disabled"
+    assert screen._apply_move_button.options["state"] == "disabled"
+
+
+def test_part4_result_areas_use_readable_labels_not_textboxes() -> None:
+    module, fake_ctk = load_screen_module("scheduleNavigationScreen.py")
+
+    view = SystemView(
+        1,
+        1,
+        [],
+        2026,
+        {"2026-01-05": [_exam()]},
+    )
+
+    screen = module.ScheduleNavigationScreen(fake_ctk.CTkFrame(), _presenter(view))
+
+    assert isinstance(screen._snapshot_compare_box, fake_ctk.CTkLabel)
+    assert isinstance(screen._move_impact_box, fake_ctk.CTkLabel)
+    assert "Comparison results" in screen._snapshot_compare_box.options["text"]
+    assert "Move impact" in screen._move_impact_box.options["text"]
+
+
+def test_apply_move_success_resets_calendar_and_refreshes_screen() -> None:
+    module, _ = load_screen_module("scheduleNavigationScreen.py")
+
+    screen = object.__new__(module.ScheduleNavigationScreen)
+    screen.presenter = MagicMock()
+    screen.presenter.apply_manual_move.return_value = SimpleNamespace(
+        success=True,
+        message="Moved.",
+        details="No issue changes were detected.",
+    )
+    screen._move_course_selector = FakeLabel()
+    screen._move_course_selector.content = "83001 - Algorithms"
+    screen._move_date_selector = FakeLabel()
+    screen._move_date_selector.content = "02-01-2026"
+    screen._move_status_label = FakeLabel()
+    screen._move_impact_box = FakeLabel()
+    screen._reset_calendar_grid = MagicMock()
+    screen._refresh = MagicMock()
+
+    screen._handle_apply_move()
+
+    screen.presenter.apply_manual_move.assert_called_once_with(
+        "83001 - Algorithms",
+        "02-01-2026",
+    )
+    assert screen._move_status_label.options["text"] == "Moved."
+    assert "No issue changes" in screen._move_impact_box.content
+    screen._reset_calendar_grid.assert_called_once()
+    screen._refresh.assert_called_once()
+
+
+def test_manual_move_failure_opens_clear_modal_message() -> None:
+    module, fake_ctk = load_screen_module("scheduleNavigationScreen.py")
+
+    screen = object.__new__(module.ScheduleNavigationScreen)
+    screen._move_status_label = FakeLabel()
+    screen.winfo_toplevel = lambda: FakeLabel()
+
+    screen._set_move_status("Course 83102 appears more than once.", success=False)
+
+    assert screen._move_status_label.options["text_color"] == module._ERROR
+    popup = fake_ctk.CTkToplevel.created[-1]
+    assert popup.title_text == "Manual move needs attention"
+    assert popup.grabbed is True
+    assert widgets_with_text(
+        fake_ctk.CTkLabel,
+        "Course 83102 appears more than once.",
+    )
 
 
 def test_save_success_is_green_and_failure_is_red(monkeypatch) -> None:

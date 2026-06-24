@@ -1,3 +1,10 @@
+"""Analyze how busy each exam day is.
+
+This module is used by the results GUI. It marks each scheduled date as normal,
+busy, overloaded, or conflict so the user can understand the calendar without
+reading the raw schedule data.
+"""
+
 from __future__ import annotations
 
 from collections import defaultdict
@@ -145,11 +152,8 @@ class DayLoadAnalyzer:
     ) -> DayStatus:
         if has_conflict:
             return DayStatus.CONFLICT
-
         if is_overloaded:
             return DayStatus.OVERLOADED
-
         if exam_count > 1:
             return DayStatus.BUSY
-
         return DayStatus.NORMAL

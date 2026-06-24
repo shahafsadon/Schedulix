@@ -1,3 +1,9 @@
+"""Compare two saved schedule snapshots.
+
+The service returns only courses that changed between two versions. It does not
+change either snapshot and it does not touch the exported schedule file.
+"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -9,7 +15,7 @@ from scheduling.scheduleSnapshot import ScheduleSnapshot
 
 @dataclass(frozen=True)
 class ScheduleDiffRow:
-    """One course whose scheduled date changed between two snapshots."""
+    """One course whose scheduled date changed between snapshots."""
 
     course_id: str
     course_name: str
@@ -29,7 +35,7 @@ class SnapshotComparisonResult:
 
 
 class ScheduleDiffService:
-    """Compares two schedule snapshots without changing either one."""
+    """Compares two schedule snapshots without changing them."""
 
     def compare(
         self,

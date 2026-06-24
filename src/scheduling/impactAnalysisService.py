@@ -1,3 +1,9 @@
+"""Compare schedule problems before and after a manual exam move.
+
+The GUI uses this service after a successful move. It explains which problems
+were fixed, which problems are new, and which problems stayed the same.
+"""
+
 from __future__ import annotations
 
 from collections import Counter
@@ -12,7 +18,7 @@ from scheduling.scheduleIntrospection import flatten_exam_system
 
 @dataclass(frozen=True)
 class ScheduleIssue:
-    """One validation issue shown to the user after a manual move."""
+    """One validation issue shown after a manual move."""
 
     issue_key: tuple[str, ...]
     requirement_id: str
@@ -153,6 +159,7 @@ class ImpactAnalysisService:
 def _active_max_exams_per_day(
     settings: SchedulingConstraintSettings | None,
 ) -> int | None:
+    """Return active max exams per day, when enabled."""
     if settings is None:
         return None
 

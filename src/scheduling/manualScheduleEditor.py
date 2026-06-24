@@ -1,3 +1,10 @@
+"""Apply one safe manual exam move.
+
+The editor never changes the original schedule directly. It creates a copied
+schedule, moves one course exam, validates the result, and returns a clear
+success or failure object for the GUI.
+"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -25,7 +32,7 @@ class ManualMoveResult:
 
 
 class ManualScheduleEditor:
-    """Moves one exam date on a copied schedule and validates the result."""
+    """Moves one exam date on a copied schedule and validates it."""
 
     def __init__(
         self,

@@ -1,3 +1,10 @@
+"""Small helpers for reading and copying ExamSystem objects.
+
+Several Part 4 services need to find a course inside a schedule. These helpers
+keep that traversal in one place so snapshot, diff, and manual-move code do not
+repeat the same loops.
+"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -19,7 +26,7 @@ class ScheduledExamLocation:
 
     @property
     def course_id(self) -> str:
-        """Return the course identifier used by files and commands."""
+        """Return the course id used by files and GUI controls."""
         return self.exam.course.course_number
 
     @property
@@ -34,7 +41,7 @@ class ScheduledExamLocation:
 
 
 def flatten_exam_system(exam_system: ExamSystem) -> list[ScheduledExamLocation]:
-    """Return every scheduled exam with its exact position in the system."""
+    """Return every scheduled exam with its position in the system."""
     locations: list[ScheduledExamLocation] = []
 
     for period_index, period_schedule in enumerate(exam_system.period_schedules):
@@ -54,12 +61,10 @@ def flatten_exam_system(exam_system: ExamSystem) -> list[ScheduledExamLocation]:
 
 def course_date_index(exam_system: ExamSystem) -> dict[str, ScheduledExamLocation]:
     """Map each course id to its scheduled exam location."""
-    index: dict[str, ScheduledExamLocation] = {}
-
-    for location in flatten_exam_system(exam_system):
-        index[location.course_id] = location
-
-    return index
+    return {
+        location.course_id: location
+        for location in flatten_exam_system(exam_system)
+    }
 
 
 def clone_exam_system_with_move(

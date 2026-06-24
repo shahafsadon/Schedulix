@@ -1,3 +1,9 @@
+"""Create a short quality label for a schedule.
+
+The GUI uses this small helper for snapshot labels. It keeps the quality text
+simple: excellent, acceptable, weak, or unknown.
+"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -34,8 +40,7 @@ class QualityTagCalculator:
                 explanation="No metrics or penalty score are available.",
             )
 
-        score = self._metric_penalty(metrics)
-        return self._from_penalty(score)
+        return self._from_penalty(self._metric_penalty(metrics))
 
     @staticmethod
     def _from_penalty(penalty_score: float) -> QualityTagResult:
