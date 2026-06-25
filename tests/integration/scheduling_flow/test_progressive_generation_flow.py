@@ -6,7 +6,11 @@ from pathlib import Path
 import pytest
 
 from application.cache_manager import CacheManager
-from constraint_settings import SchedulingConstraintSettings
+from constraint_settings import (
+    SchedulingConstraintSettings,
+    ThresholdConstraintSetting,
+    ThresholdConstraintType,
+)
 from models import Course, ExamPeriod, ProgramEnrollment
 from ranking_settings import RankingSettings
 from scheduling.progressiveGeneration import (
@@ -130,3 +134,61 @@ def test_progressive_service_preserves_existing_full_ranking_order_when_not_limi
     assert _scheduled_dates(progressive_final.ranked_schedules) == _scheduled_dates(
         full_ranked
     )
+
+
+def test_progressive_service_returns_fallback_when_only_soft_constraints_fail(
+    cache_factory,
+) -> None:
+    cache = cache_factory()
+    cache.set_courses(
+        [
+            Course(
+                name="Algorithms",
+                course_number="83101",
+                instructor="Dr. Test",
+                programs=[ProgramEnrollment("83101", 1, "FALL", "Obligatory")],
+                evaluation_type="Exam",
+            ),
+            Course(
+                name="Data Structures",
+                course_number="83102",
+                instructor="Dr. Test",
+                programs=[ProgramEnrollment("83101", 1, "FALL", "Obligatory")],
+                evaluation_type="Exam",
+            ),
+        ]
+    )
+    cache.set_exam_periods(
+        [
+            ExamPeriod(
+                semester="FALL",
+                moed="Aleph",
+                start_date=date(2026, 1, 1),
+                end_date=date(2026, 1, 2),
+                excluded_dates=[],
+            )
+        ]
+    )
+    settings = SchedulingConstraintSettings.default_configuration()
+    settings.constraints[ThresholdConstraintType.mandatory_gap_days] = (
+        ThresholdConstraintSetting(enabled=True, k=10)
+    )
+    cache.set_constraint_settings(settings)
+
+    final = SchedulingService().run_progressive(
+        cache,
+        options=ProgressiveGenerationOptions(
+            batch_size=1,
+            display_limit=5,
+            min_update_interval_seconds=0,
+        ),
+    )
+
+    assert final.state == ProgressiveResultState.COMPLETE
+    assert final.is_fallback is True
+    assert final.ranked_schedules
+    assert final.ranked_schedules[0].is_fallback is True
+    assert final.ranked_schedules[0].penalty_score == 50.0
+    assert final.ranked_schedules[0].penalty_details
+    assert cache.get_ranked_schedules() == final.ranked_schedules
+    assert "fallback" in final.message.lower()
