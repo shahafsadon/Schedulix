@@ -876,7 +876,10 @@ class ScheduleNavigationPresenter:
             "",
         ]
         if comparison.penalty_delta is not None:
-            lines.append(f"Penalty delta: {comparison.penalty_delta:g}")
+            lines.append(
+                "Penalty score delta "
+                f"(second - first; lower is better): {comparison.penalty_delta:+g}"
+            )
             lines.append("")
 
         if not comparison.changed_courses:

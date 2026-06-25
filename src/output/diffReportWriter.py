@@ -84,7 +84,10 @@ class DiffReportWriter:
         lines.append(f"  {result.first_name}: {fmt_p(first_p)}")
         lines.append(f"  {result.second_name}: {fmt_p(second_p)}")
 
-        lines.append(f"Penalty delta: {fmt_p(result.penalty_delta)}")
+        lines.append(
+            "Penalty score delta (second - first; lower is better): "
+            f"{fmt_p(result.penalty_delta)}"
+        )
 
         return lines
 

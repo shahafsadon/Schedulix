@@ -773,9 +773,11 @@ class SchedulingService:
         score_text = "unknown" if score is None else f"{score:g}"
         violation_count = len(ranked_system.penalty_details)
         return (
-            "No schedule satisfied all enabled preferences. Showing the best "
-            f"hard-valid fallback schedule with penalty score {score_text} "
-            f"and {violation_count} soft violation(s)."
+            "Fallback schedule: no schedule satisfied all enabled soft "
+            "preferences. Showing the best available schedule that still "
+            "respects hard constraints, with soft-constraint penalty score "
+            f"{score_text} and "
+            f"{violation_count} violation(s)."
         )
 
     def _next_run_id(self) -> int:

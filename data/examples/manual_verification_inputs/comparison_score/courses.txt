@@ -1,0 +1,24 @@
+$$$$
+Algorithms
+83101
+Dr. Test
+83101,1,FALL,Obligatory
+Exam
+$$$$
+Data Structures
+83102
+Dr. Test
+83101,1,FALL,Obligatory
+Exam
+$$$$
+Linear Algebra
+83103
+Dr. Test
+83101,1,FALL,Elective
+Exam
+$$$$
+Operating Systems
+83104
+Dr. Test
+83101,1,FALL,Elective
+Exam
