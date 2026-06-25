@@ -1309,8 +1309,9 @@ class ScheduleNavigationScreen(ctk.CTkFrame):
             details = "No soft-constraint details are available."
 
         msg = (
-            "Fallback schedule: no fully preference-valid schedule was found. "
-            f"Penalty score {score_text}. {details}"
+            "Fallback schedule: no schedule satisfied all enabled soft "
+            "preferences. Hard constraints are still respected. "
+            f"Soft-constraint penalty score {score_text}. {details}"
         )
         self._status_banner.configure(fg_color=_BANNER_FALLBACK_BG)
         self._status_seen_label.configure(

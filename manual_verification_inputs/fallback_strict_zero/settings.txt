@@ -1,0 +1,2 @@
+mandatory_gap_days = on, 10
+ranking: min_mandatory_gap

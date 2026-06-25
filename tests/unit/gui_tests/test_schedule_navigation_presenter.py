@@ -810,7 +810,8 @@ class ScheduleNavigationPresenterPart4Tests(unittest.TestCase):
 
         comparison = presenter.compare_snapshots("first", "second")
         self.assertTrue(comparison.success)
-        self.assertIn("Penalty delta: -40", comparison.details)
+        self.assertIn("Penalty score delta", comparison.details)
+        self.assertIn("-40", comparison.details)
         self.assertIn("No changed courses.", comparison.details)
 
     def test_manual_move_undo_and_redo_update_visible_schedule(self) -> None:

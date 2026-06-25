@@ -61,7 +61,8 @@ def test_diff_report_writer_with_metrics_in_both_snapshots() -> None:
     assert "Penalty score:" in text
     assert "  A: 100.5" in text
     assert "  B: 95" in text
-    assert "Penalty delta: -5.5" in text
+    assert "Penalty score delta" in text
+    assert "-5.5" in text
 
 
 def test_diff_report_writer_missing_quality_tag_on_one_side() -> None:
@@ -84,7 +85,8 @@ def test_diff_report_writer_missing_penalty_scores() -> None:
 
     assert "  A: n/a" in text
     assert "  B: n/a" in text
-    assert "Penalty delta: n/a" in text
+    assert "Penalty score delta" in text
+    assert "n/a" in text
 
 
 def test_diff_report_writer_course_added() -> None:
