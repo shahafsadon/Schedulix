@@ -80,6 +80,8 @@ _BANNER_PARTIAL_BG = ("#FEF3C7", "#3B2800")
 _BANNER_PARTIAL_TEXT = ("#92400E", "#FDE68A")
 _BANNER_FINAL_BG = ("#D1FAE5", "#052E16")
 _BANNER_FINAL_TEXT = ("#065F46", "#6EE7B7")
+_BANNER_FALLBACK_BG = ("#FFE4E6", "#3F1117")
+_BANNER_FALLBACK_TEXT = ("#9F1239", "#FDA4AF")
 
 _RANKING_LABELS: dict[RankingCriterion, str] = {
     RankingCriterion.min_mandatory_gap: "Min mandatory gap (descending)",
@@ -1296,6 +1298,31 @@ class ScheduleNavigationScreen(ctk.CTkFrame):
                 row=2, column=0, columnspan=2, sticky="ew", pady=(6, 2)
             )
 
+    def _update_fallback_banner(self, view) -> None:
+        """Show the fallback warning with score and soft-violation details."""
+        score = view.penalty_score
+        score_text = "unknown" if score is None else f"{score:g}"
+        details = "; ".join(view.penalty_details[:3])
+        if view.penalty_details and len(view.penalty_details) > 3:
+            details += f"; +{len(view.penalty_details) - 3} more"
+        if not details:
+            details = "No soft-constraint details are available."
+
+        msg = (
+            "Fallback schedule: no fully preference-valid schedule was found. "
+            f"Penalty score {score_text}. {details}"
+        )
+        self._status_banner.configure(fg_color=_BANNER_FALLBACK_BG)
+        self._status_seen_label.configure(
+            text=msg,
+            text_color=_BANNER_FALLBACK_TEXT,
+        )
+
+        if not self._status_banner.winfo_ismapped():
+            self._status_banner.grid(
+                row=2, column=0, columnspan=2, sticky="ew", pady=(6, 2)
+            )
+
     def _refresh(self) -> None:
         """Refresh counter, metrics, calendar highlights, and detail panes."""
         view = self.presenter.current_view()
@@ -1346,10 +1373,13 @@ class ScheduleNavigationScreen(ctk.CTkFrame):
         should_show_banner = (
             getattr(self.presenter, "is_partial", False) is True
             or mode == ResultMode.FINAL_RANKED
+            or view.is_fallback
         )
         if self._status_banner.winfo_ismapped() and not should_show_banner:
             self._status_banner.grid_forget()
-        if should_show_banner and not self._status_banner.winfo_ismapped():
+        if view.is_fallback:
+            self._update_fallback_banner(view)
+        elif should_show_banner and not self._status_banner.winfo_ismapped():
             raw_systems_seen = getattr(self.presenter, "systems_seen", 0)
             raw_displayed_count = getattr(self.presenter, "displayed_count", 0)
             systems_seen = (

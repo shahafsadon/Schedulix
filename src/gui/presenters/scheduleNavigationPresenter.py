@@ -33,6 +33,7 @@ from scheduling.rankedResultsBuffer import RankedResultsBuffer
 from scheduling.scheduleDiffService import ScheduleDiffService
 from scheduling.scheduleIntrospection import flatten_exam_system
 from scheduling.scheduleMetricsCalculator import ScheduleMetricsCalculator
+from scheduling.schedulePenaltyScorer import SchedulePenaltyScorer
 from scheduling.scheduleSnapshot import ScheduleSnapshot, SnapshotManager
 from scheduling.scheduleRankingService import ScheduleRankingService
 
@@ -183,6 +184,9 @@ class SystemView:
     metrics_summary: MetricsSummaryView | None = None
     day_status_by_iso_date: dict[str, DayStatusView] = field(default_factory=dict)
     quality_tag: str | None = None
+    is_fallback: bool = False
+    penalty_score: float | None = None
+    penalty_details: tuple[str, ...] = ()
 
 
 # Date format required by the output specification (DD-MM-YYYY).
@@ -238,6 +242,7 @@ class ScheduleNavigationPresenter:
         self._diff_service = ScheduleDiffService()
         self._quality_calculator = QualityTagCalculator()
         self._metrics_calculator = ScheduleMetricsCalculator()
+        self._penalty_scorer = SchedulePenaltyScorer()
         self._undo_redo = UndoRedoManager()
 
         current = self.current_system()
@@ -445,6 +450,9 @@ class ScheduleNavigationPresenter:
             metrics_summary=self._current_metrics_summary(),
             day_status_by_iso_date=self._day_status_views(system),
             quality_tag=self._current_quality_tag(),
+            is_fallback=self._current_is_fallback(),
+            penalty_score=self._current_penalty_score(),
+            penalty_details=self._current_penalty_details(),
         )
 
     def current_system(self) -> ExamSystem | None:
@@ -529,7 +537,7 @@ class ScheduleNavigationPresenter:
             snapshot = self._snapshot_manager.save_current(
                 name,
                 quality_tag=quality.tag,
-                penalty_score=quality.penalty_score,
+                penalty_score=self._current_penalty_score(),
             )
         except (KeyError, ValueError) as error:
             return GuiActionResult(False, str(error))
@@ -686,6 +694,8 @@ class ScheduleNavigationPresenter:
                 ranked,
                 exam_system=schedule,
                 metrics=updated_metrics,
+                penalty_score=self._penalty_score_for_system(schedule),
+                penalty_details=self._penalty_details_for_system(schedule),
             )
             metrics = updated_metrics
 
@@ -771,6 +781,47 @@ class ScheduleNavigationPresenter:
             return None
         return self._quality_calculator.calculate(metrics).tag
 
+    def _current_is_fallback(self) -> bool:
+        """Return True when the current ranked schedule is a fallback."""
+        ranked = self.current_ranked_system()
+        return bool(ranked is not None and ranked.is_fallback)
+
+    def _current_penalty_score(self) -> float | None:
+        """Return the stored or freshly calculated soft-constraint penalty."""
+        ranked = self.current_ranked_system()
+        if ranked is not None and ranked.penalty_score is not None:
+            return ranked.penalty_score
+
+        system = self.current_system()
+        if system is None:
+            return None
+        return self._penalty_score_for_system(system)
+
+    def _current_penalty_details(self) -> tuple[str, ...]:
+        """Return readable penalty details for the current fallback schedule."""
+        ranked = self.current_ranked_system()
+        if ranked is not None and ranked.penalty_details:
+            return ranked.penalty_details
+
+        system = self.current_system()
+        if system is None:
+            return ()
+        return self._penalty_details_for_system(system)
+
+    def _penalty_score_for_system(self, system: ExamSystem) -> float:
+        """Calculate the soft-constraint penalty for ``system``."""
+        return self._penalty_scorer.score(
+            system,
+            self._constraint_settings(),
+        ).total_score
+
+    def _penalty_details_for_system(self, system: ExamSystem) -> tuple[str, ...]:
+        """Calculate display-ready soft-constraint violations for ``system``."""
+        return self._penalty_scorer.score(
+            system,
+            self._constraint_settings(),
+        ).details
+
     def _available_dates_for_course(self, course_id: str) -> set[date]:
         """Return allowed dates for the course's current exam period."""
         system = self.current_system()
@@ -820,26 +871,26 @@ class ScheduleNavigationPresenter:
     @staticmethod
     def _comparison_lines(comparison) -> list[str]:
         """Format snapshot diff rows for a small GUI text panel."""
-        if not comparison.changed_courses:
-            return ["No changed courses."]
-
         lines = [
             f"{comparison.first_name} -> {comparison.second_name}",
             "",
         ]
-        for row in comparison.changed_courses:
-            lines.append(
-                (
-                    f"{row.course_id} - {row.course_name}: "
-                    f"{_format_optional_date(row.old_date)} -> "
-                    f"{_format_optional_date(row.new_date)} "
-                    f"({row.change_type})"
-                )
-            )
-
         if comparison.penalty_delta is not None:
-            lines.append("")
             lines.append(f"Penalty delta: {comparison.penalty_delta:g}")
+            lines.append("")
+
+        if not comparison.changed_courses:
+            lines.append("No changed courses.")
+        else:
+            for row in comparison.changed_courses:
+                lines.append(
+                    (
+                        f"{row.course_id} - {row.course_name}: "
+                        f"{_format_optional_date(row.old_date)} -> "
+                        f"{_format_optional_date(row.new_date)} "
+                        f"({row.change_type})"
+                    )
+                )
 
         return lines
 

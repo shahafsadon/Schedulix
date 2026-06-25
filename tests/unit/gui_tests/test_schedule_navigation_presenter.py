@@ -69,6 +69,9 @@ def make_ranked(
     elective_collisions=0,
     mandatory_span=0,
     max_exams_per_day=1,
+    penalty_score=None,
+    penalty_details=(),
+    is_fallback=False,
 ):
     """Wrap an ExamSystem with simple metrics for navigation tests."""
     return RankedExamSystem(
@@ -82,6 +85,9 @@ def make_ranked(
             max_exams_per_day=max_exams_per_day,
         ),
         key=key,
+        penalty_score=penalty_score,
+        penalty_details=penalty_details,
+        is_fallback=is_fallback,
     )
 
 
@@ -764,6 +770,48 @@ class ScheduleNavigationPresenterPart4Tests(unittest.TestCase):
         load = presenter.load_snapshot("base")
         self.assertTrue(load.success)
         self.assertIn("2026-01-01", presenter.current_view().exams_by_iso_date)
+
+    def test_snapshot_save_stores_ranked_penalty_score(self) -> None:
+        """Fallback-ranked schedules persist their real penalty score."""
+        system = make_system(
+            exams=[make_exam("Algorithms", "83001", date(2026, 1, 1))]
+        )
+        ranked = make_ranked(
+            system,
+            key=1,
+            penalty_score=50.0,
+            penalty_details=("REQ-2: gap violation (penalty 50)",),
+            is_fallback=True,
+        )
+        presenter = ScheduleNavigationPresenter([ranked])
+
+        view = presenter.current_view()
+        self.assertTrue(view.is_fallback)
+        self.assertEqual(view.penalty_score, 50.0)
+        self.assertTrue(presenter.save_snapshot("fallback").success)
+
+        snapshot = presenter._snapshot_by_name("fallback")
+        self.assertEqual(snapshot.penalty_score, 50.0)
+
+    def test_compare_snapshots_reports_penalty_delta_without_date_changes(self) -> None:
+        """Score-only differences should still appear in comparison output."""
+        system = make_system(
+            exams=[make_exam("Algorithms", "83001", date(2026, 1, 1))]
+        )
+        presenter = ScheduleNavigationPresenter(
+            [make_ranked(system, key=1, penalty_score=50.0)]
+        )
+
+        self.assertTrue(presenter.save_snapshot("first").success)
+        presenter.apply_ranked_schedules(
+            [make_ranked(system, key=1, penalty_score=10.0)]
+        )
+        self.assertTrue(presenter.save_snapshot("second").success)
+
+        comparison = presenter.compare_snapshots("first", "second")
+        self.assertTrue(comparison.success)
+        self.assertIn("Penalty delta: -40", comparison.details)
+        self.assertIn("No changed courses.", comparison.details)
 
     def test_manual_move_undo_and_redo_update_visible_schedule(self) -> None:
         """Undo and redo change only the active visible schedule."""
