@@ -224,7 +224,10 @@ class ScheduleNavigationPresenter:
 
         self._replace_schedules(schedules)
         self._result_mode = self._normalize_result_mode(result_mode, schedules)
-        self._generated_schedules = list(self._schedules)
+        # Keep one source list until a ranking action creates a different
+        # display order. The old full-generation path can contain many systems,
+        # so an eager duplicate here would waste memory for no user benefit.
+        self._generated_schedules = self._schedules
 
         # Start on the first system; stays at 0 when there are no systems.
         self._index = 0
@@ -306,8 +309,9 @@ class ScheduleNavigationPresenter:
             systems_seen:    How many systems the generator has produced so far.
             displayed_count: How many systems are in ``new_schedules``.
         """
-        # Auto-apply the active ranking to the incoming batch so live updates
-        # honour the user's chosen sort order immediately (SCRUM-183).
+        # The presenter accepts both raw legacy schedules and ranked updates
+        # supplied by callers. Reapplying the active order keeps that boundary
+        # deterministic; the list is bounded to the live preview size.
         if self._active_ranking.priority_list and new_schedules:
             service = ScheduleRankingService()
             try:
@@ -597,35 +601,33 @@ class ScheduleNavigationPresenter:
         )
 
     def manual_move_course_options(self) -> list[str]:
-        """Return current schedule courses for the move selector."""
+        """Return current course-period exams for the move selector."""
         system = self.current_system()
         if system is None:
             return []
 
-        rows = []
-        for location in flatten_exam_system(system):
-            rows.append(
-                (
-                    location.course_id,
-                    location.course_name,
-                    location.exam_date,
-                )
-            )
-
         return [
-            f"{course_id} - {course_name} ({exam_date.strftime(_DATE_FORMAT)})"
-            for course_id, course_name, exam_date in sorted(rows)
+            self._manual_move_option_label(location)
+            for location in sorted(
+                flatten_exam_system(system),
+                key=lambda item: (
+                    item.course_id,
+                    item.semester,
+                    item.moed,
+                    item.exam_date,
+                ),
+            )
         ]
 
     def manual_move_date_options(self, course_label: str) -> list[str]:
-        """Return valid target dates for the selected course."""
-        course_id = self._course_id_from_label(course_label)
-        if course_id is None:
+        """Return valid target dates for the selected course-period exam."""
+        location = self._manual_move_target_from_label(course_label)
+        if location is None:
             return []
 
         return [
             item.strftime(_DATE_FORMAT)
-            for item in sorted(self._available_dates_for_course(course_id))
+            for item in sorted(self._available_dates_for_location(location))
         ]
 
     def apply_manual_move(
@@ -638,17 +640,20 @@ class ScheduleNavigationPresenter:
         if system is None:
             return GuiActionResult(False, "No schedule is available to edit.")
 
-        course_id = self._course_id_from_label(course_label)
-        if course_id is None:
+        location = self._manual_move_target_from_label(course_label)
+        if location is None:
             return GuiActionResult(False, "Choose a course before applying a move.")
 
         command = ScheduleModificationCommand(
             schedule_getter=self._required_current_system,
             schedule_setter=self._replace_current_schedule,
-            course_id=course_id,
+            course_id=location.course_id,
             new_date=target_date_text,
+            source_semester=location.semester,
+            source_moed=location.moed,
+            source_date=location.exam_date,
             constraint_settings=self._constraint_settings(),
-            available_dates=self._available_dates_for_course(course_id),
+            available_dates=self._available_dates_for_location(location),
         )
         result = self._undo_redo.execute(command)
         if not result.success:
@@ -823,7 +828,12 @@ class ScheduleNavigationPresenter:
         ).details
 
     def _available_dates_for_course(self, course_id: str) -> set[date]:
-        """Return allowed dates for the course's current exam period."""
+        """Return dates for the first matching course-period exam.
+
+        New GUI code uses ``_available_dates_for_location`` so a course that
+        appears in Aleph and Bet stays unambiguous. This helper remains for
+        older callers that only know a course id.
+        """
         system = self.current_system()
         if system is None:
             return set()
@@ -839,6 +849,10 @@ class ScheduleNavigationPresenter:
         if location is None:
             return set()
 
+        return self._available_dates_for_location(location)
+
+    def _available_dates_for_location(self, location) -> set[date]:
+        """Return allowed dates for one exact semester and moed."""
         dates: set[date] = {location.exam_date}
         if self._cache is None:
             return dates
@@ -861,12 +875,28 @@ class ScheduleNavigationPresenter:
         return dates
 
     @staticmethod
-    def _course_id_from_label(course_label: str) -> str | None:
-        """Extract the course id from the option-menu label."""
+    def _manual_move_option_label(location) -> str:
+        """Build one clear GUI label for a course-period exam."""
+        return (
+            f"{location.course_id} - {location.course_name} "
+            f"({location.semester} {location.moed}, "
+            f"{location.exam_date.strftime(_DATE_FORMAT)})"
+        )
+
+    def _manual_move_target_from_label(self, course_label: str):
+        """Return the exact exam selected in the manual-move control."""
         text = course_label.strip()
         if not text or text == _EMPTY_OPTION:
             return None
-        return text.split(" - ", 1)[0].strip()
+
+        system = self.current_system()
+        if system is None:
+            return None
+
+        for location in flatten_exam_system(system):
+            if self._manual_move_option_label(location) == text:
+                return location
+        return None
 
     @staticmethod
     def _comparison_lines(comparison) -> list[str]:
@@ -889,6 +919,7 @@ class ScheduleNavigationPresenter:
                 lines.append(
                     (
                         f"{row.course_id} - {row.course_name}: "
+                        f"{row.semester} {row.moed}, "
                         f"{_format_optional_date(row.old_date)} -> "
                         f"{_format_optional_date(row.new_date)} "
                         f"({row.change_type})"
@@ -1134,10 +1165,10 @@ class ScheduleNavigationPresenter:
         self._schedules = list(schedules)
 
     def _ranking_source_schedules(self) -> list[ExamSystem]:
-        """Return the full generated set that Apply Ranking should process."""
+        """Return the generated schedules without making an extra full copy."""
         if self._generated_schedules:
-            return list(self._generated_schedules)
-        return list(self._schedules)
+            return self._generated_schedules
+        return self._schedules
 
     def _restore_or_reset_index(
         self,

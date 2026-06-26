@@ -349,62 +349,31 @@ class ExamScheduleGenerator:
 
             return
 
-        period_options: list[
-            list[ExamSchedule]
-        ] = []
+        period_date_sets = [
+            set(self.date_handler.get_valid_dates(exam_period))
+            for exam_period in relevant_periods
+        ]
 
-        period_date_sets: list[
-            set[date]
-        ] = []
-
-        for exam_period in relevant_periods:
-            # Period options are still materialized per period for the
-            # multi-period Cartesian product.  Complete exam systems, however,
-            # are yielded lazily instead of accumulated in one large list.
-            schedules = list(
-                self.iter_for_period(
-                    courses,
-                    exam_period,
-                )
+        if self._date_sets_are_pairwise_disjoint(period_date_sets):
+            # The normal Aleph/Bet/Spring periods do not overlap. Stream one
+            # option from each period before continuing, so the first complete
+            # schedule reaches the progressive GUI without waiting for every
+            # period option to be materialized.
+            yield from self._iter_disjoint_period_systems(
+                courses,
+                relevant_periods,
             )
-
-            if not schedules:
-                # If one relevant period has no valid options, no complete exam
-                # system can exist.
-                return
-
-            period_options.append(
-                schedules
-            )
-
-            period_date_sets.append(
-                set(
-                    self.date_handler.get_valid_dates(
-                        exam_period
-                    )
-                )
-            )
-
-        if self._date_sets_are_pairwise_disjoint(
-            period_date_sets
-        ):
-            # Fast path: disjoint date sets cannot create same-date conflicts
-            # across periods, so a lazy Cartesian product is enough.
-            for combination in product(
-                *period_options
-            ):
-                exam_system = ExamSystem(
-                    period_schedules=list(
-                        combination
-                    )
-                )
-
-                if self._is_valid_complete_system(
-                    exam_system
-                ):
-                    yield exam_system
-
             return
+
+        period_options: list[list[ExamSchedule]] = []
+        for exam_period in relevant_periods:
+            # Overlapping periods need incremental cross-period conflict checks.
+            # This compatibility path retains per-period options, while complete
+            # ExamSystem objects are still yielded one by one below.
+            schedules = list(self.iter_for_period(courses, exam_period))
+            if not schedules:
+                return
+            period_options.append(schedules)
 
         occupancy: dict[
             date,
@@ -446,6 +415,61 @@ class ExamScheduleGenerator:
             exam_counts_by_date=exam_counts_by_date,
             profile_cache=profile_cache,
         )
+
+    def _iter_disjoint_period_systems(
+        self,
+        courses: list[Course],
+        exam_periods: list[ExamPeriod],
+    ) -> Iterator[ExamSystem]:
+        """Yield disjoint-period combinations without a full upfront preload.
+
+        Each period keeps the options already seen because a future option must
+        still combine with earlier options from the other periods. The method
+        intentionally avoids building all period lists before its first yield.
+        Every combination is emitted exactly once: when its newest option enters
+        one of the small per-period pools.
+        """
+        iterators = [
+            iter(self.iter_for_period(courses, exam_period))
+            for exam_period in exam_periods
+        ]
+        pools: list[list[ExamSchedule]] = [[] for _ in iterators]
+
+        # Read just the first valid option from each period. This both detects
+        # impossible periods early and gives the GUI its first complete system.
+        for index, iterator in enumerate(iterators):
+            try:
+                pools[index].append(next(iterator))
+            except StopIteration:
+                return
+
+        initial = ExamSystem(period_schedules=[pool[0] for pool in pools])
+        if self._is_valid_complete_system(initial):
+            yield initial
+
+        exhausted = [False] * len(iterators)
+        while not all(exhausted):
+            for index, iterator in enumerate(iterators):
+                if exhausted[index]:
+                    continue
+
+                try:
+                    option = next(iterator)
+                except StopIteration:
+                    exhausted[index] = True
+                    continue
+
+                pools[index].append(option)
+                combinations = product(
+                    *(
+                        [option] if pool_index == index else pool
+                        for pool_index, pool in enumerate(pools)
+                    )
+                )
+                for combination in combinations:
+                    exam_system = ExamSystem(period_schedules=list(combination))
+                    if self._is_valid_complete_system(exam_system):
+                        yield exam_system
 
     def _iter_period_schedules(
         self,

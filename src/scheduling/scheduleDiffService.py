@@ -9,16 +9,18 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date
 
-from scheduling.scheduleIntrospection import course_date_index
+from scheduling.scheduleIntrospection import exam_instance_index
 from scheduling.scheduleSnapshot import ScheduleSnapshot
 
 
 @dataclass(frozen=True)
 class ScheduleDiffRow:
-    """One course whose scheduled date changed between snapshots."""
+    """One course-period exam whose scheduled date changed between snapshots."""
 
     course_id: str
     course_name: str
+    semester: str
+    moed: str
     old_date: date | None
     new_date: date | None
     change_type: str
@@ -42,20 +44,23 @@ class ScheduleDiffService:
         first: ScheduleSnapshot,
         second: ScheduleSnapshot,
     ) -> SnapshotComparisonResult:
-        """Return only courses that were added, removed, or moved."""
-        first_index = course_date_index(first.schedule)
-        second_index = course_date_index(second.schedule)
+        """Return only course-period exams that were added, removed, or moved."""
+        first_index = exam_instance_index(first.schedule)
+        second_index = exam_instance_index(second.schedule)
         rows: list[ScheduleDiffRow] = []
 
-        for course_id in sorted(set(first_index) | set(second_index)):
-            first_location = first_index.get(course_id)
-            second_location = second_index.get(course_id)
+        for instance_key in sorted(set(first_index) | set(second_index)):
+            first_location = first_index.get(instance_key)
+            second_location = second_index.get(instance_key)
+            course_id, semester, moed = instance_key
 
             if first_location is None and second_location is not None:
                 rows.append(
                     ScheduleDiffRow(
                         course_id=course_id,
                         course_name=second_location.course_name,
+                        semester=semester,
+                        moed=moed,
                         old_date=None,
                         new_date=second_location.exam_date,
                         change_type="added",
@@ -68,6 +73,8 @@ class ScheduleDiffService:
                     ScheduleDiffRow(
                         course_id=course_id,
                         course_name=first_location.course_name,
+                        semester=semester,
+                        moed=moed,
                         old_date=first_location.exam_date,
                         new_date=None,
                         change_type="removed",
@@ -84,6 +91,8 @@ class ScheduleDiffService:
                     ScheduleDiffRow(
                         course_id=course_id,
                         course_name=second_location.course_name,
+                        semester=semester,
+                        moed=moed,
                         old_date=first_location.exam_date,
                         new_date=second_location.exam_date,
                         change_type="moved",

@@ -34,7 +34,7 @@ import pickle
 from pathlib import Path
 
 from constraint_settings import SchedulingConstraintSettings
-from models import Course, ExamPeriod
+from models import Course, ExamPeriod, ProgramEnrollment
 from ranking_settings import RankedExamSystem, RankingSettings
 from scheduling.examScheduleGenerator import ExamSystem
 
@@ -198,12 +198,14 @@ class CacheManager:
             # Current v3 file.
             if loaded.sentinel == _SENTINEL:
                 self._ensure_current_state_shape(loaded)
+                self._repair_duplicated_courses(loaded, pkl_path)
                 self._invalidate_unsafe_derived_state(loaded, pkl_path)
                 return loaded
 
             # Old v2 file: sentinel is the legacy string.
             if loaded.sentinel == _SENTINEL_V2:
                 self._migrate_v2_to_v3(loaded)
+                self._repair_duplicated_courses(loaded, pkl_path)
                 self._invalidate_unsafe_derived_state(loaded, pkl_path)
                 return loaded
 
@@ -249,6 +251,105 @@ class CacheManager:
             )
         if not hasattr(state, "ranking_settings"):
             state.ranking_settings = RankingSettings(priority_list=[])
+
+    @classmethod
+    def _repair_duplicated_courses(
+        cls,
+        state: _CacheState,
+        pkl_path: Path,
+    ) -> None:
+        """Repair exact duplicate courses saved by older GUI sessions.
+
+        A repeated append upload used to save the same course more than once.
+        Exact duplicates are safe to merge. Conflicting records are kept so
+        the scheduling validation can report the bad input instead of losing
+        information silently.
+        """
+        try:
+            normalized_courses = cls._normalize_courses(state.courses)
+        except ValueError as error:
+            logger.warning(
+                "Could not normalize courses in cache file %s: %s.",
+                pkl_path,
+                error,
+            )
+            return
+
+        if normalized_courses == state.courses:
+            return
+
+        state.courses = normalized_courses
+        try:
+            with pkl_path.open("wb") as fh:
+                pickle.dump(state, fh)
+        except OSError as error:
+            logger.warning(
+                "Could not persist repaired courses to cache file %s: %s.",
+                pkl_path,
+                error,
+            )
+
+    @staticmethod
+    def _normalize_courses(courses: list[Course]) -> list[Course]:
+        """Return one merged course record for every course number.
+
+        Repeated uploads may contain the same course with the same basic
+        details. Their program rows are combined, while conflicting course
+        details are rejected because the correct record is unknown.
+        """
+        normalized: dict[str, Course] = {}
+        enrollment_keys: dict[str, set[tuple[str, int, str, str]]] = {}
+
+        for course in courses:
+            existing = normalized.get(course.course_number)
+            if existing is None:
+                copied_programs = list(course.programs)
+                normalized[course.course_number] = Course(
+                    name=course.name,
+                    course_number=course.course_number,
+                    instructor=course.instructor,
+                    programs=copied_programs,
+                    evaluation_type=course.evaluation_type,
+                )
+                enrollment_keys[course.course_number] = {
+                    CacheManager._enrollment_key(program)
+                    for program in copied_programs
+                }
+                continue
+
+            if not CacheManager._same_course_details(existing, course):
+                raise ValueError(
+                    "Course number "
+                    f"{course.course_number!r} has conflicting course details."
+                )
+
+            known_keys = enrollment_keys[course.course_number]
+            for program in course.programs:
+                key = CacheManager._enrollment_key(program)
+                if key not in known_keys:
+                    existing.programs.append(program)
+                    known_keys.add(key)
+
+        return list(normalized.values())
+
+    @staticmethod
+    def _same_course_details(first: Course, second: Course) -> bool:
+        """Return True when two records describe the same course."""
+        return (
+            first.name == second.name
+            and first.instructor == second.instructor
+            and first.evaluation_type == second.evaluation_type
+        )
+
+    @staticmethod
+    def _enrollment_key(program: ProgramEnrollment) -> tuple[str, int, str, str]:
+        """Return the fields that make one program enrollment unique."""
+        return (
+            program.program_number,
+            program.year,
+            program.semester,
+            program.status,
+        )
 
     @staticmethod
     def _invalidate_unsafe_derived_state(
@@ -341,7 +442,7 @@ class CacheManager:
         courses:
             The full list of ``Course`` objects parsed from an uploaded file.
         """
-        self._state.courses = list(courses)
+        self._state.courses = self._normalize_courses(courses)
         self._persist()
 
     def get_courses(self) -> list[Course]:
@@ -573,7 +674,9 @@ class CacheManager:
         courses:
             The additional ``Course`` objects to append.
         """
-        self._state.courses.extend(courses)
+        self._state.courses = self._normalize_courses(
+            [*self._state.courses, *courses]
+        )
         self._persist()
 
     def add_exam_periods(self, exam_periods: list[ExamPeriod]) -> None:
