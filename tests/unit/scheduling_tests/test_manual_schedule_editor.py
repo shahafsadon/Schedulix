@@ -1,5 +1,10 @@
 from datetime import date
 
+from constraint_settings import (
+    SchedulingConstraintSettings,
+    ThresholdConstraintSetting,
+    ThresholdConstraintType,
+)
 from scheduling.manualScheduleEditor import ManualScheduleEditor
 from scheduling.examScheduleGenerator import ExamSchedule, ExamSystem
 from scheduling.scheduleIntrospection import flatten_exam_system
@@ -63,7 +68,30 @@ def test_move_that_creates_critical_conflict_is_rejected() -> None:
     )
 
     assert not result.success
-    assert "critical-conflict" in result.message
+    assert "same-date exams" in result.message
+
+
+def test_manual_move_allows_an_existing_soft_threshold_violation() -> None:
+    """A manual move may keep a fallback schedule below a soft target."""
+    settings = SchedulingConstraintSettings.default_configuration()
+    settings.constraints[ThresholdConstraintType.mandatory_span_days] = (
+        ThresholdConstraintSetting(enabled=True, k=2)
+    )
+    schedule = make_system(
+        make_exam("83001", date(2026, 1, 1)),
+        make_exam("83002", date(2026, 1, 3)),
+    )
+
+    result = ManualScheduleEditor().move_exam(
+        schedule,
+        "83002",
+        date(2026, 1, 2),
+        constraint_settings=settings,
+    )
+
+    assert result.success
+    assert flatten_exam_system(result.schedule)[1].exam_date == date(2026, 1, 2)
+    assert result.impact is not None
 
 
 def test_move_selects_one_exam_period_when_course_exists_in_aleph_and_bet() -> None:

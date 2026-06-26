@@ -28,6 +28,7 @@ from ranking_settings import RankedExamSystem, RankingSettings, ScheduleMetrics
 from scheduling.batchIterator import iter_exam_system_batches
 from scheduling.dayLoadAnalyzer import DayLoadAnalyzer, DayStatus
 from scheduling.examScheduleGenerator import ExamSystem
+from scheduling.manualScheduleEditor import ManualScheduleEditor
 from scheduling.qualityTagCalculator import QualityTagCalculator
 from scheduling.rankedResultsBuffer import RankedResultsBuffer
 from scheduling.scheduleDiffService import ScheduleDiffService
@@ -194,6 +195,13 @@ _DATE_FORMAT = "%d-%m-%Y"
 _EMPTY_OPTION = "No options available"
 
 
+def _without_requirement_id(text: str) -> str:
+    """Remove an internal requirement prefix from a user-facing message."""
+    if text.startswith("Req ") and ": " in text:
+        return text.split(": ", 1)[1]
+    return text
+
+
 class ScheduleNavigationPresenter:
     """Owns the current-system index and builds display-ready system views."""
 
@@ -246,6 +254,9 @@ class ScheduleNavigationPresenter:
         self._quality_calculator = QualityTagCalculator()
         self._metrics_calculator = ScheduleMetricsCalculator()
         self._penalty_scorer = SchedulePenaltyScorer()
+        # One editor is shared by the date picker and the command. The picker
+        # asks it which dates are safe, then the command applies the same rule.
+        self._manual_editor = ManualScheduleEditor()
         self._undo_redo = UndoRedoManager()
 
         current = self.current_system()
@@ -528,11 +539,15 @@ class ScheduleNavigationPresenter:
         ]
 
     def save_snapshot(self, name: str) -> GuiActionResult:
-        """Save the current schedule as a named session snapshot."""
+        """Save an independent named copy of the current schedule.
+
+        Later manual moves cannot change this saved version.
+        """
         system = self.current_system()
         if system is None:
             return GuiActionResult(False, "No schedule is available to save.")
 
+        # Save the schedule together with the values used to describe its quality.
         metrics = self._current_metrics()
         quality = self._quality_calculator.calculate(metrics)
         self._snapshot_manager.set_active_schedule(system, metrics)
@@ -552,7 +567,11 @@ class ScheduleNavigationPresenter:
         )
 
     def load_snapshot(self, name: str) -> GuiActionResult:
-        """Load a saved snapshot into the active visible schedule."""
+        """Replace the visible schedule with a saved copy.
+
+        Loading a snapshot does not generate new schedules. Old move history is
+        cleared because it belongs to the schedule that was visible before.
+        """
         try:
             snapshot = self._snapshot_manager.load(name)
         except (KeyError, ValueError) as error:
@@ -579,7 +598,7 @@ class ScheduleNavigationPresenter:
         first_name: str,
         second_name: str,
     ) -> GuiActionResult:
-        """Compare two saved snapshots and return readable diff text."""
+        """Compare two saved versions by dates and available score data."""
         try:
             first = self._snapshot_by_name(first_name)
             second = self._snapshot_by_name(second_name)
@@ -592,8 +611,9 @@ class ScheduleNavigationPresenter:
                 "Choose two different snapshots to compare.",
             )
 
+        # The service reads both copies and does not change either snapshot.
         comparison = self._diff_service.compare(first, second)
-        lines = self._comparison_lines(comparison)
+        lines = self._comparison_lines(comparison, first, second)
         return GuiActionResult(
             True,
             f"Compared '{first.name}' with '{second.name}'.",
@@ -601,7 +621,11 @@ class ScheduleNavigationPresenter:
         )
 
     def manual_move_course_options(self) -> list[str]:
-        """Return current course-period exams for the move selector."""
+        """Return clear labels for every exam that the user can move.
+
+        The label includes the semester and moed so equal course numbers are
+        still easy to tell apart.
+        """
         system = self.current_system()
         if system is None:
             return []
@@ -620,22 +644,50 @@ class ScheduleNavigationPresenter:
         ]
 
     def manual_move_date_options(self, course_label: str) -> list[str]:
-        """Return valid target dates for the selected course-period exam."""
+        """Return only safe new dates for the selected exam.
+
+        The current date is not useful. Dates that would create a critical
+        conflict are also hidden, so the user does not select a date that the
+        application already knows it must reject.
+        """
         location = self._manual_move_target_from_label(course_label)
         if location is None:
             return []
 
-        return [
-            item.strftime(_DATE_FORMAT)
-            for item in sorted(self._available_dates_for_location(location))
-        ]
+        system = self.current_system()
+        if system is None:
+            return []
+
+        safe_dates: list[str] = []
+        for candidate in sorted(self._available_dates_for_location(location)):
+            if candidate == location.exam_date:
+                continue
+
+            # Reuse the domain editor instead of duplicating critical-conflict
+            # logic in the presenter. This work is small because one exam
+            # period normally contains only a limited number of active dates.
+            result = self._manual_editor.move_exam(
+                system,
+                location.course_id,
+                candidate,
+                source_semester=location.semester,
+                source_moed=location.moed,
+                source_date=location.exam_date,
+                constraint_settings=self._constraint_settings(),
+                available_dates={candidate},
+                include_impact=False,
+            )
+            if result.success:
+                safe_dates.append(candidate.strftime(_DATE_FORMAT))
+
+        return safe_dates
 
     def apply_manual_move(
         self,
         course_label: str,
         target_date_text: str,
     ) -> GuiActionResult:
-        """Move one exam using the safe command path."""
+        """Move one exact exam through a command that supports Undo and Redo."""
         system = self.current_system()
         if system is None:
             return GuiActionResult(False, "No schedule is available to edit.")
@@ -644,6 +696,7 @@ class ScheduleNavigationPresenter:
         if location is None:
             return GuiActionResult(False, "Choose a course before applying a move.")
 
+        # The command keeps enough old data to restore this move later.
         command = ScheduleModificationCommand(
             schedule_getter=self._required_current_system,
             schedule_setter=self._replace_current_schedule,
@@ -652,9 +705,11 @@ class ScheduleNavigationPresenter:
             source_semester=location.semester,
             source_moed=location.moed,
             source_date=location.exam_date,
+            editor=self._manual_editor,
             constraint_settings=self._constraint_settings(),
             available_dates=self._available_dates_for_location(location),
         )
+        # Only a successful move enters the Undo history.
         result = self._undo_redo.execute(command)
         if not result.success:
             return GuiActionResult(False, result.message)
@@ -677,10 +732,15 @@ class ScheduleNavigationPresenter:
         schedule: ExamSystem,
         metrics: ScheduleMetrics | None = None,
     ) -> None:
-        """Replace only the visible active schedule."""
+        """Replace the visible schedule and refresh its saved display values.
+
+        Other generated schedules keep their current order and are not changed.
+        """
         if not self._schedules:
             return
 
+        # Keep the active list and the raw generated list pointing to the same
+        # updated schedule so navigation and later ranking show the move.
         old_system = self._schedules[self._index]
         self._schedules[self._index] = schedule
 
@@ -763,8 +823,7 @@ class ScheduleNavigationPresenter:
         for status in statuses:
             iso = status.exam_date.isoformat()
             details = "\n".join(
-                f"{violation.requirement_id}: {violation.explanation}"
-                for violation in status.violations
+                violation.explanation for violation in status.violations
             )
             if not details:
                 details = f"{status.exam_count} exam(s) scheduled on this date."
@@ -806,12 +865,18 @@ class ScheduleNavigationPresenter:
         """Return readable penalty details for the current fallback schedule."""
         ranked = self.current_ranked_system()
         if ranked is not None and ranked.penalty_details:
-            return ranked.penalty_details
+            return tuple(
+                _without_requirement_id(detail)
+                for detail in ranked.penalty_details
+            )
 
         system = self.current_system()
         if system is None:
             return ()
-        return self._penalty_details_for_system(system)
+        return tuple(
+            _without_requirement_id(detail)
+            for detail in self._penalty_details_for_system(system)
+        )
 
     def _penalty_score_for_system(self, system: ExamSystem) -> float:
         """Calculate the soft-constraint penalty for ``system``."""
@@ -878,9 +943,9 @@ class ScheduleNavigationPresenter:
     def _manual_move_option_label(location) -> str:
         """Build one clear GUI label for a course-period exam."""
         return (
-            f"{location.course_id} - {location.course_name} "
-            f"({location.semester} {location.moed}, "
-            f"{location.exam_date.strftime(_DATE_FORMAT)})"
+            f"{location.course_id} | {location.semester} {location.moed} | "
+            f"{location.exam_date.strftime(_DATE_FORMAT)} | "
+            f"{location.course_name}"
         )
 
     def _manual_move_target_from_label(self, course_label: str):
@@ -899,7 +964,11 @@ class ScheduleNavigationPresenter:
         return None
 
     @staticmethod
-    def _comparison_lines(comparison) -> list[str]:
+    def _comparison_lines(
+        comparison,
+        first: ScheduleSnapshot,
+        second: ScheduleSnapshot,
+    ) -> list[str]:
         """Format snapshot diff rows for a small GUI text panel."""
         lines = [
             f"{comparison.first_name} -> {comparison.second_name}",
@@ -907,8 +976,16 @@ class ScheduleNavigationPresenter:
         ]
         if comparison.penalty_delta is not None:
             lines.append(
-                "Penalty score delta "
-                f"(second - first; lower is better): {comparison.penalty_delta:+g}"
+                "Penalty score (lower is better): "
+                f"{first.penalty_score:g} -> {second.penalty_score:g} "
+                f"(delta {comparison.penalty_delta:+g})"
+            )
+            lines.append("")
+        elif first.quality_tag or second.quality_tag:
+            lines.append(
+                "Quality label: "
+                f"{first.quality_tag or 'unknown'} -> "
+                f"{second.quality_tag or 'unknown'}"
             )
             lines.append("")
 
@@ -946,7 +1023,7 @@ class ScheduleNavigationPresenter:
                 continue
             lines.append(title + ":")
             for issue in issues:
-                lines.append(f"- {issue.requirement_id}: {issue.explanation}")
+                lines.append(f"- {issue.explanation}")
             lines.append("")
 
         if not lines:
