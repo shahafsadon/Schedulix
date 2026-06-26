@@ -72,8 +72,8 @@ _CONFLICT_DAY_TEXT = ("#7F1D1D", "#FEE2E2")
 _SUCCESS = "#2e7d32"
 _ERROR = "#B00020"
 _EMPTY_OPTION = "No options available"
-_MESSAGE_POPUP_WIDTH = 430
-_MESSAGE_POPUP_HEIGHT = 190
+_MESSAGE_POPUP_WIDTH = 560
+_MESSAGE_POPUP_HEIGHT = 300
 
 # Status banner colours: light-mode bg / dark-mode bg.
 _BANNER_PARTIAL_BG = ("#FEF3C7", "#3B2800")
@@ -648,7 +648,7 @@ class ScheduleNavigationScreen(ctk.CTkFrame):
         self._move_course_selector = ctk.CTkOptionMenu(
             panel,
             values=[_EMPTY_OPTION],
-            width=320,
+            width=380,
             fg_color=_CONTROL_BG,
             button_color=_CONTROL_BUTTON,
             button_hover_color=_CONTROL_HOVER,
@@ -973,7 +973,7 @@ class ScheduleNavigationScreen(ctk.CTkFrame):
         self._refresh_part4_controls()
 
     def _handle_compare_snapshots(self) -> None:
-        """Compare the two selected snapshots."""
+        """Show date and score differences for the two selected saved versions."""
         first = self._selected_snapshot_name(self._snapshot_first_selector)
         second = self._selected_snapshot_name(self._snapshot_second_selector)
         result = self.presenter.compare_snapshots(first, second)
@@ -982,11 +982,12 @@ class ScheduleNavigationScreen(ctk.CTkFrame):
             self._write_textbox(self._snapshot_compare_box, result.details)
 
     def _handle_apply_move(self) -> None:
-        """Apply a safe manual move through the presenter."""
+        """Ask the presenter to move one exam and refresh only after success."""
         course = self._selected_option(self._move_course_selector)
         target_date = self._selected_option(self._move_date_selector)
         result = self.presenter.apply_manual_move(course, target_date)
         self._set_move_status(result.message, result.success)
+        # A successful move can include a short list of changed schedule issues.
         if result.details:
             self._write_textbox(self._move_impact_box, result.details)
         if result.success:
@@ -1300,32 +1301,6 @@ class ScheduleNavigationScreen(ctk.CTkFrame):
                 row=2, column=0, columnspan=2, sticky="ew", pady=(6, 2)
             )
 
-    def _update_fallback_banner(self, view) -> None:
-        """Show the fallback warning with score and soft-violation details."""
-        score = view.penalty_score
-        score_text = "unknown" if score is None else f"{score:g}"
-        details = "; ".join(view.penalty_details[:3])
-        if view.penalty_details and len(view.penalty_details) > 3:
-            details += f"; +{len(view.penalty_details) - 3} more"
-        if not details:
-            details = "No soft-constraint details are available."
-
-        msg = (
-            "Fallback schedule: no schedule satisfied all enabled soft "
-            "preferences. Hard constraints are still respected. "
-            f"Soft-constraint penalty score {score_text}. {details}"
-        )
-        self._status_banner.configure(fg_color=_BANNER_FALLBACK_BG)
-        self._status_seen_label.configure(
-            text=msg,
-            text_color=_BANNER_FALLBACK_TEXT,
-        )
-
-        if not self._status_banner.winfo_ismapped():
-            self._status_banner.grid(
-                row=2, column=0, columnspan=2, sticky="ew", pady=(6, 2)
-            )
-
     def _refresh(self) -> None:
         """Refresh counter, metrics, calendar highlights, and detail panes."""
         view = self.presenter.current_view()
@@ -1364,9 +1339,10 @@ class ScheduleNavigationScreen(ctk.CTkFrame):
         if self._selected_iso_date not in self._current_exams_by_iso_date:
             self._selected_iso_date = self._first_exam_date()
 
-        self._counter_label.configure(
-            text=f"System {view.position} of {view.total}"
-        )
+        counter_text = f"System {view.position} of {view.total}"
+        if view.is_fallback:
+            counter_text += " | Alternative schedule"
+        self._counter_label.configure(text=counter_text)
         mode = getattr(self.presenter, "result_mode", None)
         if isinstance(mode, str):
             try:
@@ -1375,14 +1351,11 @@ class ScheduleNavigationScreen(ctk.CTkFrame):
                 mode = None
         should_show_banner = (
             getattr(self.presenter, "is_partial", False) is True
-            or mode == ResultMode.FINAL_RANKED
-            or view.is_fallback
+            or (mode == ResultMode.FINAL_RANKED and not view.is_fallback)
         )
         if self._status_banner.winfo_ismapped() and not should_show_banner:
             self._status_banner.grid_forget()
-        if view.is_fallback:
-            self._update_fallback_banner(view)
-        elif should_show_banner and not self._status_banner.winfo_ismapped():
+        if should_show_banner and not self._status_banner.winfo_ismapped():
             raw_systems_seen = getattr(self.presenter, "systems_seen", 0)
             raw_displayed_count = getattr(self.presenter, "displayed_count", 0)
             systems_seen = (
@@ -1857,7 +1830,7 @@ class ScheduleNavigationScreen(ctk.CTkFrame):
         self._refresh_manual_move_controls(view)
 
     def _refresh_snapshot_controls(self) -> None:
-        """Refresh snapshot dropdowns and saved-list text."""
+        """Refresh the saved-version list after save, load, or delete actions."""
         snapshot_summaries = getattr(self.presenter, "snapshot_summaries", None)
         if snapshot_summaries is None:
             return
@@ -1865,8 +1838,10 @@ class ScheduleNavigationScreen(ctk.CTkFrame):
         summaries = snapshot_summaries()
         names = [summary.name for summary in summaries]
 
+        # Both menus use the same saved names, but compare needs two names.
         self._set_option_values(getattr(self, "_snapshot_first_selector", None), names)
         self._set_option_values(getattr(self, "_snapshot_second_selector", None), names)
+        self._select_distinct_snapshot_defaults(names)
 
         snapshot_list_label = getattr(self, "_snapshot_list_label", None)
         if snapshot_list_label is not None:
@@ -1883,7 +1858,7 @@ class ScheduleNavigationScreen(ctk.CTkFrame):
         )
 
     def _refresh_manual_move_controls(self, _view=None) -> None:
-        """Refresh course/date selectors and undo button states."""
+        """Refresh move choices and enable buttons only when an action exists."""
         course_options_getter = getattr(
             self.presenter,
             "manual_move_course_options",
@@ -1895,6 +1870,12 @@ class ScheduleNavigationScreen(ctk.CTkFrame):
         course_options = course_options_getter()
         self._set_option_values(getattr(self, "_move_course_selector", None), course_options)
         date_options = self._refresh_move_date_options()
+
+        if course_options and not date_options:
+            self._write_textbox(
+                getattr(self, "_move_impact_box", None),
+                "No safe dates are available for this exam.",
+            )
 
         self._set_button_state(
             getattr(self, "_apply_move_button", None),
@@ -1921,7 +1902,7 @@ class ScheduleNavigationScreen(ctk.CTkFrame):
             )
 
     def _refresh_move_date_options(self) -> list[str]:
-        """Refresh target dates after the selected course changes."""
+        """Replace target dates when the selected exam changes."""
         date_options_getter = getattr(
             self.presenter,
             "manual_move_date_options",
@@ -1965,12 +1946,24 @@ class ScheduleNavigationScreen(ctk.CTkFrame):
         """Return the selected snapshot name."""
         return self._selected_option(selector or self._snapshot_first_selector)
 
+    def _select_distinct_snapshot_defaults(self, names: list[str]) -> None:
+        """Choose two different saved versions so Compare works immediately."""
+        if len(names) < 2:
+            return
+
+        first = self._selected_snapshot_name(self._snapshot_first_selector)
+        second = self._selected_snapshot_name(self._snapshot_second_selector)
+        if first == second:
+            self._snapshot_second_selector.set(
+                next(name for name in names if name != first)
+            )
+
     def _set_snapshot_status(self, message: str, success: bool) -> None:
         """Show a snapshot action result."""
         if self._snapshot_status_label is not None:
             self._snapshot_status_label.configure(
-                text=message,
-                text_color=_SUCCESS if success else _ERROR,
+                text=message if success else "",
+                text_color=_SUCCESS if success else _MUTED,
             )
         if not success:
             self._show_user_message("Snapshot action needs attention", message)
@@ -1979,8 +1972,8 @@ class ScheduleNavigationScreen(ctk.CTkFrame):
         """Show a manual-move action result."""
         if self._move_status_label is not None:
             self._move_status_label.configure(
-                text=message,
-                text_color=_SUCCESS if success else _ERROR,
+                text=message if success else "",
+                text_color=_SUCCESS if success else _MUTED,
             )
         if not success:
             self._show_user_message("Manual move needs attention", message)
@@ -1991,7 +1984,7 @@ class ScheduleNavigationScreen(ctk.CTkFrame):
         message: str,
         kind: str = "error",
     ) -> None:
-        """Show an important message in a small modal window."""
+        """Show one short message in a modal so the user cannot miss it."""
         if not message:
             return
         try:
@@ -2000,6 +1993,7 @@ class ScheduleNavigationScreen(ctk.CTkFrame):
             return
 
         accent = _ERROR if kind == "error" else _INFO
+        display_message = self._format_modal_message(message)
         popup = ctk.CTkToplevel(parent)
         popup.title(title)
         popup.geometry(
@@ -2009,6 +2003,7 @@ class ScheduleNavigationScreen(ctk.CTkFrame):
                 _MESSAGE_POPUP_HEIGHT,
             )
         )
+        # Keep this window above the main screen until the user closes it.
         popup.transient(parent)
         popup.grab_set()
         if hasattr(popup, "resizable"):
@@ -2040,20 +2035,20 @@ class ScheduleNavigationScreen(ctk.CTkFrame):
         ctk.CTkLabel(
             body,
             text=title,
-            font=("Segoe UI", 15, "bold"),
+            font=("Segoe UI", 18, "bold"),
             text_color=_TEXT,
             anchor="w",
-        ).grid(row=0, column=1, sticky="ew", padx=(0, 12), pady=(12, 2))
+        ).grid(row=0, column=1, sticky="ew", padx=(0, 18), pady=(16, 4))
 
         ctk.CTkLabel(
             body,
-            text=message,
-            font=("Segoe UI", 12),
+            text=display_message,
+            font=("Segoe UI", 14),
             text_color=_MUTED,
-            wraplength=330,
+            wraplength=430,
             justify="left",
             anchor="w",
-        ).grid(row=1, column=1, sticky="ew", padx=(0, 12), pady=(0, 12))
+        ).grid(row=1, column=1, sticky="ew", padx=(0, 18), pady=(4, 18))
 
         ctk.CTkButton(
             body,
@@ -2062,7 +2057,39 @@ class ScheduleNavigationScreen(ctk.CTkFrame):
             fg_color=_PRIMARY,
             hover_color=_PRIMARY_HOVER,
             command=popup.destroy,
-        ).grid(row=2, column=1, sticky="e", padx=(0, 12), pady=(0, 12))
+        ).grid(row=2, column=1, sticky="e", padx=(0, 18), pady=(0, 16))
+
+    @staticmethod
+    def _format_modal_message(message: str) -> str:
+        """Split a long validation message into short readable lines."""
+        prefix = "Mandatory exams for "
+        separator = " span only "
+        minimum_separator = "; required minimum is "
+
+        if not message.startswith(prefix) or separator not in message:
+            return message.replace("; ", ".\n\n")
+
+        exam_group, span_text = message.split(separator, 1)
+        if minimum_separator not in span_text:
+            return message.replace("; ", ".\n\n")
+
+        current_span, minimum_span = span_text.split(minimum_separator, 1)
+        group_details = exam_group.removeprefix(prefix)
+        group_details = group_details.replace("program ", "Program: ", 1)
+        group_details = group_details.replace(" year ", "\nYear: ", 1)
+        group_details = group_details.replace(" semester ", "\nSemester: ", 1)
+        group_details = group_details.replace(" moed ", "\nMoed: ", 1)
+
+        current_count = current_span.strip().split()[0]
+        minimum_count = minimum_span.strip().rstrip(".").split()[0]
+        current_days = "day" if current_count == "1" else "days"
+        minimum_days = "day" if minimum_count == "1" else "days"
+        return (
+            "Please choose a different date.\n\n"
+            f"{group_details}\n\n"
+            f"Current span: {current_count} {current_days}\n"
+            f"Minimum needed: {minimum_count} {minimum_days}"
+        )
 
     @staticmethod
     def _centered_popup_geometry(parent, width: int, height: int) -> str:

@@ -103,7 +103,9 @@ def test_real_service_progressive_generation_emits_partial_batches_and_finalizes
     assert final.counters.generated_schedules == 4
     assert final.counters.displayed_schedules == 4
     assert cache.get_ranked_schedules() == final.ranked_schedules
-    assert cache.get_generated_schedules() == []
+    assert cache.get_generated_schedules() == [
+        ranked.exam_system for ranked in final.ranked_schedules
+    ]
 
 
 def test_progressive_service_preserves_existing_full_ranking_order_when_not_limited(

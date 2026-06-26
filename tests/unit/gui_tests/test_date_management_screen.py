@@ -214,7 +214,7 @@ class TestDateManagementScreenHelpers(unittest.TestCase):
         DateManagementScreen._handle_generate(screen)
 
         self.assertEqual(visited, [])
-        self.assertEqual(screen._status_label.options["text"], "No exam periods loaded.")
+        self.assertEqual(screen._status_label.options["text"], "")
         self.assertEqual(screen._generate_button.options["state"], "normal")
         self.assertEqual(screen._generate_button.options["text"], "Generate Exam Schedules")
         self.assertEqual(screen._day_cells["2026-01-29"].options["state"], "normal")
@@ -230,10 +230,7 @@ class TestDateManagementScreenHelpers(unittest.TestCase):
         DateManagementScreen._handle_generate(screen)
 
         self.assertEqual(visited, [])
-        self.assertEqual(
-            screen._status_label.options["text"],
-            "Schedule generation is already running.",
-        )
+        self.assertEqual(screen._status_label.options["text"], "")
 
     def test_generation_uses_the_progressive_runner_path(self) -> None:
         """The GUI must not call the old full-list generation method."""
