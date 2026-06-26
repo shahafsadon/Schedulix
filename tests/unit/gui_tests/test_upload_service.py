@@ -127,6 +127,20 @@ Exam
         self.assertEqual(len(cache.get_courses()), 4)
         self.assertEqual(len(service.get_uploaded_data().courses), 4)
 
+    def test_append_same_courses_file_does_not_duplicate_courses(self) -> None:
+        """Repeating one courses upload keeps the cache ready for scheduling."""
+        cache = CacheManager()
+        service = FileUploadService(cache_manager=cache)
+        courses_path = ROOT / "data" / "examples" / "CourseExample.txt"
+
+        service.upload_courses(courses_path)
+        result = service.upload_courses(courses_path, mode=UploadMode.APPEND)
+
+        self.assertTrue(result.success)
+        self.assertEqual(result.cached_count, 3)
+        self.assertEqual(len(cache.get_courses()), 3)
+        self.assertEqual(len(service.get_uploaded_data().courses), 3)
+
     def test_append_programs_deduplicates_cached_selection(self) -> None:
         """Appending selected programs keeps each program number only once."""
         cache = CacheManager()

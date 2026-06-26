@@ -13,6 +13,7 @@ from constraint_settings import SchedulingConstraintSettings
 from ranking_settings import RankedExamSystem, RankingSettings
 from scheduling.constraints import ConstraintRegistry
 from scheduling.examScheduleGenerator import ExamScheduleGenerator, ExamSystem
+from scheduling.rankedResultsBuffer import RankedResultsBuffer
 from scheduling.scheduleMetricsCalculator import ScheduleMetricsCalculator
 from scheduling.schedulePenaltyScorer import SchedulePenaltyScorer
 from scheduling.scheduleRanker import ScheduleRanker
@@ -47,51 +48,65 @@ class FallbackScheduleService:
         ranking_settings: RankingSettings,
         *,
         display_limit: int,
+        batch_size: int = 100,
     ) -> FallbackScheduleOutcome:
-        """Return the lowest-penalty hard-valid fallback schedules."""
+        """Return the lowest-penalty hard-valid fallback schedules.
+
+        Candidates are processed in small batches and merged into a bounded
+        Top-N buffer. This avoids recreating the old memory problem precisely
+        when a strict run has already found no result.
+        """
         if display_limit <= 0:
             raise ValueError("display_limit must be greater than zero.")
+        if batch_size <= 0:
+            raise ValueError("batch_size must be greater than zero.")
 
         generator = ExamScheduleGenerator(
             constraint_registry=ConstraintRegistry(
                 self._penalty_scorer.hard_constraints()
             )
         )
-        candidates: list[RankedExamSystem] = []
+        preview = RankedResultsBuffer(
+            ranking_settings=ranking_settings,
+            preview_limit=display_limit,
+            ranker=self._ranker,
+        )
+        batch: list[RankedExamSystem] = []
         generated_count = 0
 
         for generated_count, exam_system in enumerate(
             generator.iter_exam_systems(courses, exam_periods),
             start=1,
         ):
-            candidates.append(
+            batch.append(
                 self._ranked_fallback(
                     exam_system,
                     schedule_id=generated_count,
                     constraint_settings=constraint_settings,
                 )
             )
+            if len(batch) == batch_size:
+                preview.add_ranked_batch(
+                    batch,
+                    generated_count=len(batch),
+                    accepted_count=len(batch),
+                    processed_count=len(batch),
+                )
+                batch = []
 
-        if not candidates:
+        if batch:
+            preview.add_ranked_batch(
+                batch,
+                generated_count=len(batch),
+                accepted_count=len(batch),
+                processed_count=len(batch),
+            )
+
+        if generated_count == 0:
             return FallbackScheduleOutcome([], generated_count=0)
 
-        ranked_by_preferences = self._ranker.rank(candidates, ranking_settings)
-        ranking_position = {
-            ranked_system.key: index
-            for index, ranked_system in enumerate(ranked_by_preferences)
-        }
-        ordered = sorted(
-            candidates,
-            key=lambda item: (
-                float("inf")
-                if item.penalty_score is None
-                else item.penalty_score,
-                ranking_position.get(item.key, item.key),
-                item.key,
-            ),
-        )
         return FallbackScheduleOutcome(
-            ranked_schedules=ordered[:display_limit],
+            ranked_schedules=preview.current_preview(),
             generated_count=generated_count,
         )
 

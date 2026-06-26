@@ -511,6 +511,9 @@ class ScheduleModificationCommand(Command):
         new_date: date | str,
         *,
         editor: ManualScheduleEditor | None = None,
+        source_semester: str | None = None,
+        source_moed: str | None = None,
+        source_date: date | None = None,
         constraint_settings: SchedulingConstraintSettings | None = None,
         available_dates: set[date] | list[date] | tuple[date, ...] | None = None,
     ) -> None:
@@ -519,6 +522,9 @@ class ScheduleModificationCommand(Command):
         self._course_id = course_id
         self._new_date = new_date
         self._editor = editor or ManualScheduleEditor()
+        self._source_semester = source_semester
+        self._source_moed = source_moed
+        self._source_date = source_date
         self._constraint_settings = constraint_settings
         self._available_dates = available_dates
         self._old_schedule: ExamSystem | None = None
@@ -548,6 +554,9 @@ class ScheduleModificationCommand(Command):
             current_schedule,
             self._course_id,
             self._new_date,
+            source_semester=self._source_semester,
+            source_moed=self._source_moed,
+            source_date=self._source_date,
             constraint_settings=self._constraint_settings,
             available_dates=self._available_dates,
         )

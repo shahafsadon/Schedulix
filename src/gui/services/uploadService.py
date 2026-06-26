@@ -129,10 +129,27 @@ class FileUploadService:
                 cached_count=self._current_count(file_type),
             )
 
+        # Update the cache first. A conflicting append must not also change
+        # the local screen snapshot when the cache rejects it.
+        try:
+            self._sync_cache(file_type, data, mode)
+        except ValueError as error:
+            return UploadResult(
+                file_type=file_type,
+                path=path,
+                success=False,
+                message=f"{self._display_name(file_type)} upload failed: {error}",
+                mode=mode,
+                cached_count=self._current_count(file_type),
+            )
+
         # Store only successfully parsed data. Failed uploads leave both the
         # local snapshot and the shared cache untouched for the next screens.
         self._store(file_type, data, mode)
-        self._sync_cache(file_type, data, mode)
+        if self.cache_manager is not None and file_type == FileReaderType.COURSES:
+            # CacheManager merges repeat course uploads, so mirror its clean
+            # source of truth in the upload screen as well.
+            self.uploaded_data.courses = list(self.cache_manager.get_courses())
         item_count = self._count_items(data)
         cached_count = self._current_count(file_type)
 

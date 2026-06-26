@@ -46,10 +46,13 @@ class ManualScheduleEditor:
         course_id: str,
         target_date: date | str,
         *,
+        source_semester: str | None = None,
+        source_moed: str | None = None,
+        source_date: date | None = None,
         constraint_settings: SchedulingConstraintSettings | None = None,
         available_dates: set[date] | list[date] | tuple[date, ...] | None = None,
     ) -> ManualMoveResult:
-        """Move one course exam if the target date keeps the schedule valid."""
+        """Move one selected course-period exam if the result stays valid."""
         clean_course_id = course_id.strip()
         if not clean_course_id:
             return self._failure("Course id cannot be empty.")
@@ -65,6 +68,9 @@ class ManualScheduleEditor:
             schedule,
             clean_course_id,
             parsed_date,
+            source_semester=source_semester,
+            source_moed=source_moed,
+            source_date=source_date,
         )
         if modified is None:
             return self._failure(error or "Move could not be applied.")

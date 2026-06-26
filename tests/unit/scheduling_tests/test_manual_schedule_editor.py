@@ -1,6 +1,7 @@
 from datetime import date
 
 from scheduling.manualScheduleEditor import ManualScheduleEditor
+from scheduling.examScheduleGenerator import ExamSchedule, ExamSystem
 from scheduling.scheduleIntrospection import flatten_exam_system
 
 from ._part4_helpers import make_exam, make_system
@@ -63,3 +64,44 @@ def test_move_that_creates_critical_conflict_is_rejected() -> None:
 
     assert not result.success
     assert "critical-conflict" in result.message
+
+
+def test_move_selects_one_exam_period_when_course_exists_in_aleph_and_bet() -> None:
+    """The selected period must move without changing the other course exam."""
+    original = ExamSystem(
+        period_schedules=[
+            ExamSchedule(
+                semester="FALL",
+                moed="Aleph",
+                scheduled_exams=[make_exam("83001", date(2026, 1, 1))],
+            ),
+            ExamSchedule(
+                semester="FALL",
+                moed="Bet",
+                scheduled_exams=[make_exam("83001", date(2026, 2, 1))],
+            ),
+        ]
+    )
+
+    result = ManualScheduleEditor().move_exam(
+        original,
+        "83001",
+        date(2026, 2, 2),
+        source_semester="FALL",
+        source_moed="Bet",
+        source_date=date(2026, 2, 1),
+        available_dates={date(2026, 2, 1), date(2026, 2, 2)},
+    )
+
+    assert result.success
+    moved_dates = {
+        (location.semester, location.moed): location.exam_date
+        for location in flatten_exam_system(result.schedule)
+    }
+    original_dates = {
+        (location.semester, location.moed): location.exam_date
+        for location in flatten_exam_system(original)
+    }
+    assert moved_dates[("FALL", "Aleph")] == date(2026, 1, 1)
+    assert moved_dates[("FALL", "Bet")] == date(2026, 2, 2)
+    assert original_dates[("FALL", "Bet")] == date(2026, 2, 1)

@@ -12,7 +12,7 @@ sys.path.insert(0, str(SRC))
 sys.path.insert(0, str(FILE_READER))
 
 from models import Course, ExamPeriod, ProgramEnrollment
-from scheduling.examScheduleGenerator import ExamScheduleGenerator
+from scheduling.examScheduleGenerator import ExamSchedule, ExamScheduleGenerator
 
 
 def make_course(
@@ -185,6 +185,37 @@ class ExamScheduleGeneratorTests(unittest.TestCase):
                 [(schedule.semester, schedule.moed) for schedule in system.period_schedules],
                 [("FALL", "Aleph"), ("FALL", "Bet")],
             )
+
+    def test_disjoint_periods_yield_before_all_period_options_are_read(self) -> None:
+        """The first complete system should not require a full period preload."""
+
+        class RecordingGenerator(ExamScheduleGenerator):
+            def __init__(self) -> None:
+                super().__init__()
+                self.options_read: dict[str, int] = {}
+
+            def iter_for_period(self, _courses, exam_period):
+                for _ in range(3):
+                    self.options_read[exam_period.moed] = (
+                        self.options_read.get(exam_period.moed, 0) + 1
+                    )
+                    yield ExamSchedule(
+                        semester=exam_period.semester,
+                        moed=exam_period.moed,
+                        scheduled_exams=[],
+                    )
+
+        course = make_course("Physics 1", "83102", "83101", 1, "FALL", "Obligatory")
+        periods = [
+            ExamPeriod("FALL", "Aleph", date(2026, 1, 1), date(2026, 1, 2), []),
+            ExamPeriod("FALL", "Bet", date(2026, 2, 1), date(2026, 2, 2), []),
+        ]
+        generator = RecordingGenerator()
+
+        first = next(generator.iter_exam_systems([course], periods))
+
+        self.assertEqual(len(first.period_schedules), 2)
+        self.assertEqual(generator.options_read, {"Aleph": 1, "Bet": 1})
 
 
 if __name__ == "__main__":

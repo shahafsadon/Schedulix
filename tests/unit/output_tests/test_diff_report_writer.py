@@ -30,7 +30,7 @@ def test_diff_report_writer_outputs_changed_courses() -> None:
 
     assert "From: A" in text
     assert "To:   B" in text
-    assert "83001     Algorithms               moved     2026-01-01  2026-01-05" in text
+    assert "83001     Algorithms               FALL Aleph     moved     2026-01-01  2026-01-05" in text
     assert "Quality:" not in text
     assert "Penalty score:" not in text
 
@@ -96,7 +96,7 @@ def test_diff_report_writer_course_added() -> None:
     comparison = ScheduleDiffService().compare(_snapshot("A", first), _snapshot("B", second))
     text = DiffReportWriter().write_text(comparison)
 
-    assert "83002     Calculus                 added     -           2026-02-10" in text
+    assert "83002     Calculus                 FALL Aleph     added     -           2026-02-10" in text
 
 
 def test_diff_report_writer_course_removed() -> None:
@@ -106,7 +106,7 @@ def test_diff_report_writer_course_removed() -> None:
     comparison = ScheduleDiffService().compare(_snapshot("A", first), _snapshot("B", second))
     text = DiffReportWriter().write_text(comparison)
 
-    assert "83003     Physics                  removed   2026-03-15  -" in text
+    assert "83003     Physics                  FALL Aleph     removed   2026-03-15  -" in text
 
 
 def test_diff_report_writer_multiple_courses_alignment() -> None:
@@ -123,9 +123,9 @@ def test_diff_report_writer_multiple_courses_alignment() -> None:
     text = DiffReportWriter().write_text(comparison)
 
     lines = text.splitlines()
-    assert "--------- -----------              ------    ----        --" in text
+    assert "--------- -----------              ------         ------    ----        --" in text
 
-    assert "83001     Algorithms               moved     2026-01-01  2026-01-05" in lines
-    assert "83002     Calculus                 added     -           2026-02-10" in lines
-    assert "83003     Physics                  removed   2026-03-15  -" in lines
+    assert "83001     Algorithms               FALL Aleph     moved     2026-01-01  2026-01-05" in lines
+    assert "83002     Calculus                 FALL Aleph     added     -           2026-02-10" in lines
+    assert "83003     Physics                  FALL Aleph     removed   2026-03-15  -" in lines
 

@@ -103,14 +103,22 @@ class DiffReportWriter:
             lines.append("No course date changes were found between the two snapshots.")
             return lines
 
-        lines.append(f"{'Course ID':<10}{'Course Name':<25}{'Change':<10}{'From':<12}{'To':<12}".rstrip())
-        lines.append(f"{'-'*9:<10}{'-'*11:<25}{'-'*6:<10}{'-'*4:<12}{'-'*2:<12}".rstrip())
+        lines.append(
+            f"{'Course ID':<10}{'Course Name':<25}{'Period':<15}"
+            f"{'Change':<10}{'From':<12}{'To':<12}".rstrip()
+        )
+        lines.append(
+            f"{'-'*9:<10}{'-'*11:<25}{'-'*6:<15}"
+            f"{'-'*6:<10}{'-'*4:<12}{'-'*2:<12}".rstrip()
+        )
 
         for row in result.changed_courses:
             old_date = row.old_date.isoformat() if row.old_date else "-"
             new_date = row.new_date.isoformat() if row.new_date else "-"
+            period = f"{row.semester} {row.moed}"
             lines.append(
-                f"{row.course_id:<10}{row.course_name:<25}{row.change_type:<10}{old_date:<12}{new_date:<12}".rstrip()
+                f"{row.course_id:<10}{row.course_name:<25}{period:<15}"
+                f"{row.change_type:<10}{old_date:<12}{new_date:<12}".rstrip()
             )
 
         return lines

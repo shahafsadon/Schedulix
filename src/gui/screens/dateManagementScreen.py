@@ -18,6 +18,7 @@ from application.async_runner import AsyncScheduleRunner
 from gui.presenters.dateManagementPresenter import DateManagementPresenter
 from gui.presenters.schedulingPresenter import GenerationResult, SchedulingPresenter
 from scheduling.progressiveGeneration import (
+    ProgressiveGenerationOptions,
     ProgressiveRankedSnapshot,
     ProgressiveResultState,
 )
@@ -509,14 +510,26 @@ class DateManagementScreen(ctk.CTkFrame):
             on_next()
 
     def _handle_generate(self) -> None:
-        """Generate schedules directly from the final date-review step."""
+        """Generate schedules in the background with bounded live progress."""
         if self._scheduling_presenter is None:
             self._show_message("Schedule generator is not available.", ok=False)
             return
 
-        accepted = self._runner.run(
-            task=self._scheduling_presenter.generate,
-            on_started=self._show_generation_started,
+        def task(token, _on_progress):
+            """Run the lazy generation path and post snapshots safely to Tk."""
+            return self._scheduling_presenter.generate_progressive(
+                on_snapshot=self._post_progress,
+                cancellation_token=token,
+                options=ProgressiveGenerationOptions(
+                    batch_size=100,
+                    display_limit=50,
+                    min_update_interval_seconds=0.35,
+                ),
+            )
+
+        accepted = self._runner.run_with_progress(
+            task=task,
+            on_started=self._show_generation_started_progressive,
             on_complete=lambda result: self.after(
                 0,
                 lambda: self._show_generation_result(result),

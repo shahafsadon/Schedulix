@@ -1100,9 +1100,11 @@ class ScheduleNavigationScreen(ctk.CTkFrame):
                 run_id=run_id,
                 on_update=on_progress,
                 cancellation_token=token,
-                batch_size=1000,
+                # A smaller first batch makes the first Top-50 preview appear
+                # sooner. The half-second throttle still prevents repaint churn.
+                batch_size=250,
                 preview_limit=50,
-                min_update_interval_seconds=0.35,
+                min_update_interval_seconds=0.5,
             )
 
         accepted = self._ranking_runner.run_with_progress(

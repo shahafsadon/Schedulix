@@ -30,6 +30,7 @@ from ranking_settings import (
 )
 from scheduling.examConflictDetector import ScheduledExam
 from scheduling.examScheduleGenerator import ExamSchedule, ExamSystem
+from scheduling.scheduleIntrospection import flatten_exam_system
 from gui.presenters.scheduleNavigationPresenter import (
     ResultMode,
     ScheduleNavigationPresenter,
@@ -839,3 +840,42 @@ class ScheduleNavigationPresenterPart4Tests(unittest.TestCase):
         redo = presenter.redo_manual_move()
         self.assertTrue(redo.success)
         self.assertIn("2026-01-02", presenter.current_view().exams_by_iso_date)
+
+    def test_manual_move_selector_distinguishes_aleph_and_bet_for_one_course(self) -> None:
+        """The GUI label must identify the exact exam the user selected."""
+        system = ExamSystem(
+            period_schedules=[
+                ExamSchedule(
+                    "FALL",
+                    "Aleph",
+                    [make_exam("Algorithms", "83001", date(2026, 1, 1))],
+                ),
+                ExamSchedule(
+                    "FALL",
+                    "Bet",
+                    [make_exam("Algorithms", "83001", date(2026, 2, 1))],
+                ),
+            ]
+        )
+        periods = [
+            ExamPeriod("FALL", "Aleph", date(2026, 1, 1), date(2026, 1, 2), []),
+            ExamPeriod("FALL", "Bet", date(2026, 2, 1), date(2026, 2, 2), []),
+        ]
+        presenter = ScheduleNavigationPresenter(
+            [system],
+            cache_manager=FakeCache(periods=periods),
+        )
+
+        options = presenter.manual_move_course_options()
+        bet_option = next(option for option in options if "FALL Bet" in option)
+
+        result = presenter.apply_manual_move(bet_option, "02-02-2026")
+
+        self.assertTrue(result.success)
+        moved = presenter.current_system()
+        dates = {
+            (location.semester, location.moed): location.exam_date
+            for location in flatten_exam_system(moved)
+        }
+        self.assertEqual(dates[("FALL", "Aleph")], date(2026, 1, 1))
+        self.assertEqual(dates[("FALL", "Bet")], date(2026, 2, 2))
