@@ -206,6 +206,9 @@ class ProgressiveRankedSnapshot:
     ranking_version: int
     message: str
     error: str | None = None
+    is_fallback: bool = False
+    penalty_score: float | None = None
+    penalty_details: tuple[str, ...] = ()
 
     @property
     def is_final(self) -> bool:

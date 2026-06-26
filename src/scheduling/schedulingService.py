@@ -36,6 +36,7 @@ from ranking_settings import RankedExamSystem, RankingSettings
 from scheduling.courseFilter import CourseFilter
 from scheduling.batchIterator import GeneratedScheduleBatch, iter_exam_system_batches
 from scheduling.examScheduleGenerator import ExamScheduleGenerator, ExamSystem
+from scheduling.fallbackScheduleService import FallbackScheduleService
 from scheduling.progressiveGeneration import (
     ProgressiveCounters,
     ProgressiveGenerationOptions,
@@ -114,6 +115,7 @@ class SchedulingService:
         course_filter: CourseFilter | None = None,
         schedule_generator: ExamScheduleGenerator | None = None,
         ranking_service: ScheduleRankingService | None = None,
+        fallback_service: FallbackScheduleService | None = None,
         ranking_settings: RankingSettings | None = None,
         settings_validator: SchedulingSettingsValidator | None = None,
         clock: Callable[[], float] = perf_counter,
@@ -127,6 +129,7 @@ class SchedulingService:
         self._course_filter = course_filter or CourseFilter()
         self._injected_generator = schedule_generator
         self._ranking_service = ranking_service or ScheduleRankingService()
+        self._fallback_service = fallback_service or FallbackScheduleService()
         self._fallback_ranking_settings = ranking_settings or RankingSettings([])
         self._settings_validator = settings_validator or SchedulingSettingsValidator()
         self._clock = clock
@@ -159,7 +162,21 @@ class SchedulingService:
             prepared.exam_periods,
         )
 
-        if rank_results:
+        if rank_results and not schedules and self._injected_generator is None:
+            fallback = self._fallback_service.generate_best_alternatives(
+                prepared.relevant_courses,
+                prepared.exam_periods,
+                prepared.constraint_settings,
+                prepared.ranking_settings,
+                display_limit=1,
+            )
+            ranked_schedules = fallback.ranked_schedules
+            schedules = [
+                ranked_system.exam_system
+                for ranked_system in ranked_schedules
+            ]
+            ranking_seconds = 0.0
+        elif rank_results:
             # Ranking is a separate service because "valid" and "best" are two
             # different questions.  The generator answers validity; this
             # service delegates schedule preference ordering to the ranking
@@ -352,6 +369,44 @@ class SchedulingService:
                 ),
             )
 
+        if preview.systems_seen == 0 and self._injected_generator is None:
+            # Strict generation found no schedules that satisfy every enabled
+            # constraint.  Version 34 fallback is deliberately conservative:
+            # it runs only here, keeps hard red-line constraints enforced, and
+            # converts only soft preference violations into penalty metadata.
+            fallback = self._fallback_service.generate_best_alternatives(
+                prepared.relevant_courses,
+                prepared.exam_periods,
+                prepared.constraint_settings,
+                prepared.ranking_settings,
+                display_limit=options.display_limit,
+            )
+            if fallback.ranked_schedules:
+                preview.add_ranked_batch(
+                    fallback.ranked_schedules,
+                    generated_count=fallback.generated_count,
+                    accepted_count=len(fallback.ranked_schedules),
+                    processed_count=fallback.generated_count,
+                    ranking_seconds=0.0,
+                )
+                best_fallback = fallback.ranked_schedules[0]
+                return self._finish_progressive_run(
+                    cache=cache,
+                    options=options,
+                    on_snapshot=on_snapshot,
+                    run_id=run_id,
+                    state=ProgressiveResultState.COMPLETE,
+                    preview=preview,
+                    generator=generator,
+                    relevant_course_count=len(prepared.relevant_courses),
+                    ranking_version=ranking_version,
+                    started_at=started_at,
+                    message=self._fallback_message(best_fallback),
+                    is_fallback=True,
+                    penalty_score=best_fallback.penalty_score,
+                    penalty_details=best_fallback.penalty_details,
+                )
+
         return self._finish_progressive_run(
             cache=cache,
             options=options,
@@ -524,6 +579,9 @@ class SchedulingService:
         ranking_version: int,
         started_at: float,
         message: str,
+        is_fallback: bool = False,
+        penalty_score: float | None = None,
+        penalty_details: tuple[str, ...] = (),
     ) -> ProgressiveRankedSnapshot:
         """Create, optionally persist, emit, and return the terminal snapshot.
 
@@ -548,6 +606,9 @@ class SchedulingService:
             ranking_version=ranking_version,
             started_at=started_at,
             message=message,
+            is_fallback=is_fallback,
+            penalty_score=penalty_score,
+            penalty_details=penalty_details,
         )
 
         # PARTIAL snapshots are dispatched via on_snapshot() in the main loop
@@ -592,6 +653,9 @@ class SchedulingService:
         started_at: float,
         message: str,
         error: str | None = None,
+        is_fallback: bool = False,
+        penalty_score: float | None = None,
+        penalty_details: tuple[str, ...] = (),
     ) -> ProgressiveRankedSnapshot:
         """Build an immutable snapshot from the current mutable state.
 
@@ -628,6 +692,9 @@ class SchedulingService:
             ranking_version=ranking_version,
             message=message,
             error=error,
+            is_fallback=is_fallback,
+            penalty_score=penalty_score,
+            penalty_details=penalty_details,
         )
 
     @staticmethod
@@ -697,6 +764,20 @@ class SchedulingService:
         return (
             f"Final Top {shown:,} ranking complete from "
             f"{preview.systems_seen:,} generated schedule(s)."
+        )
+
+    @staticmethod
+    def _fallback_message(ranked_system: RankedExamSystem) -> str:
+        """Return a clear warning for a best-effort fallback schedule."""
+        score = ranked_system.penalty_score
+        score_text = "unknown" if score is None else f"{score:g}"
+        violation_count = len(ranked_system.penalty_details)
+        return (
+            "Fallback schedule: no schedule satisfied all enabled soft "
+            "preferences. Showing the best available schedule that still "
+            "respects hard constraints, with soft-constraint penalty score "
+            f"{score_text} and "
+            f"{violation_count} violation(s)."
         )
 
     def _next_run_id(self) -> int:

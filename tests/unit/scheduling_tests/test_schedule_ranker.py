@@ -22,6 +22,8 @@ def ranked_system(
     elective_collision_count: int = 0,
     mandatory_span: int = 0,
     max_exams_per_day: int = 0,
+    penalty_score: float | None = None,
+    is_fallback: bool = False,
 ) -> RankedExamSystem:
     """Create a ranked wrapper with explicit metric values."""
     return RankedExamSystem(
@@ -35,6 +37,8 @@ def ranked_system(
             max_exams_per_day=max_exams_per_day,
         ),
         key=key,
+        penalty_score=penalty_score,
+        is_fallback=is_fallback,
     )
 
 
@@ -70,6 +74,37 @@ def test_descending_criterion_places_larger_metric_first() -> None:
     systems = [
         ranked_system(1, min_mandatory_gap=2),
         ranked_system(2, min_mandatory_gap=5),
+    ]
+
+    ordered = ScheduleRanker().rank(
+        systems,
+        RankingSettings(
+            [
+                RankingPreference(
+                    RankingCriterion.min_mandatory_gap
+                )
+            ]
+        ),
+    )
+
+    assert keys(ordered) == [2, 1]
+
+
+def test_fallback_schedules_sort_by_penalty_before_ranking_metrics() -> None:
+    """A lower-penalty fallback must be shown before a better metric score."""
+    systems = [
+        ranked_system(
+            1,
+            min_mandatory_gap=10,
+            penalty_score=60,
+            is_fallback=True,
+        ),
+        ranked_system(
+            2,
+            min_mandatory_gap=1,
+            penalty_score=50,
+            is_fallback=True,
+        ),
     ]
 
     ordered = ScheduleRanker().rank(

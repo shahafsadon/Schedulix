@@ -239,3 +239,9 @@ class RankedExamSystem:
     metrics: ScheduleMetrics
     # Stable generation-order key used for deterministic tie-breaking.
     key: int
+    # Optional Version 4 fallback metadata.  Strictly valid schedules normally
+    # have a penalty score of 0 or None; fallback schedules carry a positive
+    # score and human-readable violation details.
+    penalty_score: float | None = None
+    penalty_details: tuple[str, ...] = ()
+    is_fallback: bool = False

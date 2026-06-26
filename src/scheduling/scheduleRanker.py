@@ -35,6 +35,15 @@ class ScheduleRanker:
 
         If no metrics are selected, keep the same order.
         """
+        if any(ranked_system.is_fallback for ranked_system in ranked_systems):
+            return sorted(
+                ranked_systems,
+                key=lambda ranked_system: self._fallback_ranking_key(
+                    ranked_system,
+                    ranking_settings,
+                ),
+            )
+
         if not ranking_settings.priority_list:
             return list(ranked_systems)
 
@@ -76,6 +85,16 @@ class ScheduleRanker:
         key_parts.append(float(ranked_system.key))
 
         return tuple(key_parts)
+
+    def _fallback_ranking_key(
+        self,
+        ranked_system: RankedExamSystem,
+        ranking_settings: RankingSettings,
+    ) -> tuple[float, ...]:
+        """Rank fallback alternatives by penalty before preference metrics."""
+        penalty_score = ranked_system.penalty_score
+        penalty_key = float("inf") if penalty_score is None else float(penalty_score)
+        return (penalty_key, *self._ranking_key(ranked_system, ranking_settings))
 
     @staticmethod
     def _metric_value(
