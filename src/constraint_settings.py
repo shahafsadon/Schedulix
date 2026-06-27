@@ -10,15 +10,15 @@ class ThresholdConstraintType(Enum):
 
     Each member corresponds to one numbered requirement from the design document:
 
-    * mandatory_gap_days          – Req 2.1: minimum gap between two mandatory
+    * mandatory_gap_days          – minimum gap between two mandatory
                                     exams that share at least one (program, year).
-    * any_course_gap_days         – Req 2.2: minimum gap between any two exams
+    * any_course_gap_days         – minimum gap between any two exams
                                     on the same day regardless of course type.
-    * elective_conflicts_per_program – Req 2.3: maximum number of elective-exam
+    * elective_conflicts_per_program – maximum number of elective-exam
                                     conflicts allowed within a single program.
-    * mandatory_span_days         – Req 2.4: maximum span (in days) over which
+    * mandatory_span_days         – maximum span (in days) over which
                                     mandatory exams for one program may be spread.
-    * max_exams_per_day           – Req 2.5: maximum total exams allowed on a
+    * max_exams_per_day           – maximum total exams allowed on a
                                     single calendar day across the whole schedule.
     """
 

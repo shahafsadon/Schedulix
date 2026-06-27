@@ -76,11 +76,11 @@ _MIN_K_BY_CONSTRAINT: dict[ThresholdConstraintType, int] = {
 # Human-readable labels for each ThresholdConstraintType used in error
 # messages so the error text is immediately actionable.
 _CONSTRAINT_LABELS: dict[ThresholdConstraintType, str] = {
-    ThresholdConstraintType.mandatory_gap_days: "Mandatory Gap Days (Req 2.1)",
-    ThresholdConstraintType.any_course_gap_days: "Any Course Gap Days (Req 2.2)",
-    ThresholdConstraintType.elective_conflicts_per_program: "Elective Conflicts Per Program (Req 2.3)",
-    ThresholdConstraintType.mandatory_span_days: "Mandatory Span Days (Req 2.4)",
-    ThresholdConstraintType.max_exams_per_day: "Max Exams Per Day (Req 2.5)",
+    ThresholdConstraintType.mandatory_gap_days: "Mandatory Gap Days",
+    ThresholdConstraintType.any_course_gap_days: "Any Course Gap Days",
+    ThresholdConstraintType.elective_conflicts_per_program: "Elective Conflicts Per Program",
+    ThresholdConstraintType.mandatory_span_days: "Mandatory Span Days",
+    ThresholdConstraintType.max_exams_per_day: "Max Exams Per Day",
 }
 
 

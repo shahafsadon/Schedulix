@@ -13,8 +13,10 @@ the View relies on, since a wrong format here would silently break the
 precisely so it can be imported and tested without constructing any widget.
 """
 
+import queue
 import sys
 import unittest
+from types import SimpleNamespace
 from datetime import date
 from pathlib import Path
 
@@ -86,12 +88,22 @@ class _FakeRunner:
         self.result = result
         self.accepted = accepted
 
-    def run(self, task, on_started=None, on_complete=None, on_error=None) -> bool:
+    def run_with_progress(
+        self,
+        task,
+        on_started=None,
+        on_complete=None,
+        on_error=None,
+    ) -> bool:
         if not self.accepted:
             return False
         if on_started is not None:
             on_started()
-        result = self.result if self.result is not None else task()
+        result = (
+            self.result
+            if self.result is not None
+            else task(SimpleNamespace(is_cancelled=False), lambda _update: None)
+        )
         if on_complete is not None:
             on_complete(result)
         return True
@@ -156,7 +168,7 @@ class TestDateManagementScreenHelpers(unittest.TestCase):
         screen._scheduling_presenter = type(
             "FakeSchedulingPresenter",
             (),
-            {"generate": lambda self: result},
+            {"generate_progressive": lambda self, **_kwargs: result},
         )()
         screen._runner = _FakeRunner(result)
         screen._on_generation_success = lambda: visited.append("results")
@@ -170,7 +182,8 @@ class TestDateManagementScreenHelpers(unittest.TestCase):
         screen._back_button = _FakeWidget()
         screen._generate_button = _FakeWidget()
         screen._day_cells = {"2026-01-29": _FakeWidget()}
-        screen.after = lambda _delay, callback: callback()
+        screen._progress_queue = queue.Queue(maxsize=1)
+        screen.after = lambda delay, callback: callback() if delay != 50 else None
         return screen
 
     def test_generation_success_locks_controls_and_navigates_to_results(self) -> None:
@@ -201,7 +214,7 @@ class TestDateManagementScreenHelpers(unittest.TestCase):
         DateManagementScreen._handle_generate(screen)
 
         self.assertEqual(visited, [])
-        self.assertEqual(screen._status_label.options["text"], "No exam periods loaded.")
+        self.assertEqual(screen._status_label.options["text"], "")
         self.assertEqual(screen._generate_button.options["state"], "normal")
         self.assertEqual(screen._generate_button.options["text"], "Generate Exam Schedules")
         self.assertEqual(screen._day_cells["2026-01-29"].options["state"], "normal")
@@ -217,10 +230,31 @@ class TestDateManagementScreenHelpers(unittest.TestCase):
         DateManagementScreen._handle_generate(screen)
 
         self.assertEqual(visited, [])
-        self.assertEqual(
-            screen._status_label.options["text"],
-            "Schedule generation is already running.",
-        )
+        self.assertEqual(screen._status_label.options["text"], "")
+
+    def test_generation_uses_the_progressive_runner_path(self) -> None:
+        """The GUI must not call the old full-list generation method."""
+        visited: list[str] = []
+        result = GenerationResult(True, "Generated.", 1, displayed_count=1)
+        screen = self._generation_screen(result, visited)
+        screen._runner = _FakeRunner(result=None)
+        calls: list[dict] = []
+
+        class ProgressivePresenter:
+            def generate(self):  # pragma: no cover - fails if the old path returns
+                raise AssertionError("The full generation path must not be used.")
+
+            def generate_progressive(self, **kwargs):
+                calls.append(kwargs)
+                return result
+
+        screen._scheduling_presenter = ProgressivePresenter()
+
+        DateManagementScreen._handle_generate(screen)
+
+        self.assertEqual(len(calls), 1)
+        self.assertTrue(callable(calls[0]["on_snapshot"]))
+        self.assertEqual(calls[0]["options"].display_limit, 50)
 
 
 if __name__ == "__main__":

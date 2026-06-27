@@ -7,6 +7,7 @@ import sys
 import unittest
 from datetime import date
 from pathlib import Path
+from unittest.mock import MagicMock
 
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -30,6 +31,7 @@ from ranking_settings import (
 )
 from scheduling.examConflictDetector import ScheduledExam
 from scheduling.examScheduleGenerator import ExamSchedule, ExamSystem
+from scheduling.scheduleIntrospection import flatten_exam_system
 from gui.presenters.scheduleNavigationPresenter import (
     ResultMode,
     ScheduleNavigationPresenter,
@@ -743,7 +745,7 @@ class ScheduleNavigationPresenterPart4Tests(unittest.TestCase):
         status = presenter.current_view().day_status_by_iso_date["2026-01-01"]
 
         self.assertEqual(status.status, "conflict")
-        self.assertIn("critical-conflict", status.details)
+        self.assertIn("Courses 83001 and 83002 conflict", status.details)
 
     def test_snapshot_save_load_and_compare_use_active_schedule(self) -> None:
         """Snapshots can be saved, compared, and loaded without regeneration."""
@@ -810,7 +812,8 @@ class ScheduleNavigationPresenterPart4Tests(unittest.TestCase):
 
         comparison = presenter.compare_snapshots("first", "second")
         self.assertTrue(comparison.success)
-        self.assertIn("Penalty score delta", comparison.details)
+        self.assertIn("Penalty score (lower is better)", comparison.details)
+        self.assertIn("50 -> 10", comparison.details)
         self.assertIn("-40", comparison.details)
         self.assertIn("No changed courses.", comparison.details)
 
@@ -839,3 +842,88 @@ class ScheduleNavigationPresenterPart4Tests(unittest.TestCase):
         redo = presenter.redo_manual_move()
         self.assertTrue(redo.success)
         self.assertIn("2026-01-02", presenter.current_view().exams_by_iso_date)
+
+    def test_manual_move_selector_distinguishes_aleph_and_bet_for_one_course(self) -> None:
+        """The GUI label must identify the exact exam the user selected."""
+        system = ExamSystem(
+            period_schedules=[
+                ExamSchedule(
+                    "FALL",
+                    "Aleph",
+                    [make_exam("Algorithms", "83001", date(2026, 1, 1))],
+                ),
+                ExamSchedule(
+                    "FALL",
+                    "Bet",
+                    [make_exam("Algorithms", "83001", date(2026, 2, 1))],
+                ),
+            ]
+        )
+        periods = [
+            ExamPeriod("FALL", "Aleph", date(2026, 1, 1), date(2026, 1, 2), []),
+            ExamPeriod("FALL", "Bet", date(2026, 2, 1), date(2026, 2, 2), []),
+        ]
+        presenter = ScheduleNavigationPresenter(
+            [system],
+            cache_manager=FakeCache(periods=periods),
+        )
+
+        options = presenter.manual_move_course_options()
+        bet_option = next(option for option in options if "FALL Bet" in option)
+
+        result = presenter.apply_manual_move(bet_option, "02-02-2026")
+
+        self.assertTrue(result.success)
+        moved = presenter.current_system()
+        dates = {
+            (location.semester, location.moed): location.exam_date
+            for location in flatten_exam_system(moved)
+        }
+        self.assertEqual(dates[("FALL", "Aleph")], date(2026, 1, 1))
+        self.assertEqual(dates[("FALL", "Bet")], date(2026, 2, 2))
+
+    def test_manual_move_dates_exclude_the_current_exam_date(self) -> None:
+        """The move menu offers only dates that would actually change the exam."""
+        system = make_system(
+            exams=[make_exam("Algorithms", "83001", date(2026, 1, 1))]
+        )
+        presenter = ScheduleNavigationPresenter(
+            [system],
+            cache_manager=FakeCache(periods=[self._fall_period()]),
+        )
+        presenter._manual_editor._impact_service.analyze = MagicMock(
+            side_effect=AssertionError("The date picker must not calculate impact.")
+        )
+
+        dates = presenter.manual_move_date_options(
+            presenter.manual_move_course_options()[0]
+        )
+
+        self.assertNotIn("01-01-2026", dates)
+        self.assertIn("02-01-2026", dates)
+        presenter._manual_editor._impact_service.analyze.assert_not_called()
+
+    def test_manual_move_dates_hide_critical_conflicts(self) -> None:
+        """The picker must not offer a date that collides with a mandatory exam."""
+        system = make_system(
+            exams=[
+                make_exam("Algorithms", "83001", date(2026, 1, 1)),
+                make_exam("Physics", "83002", date(2026, 1, 2)),
+            ]
+        )
+        presenter = ScheduleNavigationPresenter(
+            [system],
+            cache_manager=FakeCache(periods=[self._fall_period()]),
+        )
+        presenter._manual_editor._impact_service.analyze = MagicMock(
+            side_effect=AssertionError("The date picker must not calculate impact.")
+        )
+
+        dates = presenter.manual_move_date_options(
+            presenter.manual_move_course_options()[0]
+        )
+
+        self.assertNotIn("01-01-2026", dates)
+        self.assertNotIn("02-01-2026", dates)
+        self.assertIn("03-01-2026", dates)
+        presenter._manual_editor._impact_service.analyze.assert_not_called()

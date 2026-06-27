@@ -354,10 +354,11 @@ def test_snapshot_failure_opens_clear_modal_message() -> None:
 
     screen._set_snapshot_status("Snapshot name cannot be empty.", success=False)
 
-    assert screen._snapshot_status_label.options["text_color"] == module._ERROR
+    assert screen._snapshot_status_label.options["text"] == ""
+    assert screen._snapshot_status_label.options["text_color"] == module._MUTED
     popup = fake_ctk.CTkToplevel.created[-1]
     assert popup.title_text == "Snapshot action needs attention"
-    assert popup.geometry_text == "430x190+485+385"
+    assert popup.geometry_text == "560x300+420+330"
     assert popup.grabbed is True
     assert widgets_with_text(
         fake_ctk.CTkLabel,
@@ -447,7 +448,8 @@ def test_manual_move_failure_opens_clear_modal_message() -> None:
 
     screen._set_move_status("Course 83102 appears more than once.", success=False)
 
-    assert screen._move_status_label.options["text_color"] == module._ERROR
+    assert screen._move_status_label.options["text"] == ""
+    assert screen._move_status_label.options["text_color"] == module._MUTED
     popup = fake_ctk.CTkToplevel.created[-1]
     assert popup.title_text == "Manual move needs attention"
     assert popup.grabbed is True
@@ -455,6 +457,21 @@ def test_manual_move_failure_opens_clear_modal_message() -> None:
         fake_ctk.CTkLabel,
         "Course 83102 appears more than once.",
     )
+
+
+def test_manual_move_span_error_is_split_into_readable_lines() -> None:
+    module, _ = load_screen_module("scheduleNavigationScreen.py")
+
+    message = module.ScheduleNavigationScreen._format_modal_message(
+        "Mandatory exams for program 83102 year 1 semester FALL moed Aleph "
+        "span only 1 days; required minimum is 2."
+    )
+
+    assert "Please choose a different date." in message
+    assert "Program: 83102" in message
+    assert "Semester: FALL" in message
+    assert "Current span: 1 day" in message
+    assert "Minimum needed: 2 days" in message
 
 
 def test_save_success_is_green_and_failure_is_red(monkeypatch) -> None:

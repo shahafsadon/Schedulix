@@ -356,6 +356,55 @@ class TestCacheManagerIncrementalUpdates(_CacheManagerTestBase):
         self.assertEqual(result[0].name, "Physics 1")
         self.assertEqual(result[1].name, "Calculus 1")
 
+    def test_add_courses_ignores_an_exact_duplicate(self) -> None:
+        """Appending the same course twice must keep one course record."""
+        cache = CacheManager()
+        course = _make_course("Physics 1", "83102")
+        cache.set_courses([course])
+
+        cache.add_courses([course])
+
+        self.assertEqual(len(cache.get_courses()), 1)
+
+    def test_add_courses_merges_new_program_enrollment(self) -> None:
+        """The same course may be merged when it belongs to another program."""
+        cache = CacheManager()
+        cache.set_courses([_make_course("Physics 1", "83102")])
+        second_program = _make_course("Physics 1", "83102")
+        second_program.programs = [
+            ProgramEnrollment("83108", 2, "SPRI", "Obligatory")
+        ]
+
+        cache.add_courses([second_program])
+
+        saved_course = cache.get_courses()[0]
+        self.assertEqual(len(cache.get_courses()), 1)
+        self.assertEqual(
+            [program.program_number for program in saved_course.programs],
+            ["83101", "83108"],
+        )
+
+    def test_add_courses_rejects_conflicting_course_details(self) -> None:
+        """One course number must not silently describe two different courses."""
+        cache = CacheManager()
+        cache.set_courses([_make_course("Physics 1", "83102")])
+
+        with self.assertRaisesRegex(ValueError, "conflicting course details"):
+            cache.add_courses([_make_course("Different Physics", "83102")])
+
+        self.assertEqual(len(cache.get_courses()), 1)
+
+    def test_reload_repairs_exact_duplicate_courses(self) -> None:
+        """A saved cache with duplicate uploads is cleaned on the next start."""
+        first = CacheManager()
+        course = _make_course("Physics 1", "83102")
+        first._state.courses = [course, course]
+        first._persist()
+
+        restored = CacheManager()
+
+        self.assertEqual(len(restored.get_courses()), 1)
+
     def test_add_exam_periods_extends_existing_list(self) -> None:
         """add_exam_periods appends to existing periods instead of replacing."""
         cache = CacheManager()

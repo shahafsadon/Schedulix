@@ -18,6 +18,7 @@ from application.async_runner import AsyncScheduleRunner
 from gui.presenters.dateManagementPresenter import DateManagementPresenter
 from gui.presenters.schedulingPresenter import GenerationResult, SchedulingPresenter
 from scheduling.progressiveGeneration import (
+    ProgressiveGenerationOptions,
     ProgressiveRankedSnapshot,
     ProgressiveResultState,
 )
@@ -52,6 +53,7 @@ _EXCLUDED_DAY_COLOR = ("#FEE2E2", "#5A1F1F")
 _EXCLUDED_DAY_HOVER = ("#FECACA", "#7F2A2A")
 _EXCLUDED_DAY_TEXT = ("#991B1B", "#FEE2E2")
 _OUTSIDE_DAY_TEXT = ("#B8C0CC", "#64748B")
+_ERROR = "#B00020"
 
 
 def parse_calendar_date(text: str) -> date:
@@ -509,14 +511,26 @@ class DateManagementScreen(ctk.CTkFrame):
             on_next()
 
     def _handle_generate(self) -> None:
-        """Generate schedules directly from the final date-review step."""
+        """Generate schedules in the background with bounded live progress."""
         if self._scheduling_presenter is None:
             self._show_message("Schedule generator is not available.", ok=False)
             return
 
-        accepted = self._runner.run(
-            task=self._scheduling_presenter.generate,
-            on_started=self._show_generation_started,
+        def task(token, _on_progress):
+            """Run the lazy generation path and post snapshots safely to Tk."""
+            return self._scheduling_presenter.generate_progressive(
+                on_snapshot=self._post_progress,
+                cancellation_token=token,
+                options=ProgressiveGenerationOptions(
+                    batch_size=100,
+                    display_limit=50,
+                    min_update_interval_seconds=0.35,
+                ),
+            )
+
+        accepted = self._runner.run_with_progress(
+            task=task,
+            on_started=self._show_generation_started_progressive,
             on_complete=lambda result: self.after(
                 0,
                 lambda: self._show_generation_result(result),
@@ -739,11 +753,95 @@ class DateManagementScreen(ctk.CTkFrame):
         )
 
     def _show_message(self, text: str, ok: bool) -> None:
+        """Show normal progress below the page and errors in a clear dialog."""
         text = self._message_with_hidden_exclusions(text)
         self._status_label.configure(
-            text=text,
-            text_color="#147A39" if ok else "#B00020",
+            text=text if ok else "",
+            text_color="#147A39" if ok else _MUTED,
         )
+        if not ok:
+            self._show_error_dialog(text)
+
+    def _show_error_dialog(self, message: str) -> None:
+        """Show one centered error dialog instead of a hidden footer warning."""
+        if not message:
+            return
+        try:
+            parent = self.winfo_toplevel()
+        except (AttributeError, RuntimeError, TypeError):
+            return
+
+        popup = ctk.CTkToplevel(parent)
+        popup.title("Please check the exam dates")
+        popup.geometry(self._centered_popup_geometry(parent, 500, 240))
+        popup.transient(parent)
+        popup.grab_set()
+        if hasattr(popup, "resizable"):
+            popup.resizable(False, False)
+        popup.configure(fg_color=_PAGE_BG)
+
+        card = ctk.CTkFrame(
+            popup,
+            fg_color=_SURFACE,
+            border_width=1,
+            border_color=_BORDER,
+            corner_radius=10,
+        )
+        card.pack(fill="both", expand=True, padx=16, pady=16)
+        card.grid_columnconfigure(1, weight=1)
+
+        ctk.CTkLabel(
+            card,
+            text="!",
+            width=32,
+            height=32,
+            fg_color=_ERROR,
+            corner_radius=16,
+            font=("Segoe UI", 16, "bold"),
+            text_color="#FFFFFF",
+        ).grid(row=0, column=0, rowspan=2, padx=(16, 12), pady=(16, 0), sticky="n")
+        ctk.CTkLabel(
+            card,
+            text="Please check the exam dates",
+            font=("Segoe UI", 18, "bold"),
+            text_color=_TEXT,
+            anchor="w",
+        ).grid(row=0, column=1, sticky="ew", padx=(0, 16), pady=(16, 6))
+        ctk.CTkLabel(
+            card,
+            text=message,
+            font=("Segoe UI", 14),
+            text_color=_MUTED,
+            anchor="w",
+            justify="left",
+            wraplength=385,
+        ).grid(row=1, column=1, sticky="ew", padx=(0, 16), pady=(0, 16))
+        ctk.CTkButton(
+            card,
+            text="OK",
+            width=86,
+            fg_color=_PRIMARY,
+            hover_color=_PRIMARY_HOVER,
+            command=popup.destroy,
+        ).grid(row=2, column=1, sticky="e", padx=(0, 16), pady=(0, 16))
+
+    @staticmethod
+    def _centered_popup_geometry(parent, width: int, height: int) -> str:
+        """Return a position that places a small dialog over the main window."""
+        try:
+            if hasattr(parent, "update_idletasks"):
+                parent.update_idletasks()
+            parent_width = int(parent.winfo_width())
+            parent_height = int(parent.winfo_height())
+            parent_x = int(parent.winfo_rootx())
+            parent_y = int(parent.winfo_rooty())
+            if parent_width > 1 and parent_height > 1:
+                x = parent_x + (parent_width - width) // 2
+                y = parent_y + (parent_height - height) // 2
+                return f"{width}x{height}+{max(x, 0)}+{max(y, 0)}"
+        except (AttributeError, RuntimeError, TypeError, ValueError):
+            pass
+        return f"{width}x{height}"
 
     def _period_option_labels(self) -> list[str]:
         labels: list[str] = []

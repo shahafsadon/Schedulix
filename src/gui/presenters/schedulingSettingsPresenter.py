@@ -12,32 +12,37 @@ from constraint_settings import (
 )
 
 
-_REQUIREMENT_COPY: dict[ThresholdConstraintType, tuple[str, str, str]] = {
+_REQUIREMENT_COPY: dict[ThresholdConstraintType, tuple[str, str]] = {
     ThresholdConstraintType.mandatory_gap_days: (
-        "Req 2.1",
         "Mandatory Course Gap",
         "Minimum days between mandatory exams that share a program and year.",
     ),
     ThresholdConstraintType.any_course_gap_days: (
-        "Req 2.2",
         "General Exam Gap",
         "Minimum days between any exams that share a program and year.",
     ),
     ThresholdConstraintType.elective_conflicts_per_program: (
-        "Req 2.3",
         "Elective Collision Limit",
         "Maximum same-date elective collisions allowed inside one program.",
     ),
     ThresholdConstraintType.mandatory_span_days: (
-        "Req 2.4",
         "Mandatory Exam-Period Span",
         "Minimum spread, in days, for mandatory exams in each period group.",
     ),
     ThresholdConstraintType.max_exams_per_day: (
-        "Req 2.5",
         "Maximum Exams Per Day",
         "Maximum total exams that may be placed on a single calendar day.",
     ),
+}
+
+# These identifiers stay in the presenter for traceability and automated tests.
+# The GUI shows the short title and description instead of these internal labels.
+_REQUIREMENT_IDS: dict[ThresholdConstraintType, str] = {
+    ThresholdConstraintType.mandatory_gap_days: "Req 2.1",
+    ThresholdConstraintType.any_course_gap_days: "Req 2.2",
+    ThresholdConstraintType.elective_conflicts_per_program: "Req 2.3",
+    ThresholdConstraintType.mandatory_span_days: "Req 2.4",
+    ThresholdConstraintType.max_exams_per_day: "Req 2.5",
 }
 
 
@@ -181,7 +186,8 @@ class SchedulingSettingsPresenter:
         self,
         constraint_type: ThresholdConstraintType,
     ) -> SchedulingSettingRow:
-        requirement_id, title, description = _REQUIREMENT_COPY[constraint_type]
+        title, description = _REQUIREMENT_COPY[constraint_type]
+        requirement_id = _REQUIREMENT_IDS[constraint_type]
         enabled = self._enabled[constraint_type]
         return SchedulingSettingRow(
             constraint_type=constraint_type,

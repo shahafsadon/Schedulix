@@ -1,6 +1,12 @@
 from datetime import date
 
+from constraint_settings import (
+    SchedulingConstraintSettings,
+    ThresholdConstraintSetting,
+    ThresholdConstraintType,
+)
 from scheduling.manualScheduleEditor import ManualScheduleEditor
+from scheduling.examScheduleGenerator import ExamSchedule, ExamSystem
 from scheduling.scheduleIntrospection import flatten_exam_system
 
 from ._part4_helpers import make_exam, make_system
@@ -62,4 +68,68 @@ def test_move_that_creates_critical_conflict_is_rejected() -> None:
     )
 
     assert not result.success
-    assert "critical-conflict" in result.message
+    assert "same-date exams" in result.message
+
+
+def test_manual_move_allows_an_existing_soft_threshold_violation() -> None:
+    """A manual move may keep a fallback schedule below a soft target."""
+    settings = SchedulingConstraintSettings.default_configuration()
+    settings.constraints[ThresholdConstraintType.mandatory_span_days] = (
+        ThresholdConstraintSetting(enabled=True, k=2)
+    )
+    schedule = make_system(
+        make_exam("83001", date(2026, 1, 1)),
+        make_exam("83002", date(2026, 1, 3)),
+    )
+
+    result = ManualScheduleEditor().move_exam(
+        schedule,
+        "83002",
+        date(2026, 1, 2),
+        constraint_settings=settings,
+    )
+
+    assert result.success
+    assert flatten_exam_system(result.schedule)[1].exam_date == date(2026, 1, 2)
+    assert result.impact is not None
+
+
+def test_move_selects_one_exam_period_when_course_exists_in_aleph_and_bet() -> None:
+    """The selected period must move without changing the other course exam."""
+    original = ExamSystem(
+        period_schedules=[
+            ExamSchedule(
+                semester="FALL",
+                moed="Aleph",
+                scheduled_exams=[make_exam("83001", date(2026, 1, 1))],
+            ),
+            ExamSchedule(
+                semester="FALL",
+                moed="Bet",
+                scheduled_exams=[make_exam("83001", date(2026, 2, 1))],
+            ),
+        ]
+    )
+
+    result = ManualScheduleEditor().move_exam(
+        original,
+        "83001",
+        date(2026, 2, 2),
+        source_semester="FALL",
+        source_moed="Bet",
+        source_date=date(2026, 2, 1),
+        available_dates={date(2026, 2, 1), date(2026, 2, 2)},
+    )
+
+    assert result.success
+    moved_dates = {
+        (location.semester, location.moed): location.exam_date
+        for location in flatten_exam_system(result.schedule)
+    }
+    original_dates = {
+        (location.semester, location.moed): location.exam_date
+        for location in flatten_exam_system(original)
+    }
+    assert moved_dates[("FALL", "Aleph")] == date(2026, 1, 1)
+    assert moved_dates[("FALL", "Bet")] == date(2026, 2, 2)
+    assert original_dates[("FALL", "Bet")] == date(2026, 2, 1)

@@ -242,7 +242,9 @@ class SchedulingService:
         run_id = self._next_run_id()
         ranking_version = run_id
         started_at = self._clock()
+        # Read all user input once so one run uses one consistent set of data.
         prepared = self._prepare_inputs(cache)
+        # A fresh generator keeps counters and cancellation state local to this run.
         generator = self._create_generator(prepared.constraint_settings)
         # The buffer is the memory-safety boundary: it retains only the current
         # Top-N schedules rather than the full generated history.
@@ -270,6 +272,8 @@ class SchedulingService:
 
         last_emit_at = started_at
 
+        # This iterator produces a schedule only when the next batch asks for it.
+        # It does not create a list of every possible schedule first.
         generated_systems = self._iter_exam_systems(
             generator,
             prepared.relevant_courses,
@@ -295,6 +299,7 @@ class SchedulingService:
                 # emitting meaningless progress updates.
                 continue
 
+            # The user may change ranking while generation is running.
             latest_settings = cache.get_ranking_settings() or prepared.ranking_settings
             if preview.ranking_settings != latest_settings:
                 # Only the schedules still retained in the buffer can be
@@ -332,6 +337,7 @@ class SchedulingService:
                     ),
                 )
 
+            # Send updates at a controlled rate so the GUI queue stays small.
             now = self._clock()
             if now - last_emit_at >= options.min_update_interval_seconds:
                 # Throttling prevents the background worker from flooding the
@@ -527,7 +533,7 @@ class SchedulingService:
         schedule_batch: GeneratedScheduleBatch,
         ranking_settings: RankingSettings,
     ) -> None:
-        """Rank one generated batch and merge it into the bounded preview.
+        """Rank one small batch and keep only the best visible schedules.
 
         Parameters
         ----------
@@ -546,18 +552,14 @@ class SchedulingService:
         if schedule_batch.is_empty:
             return
 
-        # The ranking service calculates metrics for this batch and assigns
-        # stable IDs starting at schedule_batch.starting_schedule_id.  Stable
-        # IDs matter because they keep tie-breaking and GUI labels consistent
-        # across progressive batches.
+        # The ranking service gives every schedule its metrics and a stable id.
         ranking_outcome = self._ranking_service.rank_generated_batch(
             schedule_batch.schedules,
             ranking_settings,
             starting_schedule_id=schedule_batch.starting_schedule_id,
         )
-        # The buffer owns the "current preview + new batch -> rerank -> trim"
-        # policy.  Keeping that policy outside the service makes the memory
-        # tradeoff explicit and testable.
+        # The buffer mixes this batch with the current preview and drops the
+        # lower ranked schedules. It never keeps the full generated history.
         preview.add_ranked_batch(
             ranking_outcome.ranked_schedules,
             generated_count=schedule_batch.size,
@@ -583,7 +585,7 @@ class SchedulingService:
         penalty_score: float | None = None,
         penalty_details: tuple[str, ...] = (),
     ) -> ProgressiveRankedSnapshot:
-        """Create, optionally persist, emit, and return the terminal snapshot.
+        """Finish one run and return the final view for the GUI.
 
         Cache-safety contract (SCRUM-184)
         ----------------------------------
@@ -594,9 +596,7 @@ class SchedulingService:
         store.  ``CANCELLED`` and ``FAILED`` terminal states are also excluded
         so an aborted run leaves the previous (valid) schedules intact on disk.
         """
-        # Build the terminal view of the run first.  If we later persist final
-        # ranking with the latest ranking settings, the snapshot is replaced
-        # with an equivalent copy containing that final ranked order.
+        # Build a stable result first. The GUI never reads the mutable buffer.
         snapshot = self._build_snapshot(
             run_id=run_id,
             state=state,
@@ -626,13 +626,13 @@ class SchedulingService:
             )
             final_ranked_schedules = final_outcome.ranked_schedules
 
-            if preview.systems_seen == 0:
-                # Even an empty complete run is a meaningful final result: it
-                # tells the cache that the current input/settings combination
-                # produced no valid schedules.
-                cache.store_final_schedule_results([], [], latest_settings)
-            else:
-                cache.set_ranked_schedules(final_ranked_schedules)
+            # Save only the same small preview that the GUI shows. This keeps
+            # the next application start fast and avoids large cache files.
+            cache.store_final_schedule_results(
+                [ranked.exam_system for ranked in final_ranked_schedules],
+                final_ranked_schedules,
+                latest_settings,
+            )
 
             import dataclasses
             # ``ProgressiveRankedSnapshot`` is frozen, so replacing the ranked
