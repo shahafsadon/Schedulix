@@ -56,9 +56,9 @@ _SENTINEL = "CacheManager_v3"
 _SENTINEL_V2 = "CacheManager_v1"
 
 # Generated schedule lists can become very large and make restart sluggish or
-# impossible after an interrupted run. The GUI now persists final ranked Top-N
-# previews instead of the full generated universe, so caches above this limit
-# are treated as unsafe derived data and invalidated during load.
+# impossible after an interrupted run. Large derived result sets remain usable
+# in memory for the current GUI session, but are not written to the pickle file;
+# caches above this limit are also treated as unsafe derived data on load.
 MAX_PERSISTED_GENERATED_SCHEDULES = 500
 MAX_PERSISTED_RANKED_SCHEDULES = 500
 
@@ -426,8 +426,50 @@ class CacheManager:
         in sync with memory.
         """
         pkl_path = self.__class__._PKL_PATH
+        state_to_persist = self._state_for_persistence()
         with pkl_path.open("wb") as fh:
-            pickle.dump(self._state, fh)
+            pickle.dump(state_to_persist, fh)
+
+    def _state_for_persistence(self) -> _CacheState:
+        """
+        Return a pickle-safe state without oversized derived schedule lists.
+
+        Uploaded data and user settings are durable state. Generated/ranked
+        schedules are derived from that state and can be regenerated, so very
+        large result lists stay in memory for the active GUI session instead of
+        making ``internal_data.pkl`` slow or unsafe to reload.
+        """
+        generated = self._state.generated_schedules
+        ranked = self._state.ranked_schedules
+        if (
+            len(generated) <= MAX_PERSISTED_GENERATED_SCHEDULES
+            and len(ranked) <= MAX_PERSISTED_RANKED_SCHEDULES
+        ):
+            return self._state
+
+        persisted = _CacheState()
+        persisted.sentinel = self._state.sentinel
+        persisted.courses = self._state.courses
+        persisted.exam_periods = self._state.exam_periods
+        persisted.selected_programs = self._state.selected_programs
+        persisted.constraint_settings = self._state.constraint_settings
+        persisted.ranking_settings = self._state.ranking_settings
+        persisted.generated_schedules = (
+            list(generated)
+            if len(generated) <= MAX_PERSISTED_GENERATED_SCHEDULES
+            else []
+        )
+        persisted.ranked_schedules = (
+            list(ranked)
+            if len(ranked) <= MAX_PERSISTED_RANKED_SCHEDULES
+            else []
+        )
+        persisted.result_mode = (
+            self._state.result_mode
+            if persisted.generated_schedules or persisted.ranked_schedules
+            else "unranked_generated"
+        )
+        return persisted
 
     # ------------------------------------------------------------------
     # Courses

@@ -1,0 +1,10 @@
+# Quality Improvement Demo settings
+#
+# Keep threshold constraints disabled so normal generation can intentionally
+# show a low-quality but hard-valid schedule. The demo then improves quality
+# through a manual move and snapshot comparison.
+mandatory_gap_days = off, 3
+any_course_gap_days = off, 0
+elective_conflicts_per_program = off, 0
+mandatory_span_days = off, 0
+max_exams_per_day = off, 0

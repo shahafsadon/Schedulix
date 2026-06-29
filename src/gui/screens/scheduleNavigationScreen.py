@@ -74,6 +74,8 @@ _ERROR = "#B00020"
 _EMPTY_OPTION = "No options available"
 _MESSAGE_POPUP_WIDTH = 560
 _MESSAGE_POPUP_HEIGHT = 300
+_SUMMARY_CARD_WIDTH = 158
+_SUMMARY_CARD_HEIGHT = 74
 
 # Status banner colours: light-mode bg / dark-mode bg.
 _BANNER_PARTIAL_BG = ("#FEF3C7", "#3B2800")
@@ -124,6 +126,10 @@ class ScheduleNavigationScreen(ctk.CTkFrame):
         self._theme_button_text = theme_button_text
         self._ranking_runner = ranking_runner or AsyncScheduleRunner()
         self._ranking_run_id = 0
+        self._latest_ranking_update: ProgressiveRankingUpdate | None = None
+        self._displayed_ranking_update: ProgressiveRankingUpdate | None = None
+        self._completed_ranking_update: ProgressiveRankingUpdate | None = None
+        self._ranking_run_settings: RankingSettings | None = None
 
         self._exam_cells: dict[str, ctk.CTkButton] = {}
         self._selected_iso_date: str | None = None
@@ -150,6 +156,7 @@ class ScheduleNavigationScreen(ctk.CTkFrame):
         self._compare_snapshot_button = None
         self._snapshot_status_label = None
         self._snapshot_compare_box = None
+        self._snapshot_compare_container = None
         self._move_course_selector = None
         self._move_date_selector = None
         self._move_status_label = None
@@ -157,9 +164,15 @@ class ScheduleNavigationScreen(ctk.CTkFrame):
         self._apply_move_button = None
         self._undo_move_button = None
         self._redo_move_button = None
+        self._sidebar = None
+        self._part4_tools_built = False
+        self._ranking_panel_built = False
+        self._deferred_tools_build_started = False
+        self._last_view = None
 
         self._build()
         self._refresh()
+        self._schedule_deferred_tools_build()
 
     def _build(self) -> None:
         """Build the redesigned output review layout."""
@@ -279,9 +292,10 @@ class ScheduleNavigationScreen(ctk.CTkFrame):
     def _build_metrics(self) -> None:
         """Build compact summary cards for the current system."""
         metrics = ctk.CTkFrame(self, fg_color="transparent")
-        metrics.grid(row=1, column=0, sticky="ew", padx=24, pady=(0, 12))
+        metrics.grid(row=1, column=0, sticky="w", padx=24, pady=(0, 6))
         for column in range(4):
-            metrics.grid_columnconfigure(column, weight=1)
+            metrics.grid_columnconfigure(column, weight=0, minsize=_SUMMARY_CARD_WIDTH)
+        metrics.grid_columnconfigure(4, weight=1)
 
         self._build_metric(metrics, 0, "exams", "Exams in system")
         self._build_metric(metrics, 1, "days", "Exam days")
@@ -297,12 +311,16 @@ class ScheduleNavigationScreen(ctk.CTkFrame):
     ) -> None:
         card = ctk.CTkFrame(
             master,
+            width=_SUMMARY_CARD_WIDTH,
+            height=_SUMMARY_CARD_HEIGHT,
             fg_color=_SURFACE,
             border_width=1,
             border_color=_BORDER,
             corner_radius=8,
         )
-        card.grid(row=0, column=column, sticky="ew", padx=(0 if column == 0 else 10, 0))
+        card.grid(row=0, column=column, sticky="w", padx=(0 if column == 0 else 8, 0))
+        if hasattr(card, "grid_propagate"):
+            card.grid_propagate(False)
 
         ctk.CTkLabel(
             card,
@@ -310,22 +328,22 @@ class ScheduleNavigationScreen(ctk.CTkFrame):
             font=("Segoe UI", 10, "bold"),
             text_color=_MUTED,
             anchor="w",
-        ).grid(row=0, column=0, sticky="w", padx=14, pady=(10, 0))
+        ).grid(row=0, column=0, sticky="w", padx=11, pady=(7, 0))
 
         value = ctk.CTkLabel(
             card,
             text="-",
-            font=("Segoe UI", 19, "bold"),
+            font=("Segoe UI", 18, "bold"),
             text_color=(_PRIMARY, "#93C5FD"),
             anchor="w",
         )
-        value.grid(row=1, column=0, sticky="w", padx=14, pady=(0, 10))
+        value.grid(row=1, column=0, sticky="w", padx=11, pady=(0, 7))
         self._metric_labels[key] = value
 
     def _build_main_area(self) -> None:
         """Build calendar and details columns."""
         main = ctk.CTkFrame(self, fg_color="transparent")
-        main.grid(row=2, column=0, sticky="nsew", padx=24, pady=(0, 12))
+        main.grid(row=2, column=0, sticky="nsew", padx=24, pady=(0, 10))
         main.grid_columnconfigure(0, weight=3)
         main.grid_columnconfigure(1, weight=1)
         main.grid_rowconfigure(0, weight=1)
@@ -363,6 +381,7 @@ class ScheduleNavigationScreen(ctk.CTkFrame):
         sidebar.grid_rowconfigure(0, weight=2)
         sidebar.grid_rowconfigure(1, weight=1)
         sidebar.grid_rowconfigure(2, weight=1)
+        self._sidebar = sidebar
 
         details_card = ctk.CTkScrollableFrame(
             sidebar,
@@ -372,7 +391,7 @@ class ScheduleNavigationScreen(ctk.CTkFrame):
             corner_radius=8,
             height=430,
         )
-        details_card.grid(row=0, column=0, sticky="nsew", pady=(0, 12))
+        details_card.grid(row=0, column=0, sticky="nsew", pady=(0, 8))
         details_card.grid_columnconfigure(0, weight=1)
 
         self._selected_day_label = ctk.CTkLabel(
@@ -382,7 +401,7 @@ class ScheduleNavigationScreen(ctk.CTkFrame):
             text_color=_TEXT,
             anchor="w",
         )
-        self._selected_day_label.grid(row=0, column=0, sticky="ew", padx=16, pady=(14, 2))
+        self._selected_day_label.grid(row=0, column=0, sticky="ew", padx=12, pady=(8, 0))
 
         self._selected_day_hint = ctk.CTkLabel(
             details_card,
@@ -391,14 +410,14 @@ class ScheduleNavigationScreen(ctk.CTkFrame):
             text_color=_MUTED,
             anchor="w",
         )
-        self._selected_day_hint.grid(row=1, column=0, sticky="ew", padx=16, pady=(0, 8))
+        self._selected_day_hint.grid(row=1, column=0, sticky="ew", padx=12, pady=(0, 4))
 
         self._details_body = ctk.CTkFrame(
             details_card,
             fg_color=_SUBTLE_SURFACE,
             corner_radius=8,
         )
-        self._details_body.grid(row=2, column=0, sticky="ew", padx=12, pady=(0, 12))
+        self._details_body.grid(row=2, column=0, sticky="ew", padx=8, pady=(0, 6))
         self._details_body.grid_columnconfigure(0, weight=1)
 
         ctk.CTkLabel(
@@ -407,20 +426,19 @@ class ScheduleNavigationScreen(ctk.CTkFrame):
             font=("Segoe UI", 13, "bold"),
             text_color=_TEXT,
             anchor="w",
-        ).grid(row=3, column=0, sticky="ew", padx=16, pady=(0, 6))
+        ).grid(row=3, column=0, sticky="ew", padx=12, pady=(0, 4))
 
         self._schedule_body = ctk.CTkFrame(
             details_card,
             fg_color="transparent",
         )
-        self._schedule_body.grid(row=4, column=0, sticky="ew", padx=12, pady=(0, 12))
+        self._schedule_body.grid(row=4, column=0, sticky="ew", padx=10, pady=(0, 10))
         self._schedule_body.grid_columnconfigure(0, weight=1)
-
-        self._build_part4_tools_panel(sidebar)
-        self._build_ranking_panel(sidebar)
 
     def _build_part4_tools_panel(self, sidebar: ctk.CTkFrame) -> None:
         """Build snapshot and manual-edit controls."""
+        if self._part4_tools_built:
+            return
         panel = ctk.CTkScrollableFrame(
             sidebar,
             fg_color=_SURFACE,
@@ -453,6 +471,7 @@ class ScheduleNavigationScreen(ctk.CTkFrame):
 
         self._build_snapshot_controls(panel, start_row=2)
         self._build_manual_move_controls(panel, start_row=12)
+        self._part4_tools_built = True
 
     def _build_snapshot_controls(
         self,
@@ -592,14 +611,10 @@ class ScheduleNavigationScreen(ctk.CTkFrame):
             pady=(0, 8),
         )
         compare_card.grid_columnconfigure(0, weight=1)
-        self._snapshot_compare_box = ctk.CTkLabel(
+        self._snapshot_compare_container = compare_card
+        self._snapshot_compare_box = ctk.CTkFrame(
             compare_card,
-            text="",
-            font=("Segoe UI", 11),
-            text_color=_TEXT,
-            anchor="nw",
-            justify="left",
-            wraplength=300,
+            fg_color="transparent",
         )
         self._snapshot_compare_box.grid(
             row=0,
@@ -608,8 +623,7 @@ class ScheduleNavigationScreen(ctk.CTkFrame):
             padx=12,
             pady=10,
         )
-        self._write_textbox(
-            self._snapshot_compare_box,
+        self._render_snapshot_comparison_empty(
             "Comparison results will appear here.",
         )
 
@@ -787,6 +801,8 @@ class ScheduleNavigationScreen(ctk.CTkFrame):
 
     def _build_ranking_panel(self, sidebar: ctk.CTkFrame) -> None:
         """Build ranking controls and current-system metric readout."""
+        if self._ranking_panel_built:
+            return
         panel = ctk.CTkScrollableFrame(
             sidebar,
             fg_color=_SURFACE,
@@ -895,6 +911,27 @@ class ScheduleNavigationScreen(ctk.CTkFrame):
             self._ranking_metric_labels[key] = value
 
         self._refresh_ranking_order()
+        self._ranking_panel_built = True
+
+    def _schedule_deferred_tools_build(self) -> None:
+        """Build non-critical side panels after the first schedule can paint."""
+        if self._deferred_tools_build_started:
+            return
+        self._deferred_tools_build_started = True
+        self.after(50, self._build_deferred_tools)
+
+    def _build_deferred_tools(self) -> None:
+        """Create Part 4 and ranking panels after the initial output screen."""
+        sidebar = getattr(self, "_sidebar", None)
+        if sidebar is None:
+            return
+
+        self._build_part4_tools_panel(sidebar)
+        self._build_ranking_panel(sidebar)
+
+        view = getattr(self, "_last_view", None)
+        self._refresh_ranking_metrics(view.metrics_summary if view else None)
+        self._refresh_part4_controls(view)
 
     def _build_footer(self) -> None:
         """Build a small export/status footer."""
@@ -913,12 +950,16 @@ class ScheduleNavigationScreen(ctk.CTkFrame):
     def _handle_next(self) -> None:
         """Advance to the next system and repaint the review."""
         self.presenter.next()
-        self._refresh()
+        self._refresh(
+            skip_part4=getattr(self.presenter, "is_partial", False) is True,
+        )
 
     def _handle_previous(self) -> None:
         """Go to the previous system and repaint the review."""
         self.presenter.previous()
-        self._refresh()
+        self._refresh(
+            skip_part4=getattr(self.presenter, "is_partial", False) is True,
+        )
 
     def _handle_save(self) -> None:
         """Ask for a destination file and export the currently shown system."""
@@ -978,8 +1019,10 @@ class ScheduleNavigationScreen(ctk.CTkFrame):
         second = self._selected_snapshot_name(self._snapshot_second_selector)
         result = self.presenter.compare_snapshots(first, second)
         self._set_snapshot_status(result.message, result.success)
-        if result.details:
-            self._write_textbox(self._snapshot_compare_box, result.details)
+        if result.success and getattr(result, "comparison", None) is not None:
+            self._render_snapshot_comparison(result.comparison)
+        elif result.details:
+            self._render_snapshot_comparison_empty(result.details)
 
     def _handle_apply_move(self) -> None:
         """Ask the presenter to move one exam and refresh only after success."""
@@ -1075,11 +1118,23 @@ class ScheduleNavigationScreen(ctk.CTkFrame):
     def _handle_apply_ranking(self) -> None:
         """Apply ranking in the background and stream a bounded preview."""
         settings = self._ranking_settings()
+        if getattr(self._ranking_runner, "is_running", False):
+            if settings == getattr(self, "_ranking_run_settings", None):
+                self._refresh_current_ranking_preview()
+                return
+            self._ranking_runner.cancel_current()
+            self._ranking_runner = AsyncScheduleRunner()
+
+        completed_update = getattr(self, "_completed_ranking_update", None)
+        if (
+            completed_update is not None
+            and completed_update.run_id == self._ranking_run_id
+            and settings == getattr(self, "_ranking_run_settings", None)
+        ):
+            self._refresh_current_ranking_preview()
+            return
 
         if not settings.priority_list:
-            if getattr(self._ranking_runner, "is_running", False):
-                self._ranking_runner.cancel_current()
-                self._ranking_runner = AsyncScheduleRunner()
             self._ranking_run_id = getattr(self, "_ranking_run_id", 0) + 1
             result = self.presenter.apply_ranking(settings)
             self._set_ranking_status(result.message, ok=result.success)
@@ -1090,10 +1145,7 @@ class ScheduleNavigationScreen(ctk.CTkFrame):
 
         self._ranking_run_id = getattr(self, "_ranking_run_id", 0) + 1
         run_id = self._ranking_run_id
-
-        if getattr(self._ranking_runner, "is_running", False):
-            self._ranking_runner.cancel_current()
-            self._ranking_runner = AsyncScheduleRunner()
+        self._ranking_run_settings = settings
 
         def task(token, on_progress):
             return self.presenter.rank_progressively(
@@ -1101,11 +1153,12 @@ class ScheduleNavigationScreen(ctk.CTkFrame):
                 run_id=run_id,
                 on_update=on_progress,
                 cancellation_token=token,
-                # A smaller first batch makes the first Top-50 preview appear
-                # sooner. The half-second throttle still prevents repaint churn.
-                batch_size=250,
+                # Rank a sizeable first chunk quickly, then continue in the
+                # background. The first preview is shown automatically; later
+                # chunks are stored for explicit Refresh Top 50 clicks.
+                batch_size=10000,
                 preview_limit=50,
-                min_update_interval_seconds=0.5,
+                min_update_interval_seconds=0,
             )
 
         accepted = self._ranking_runner.run_with_progress(
@@ -1139,8 +1192,11 @@ class ScheduleNavigationScreen(ctk.CTkFrame):
             "Ranking started. Live Top 50 preview will appear shortly.",
             ok=None,
         )
+        self._latest_ranking_update = None
+        self._displayed_ranking_update = None
+        self._completed_ranking_update = None
         if getattr(self, "_apply_ranking_button", None) is not None:
-            self._apply_ranking_button.configure(text="Restart Ranking")
+            self._apply_ranking_button.configure(text="Refresh Top 50")
 
     def _handle_ranking_update(
         self,
@@ -1149,11 +1205,11 @@ class ScheduleNavigationScreen(ctk.CTkFrame):
         """Apply one live ranked preview update from the active worker."""
         if update.run_id != self._ranking_run_id:
             return
-        self.push_live_update(
-            update.ranked_schedules,
-            is_partial=update.is_partial,
-            systems_seen=update.processed_count,
-        )
+        self._latest_ranking_update = update
+        if getattr(self, "_displayed_ranking_update", None) is not None:
+            self._set_ranking_status(update.message, ok=None)
+            return
+        self._apply_ranking_update_to_view(update)
         self._set_ranking_status(update.message, ok=None)
 
     def _handle_ranking_complete(
@@ -1161,17 +1217,45 @@ class ScheduleNavigationScreen(ctk.CTkFrame):
         run_id: int,
         update: ProgressiveRankingUpdate,
     ) -> None:
-        """Switch to final ranked Top 50 after the active worker finishes."""
+        """Switch to the full ranked list after the active worker finishes."""
         if run_id != self._ranking_run_id or update.run_id != self._ranking_run_id:
             return
-        self.push_live_update(
-            update.ranked_schedules,
-            is_partial=False,
-            systems_seen=update.total_count,
-        )
+        self._latest_ranking_update = update
+        self._completed_ranking_update = update
+        if getattr(self, "_displayed_ranking_update", None) is None:
+            self._apply_ranking_update_to_view(update)
         self._set_ranking_status(update.message, ok=True)
         if getattr(self, "_apply_ranking_button", None) is not None:
+            self._apply_ranking_button.configure(text="Show Full Ranking")
+
+    def _refresh_current_ranking_preview(self) -> None:
+        """Repaint the latest already-emitted Top-50 preview without restarting."""
+        update = (
+            getattr(self, "_completed_ranking_update", None)
+            or getattr(self, "_latest_ranking_update", None)
+        )
+        if update is None or update.run_id != self._ranking_run_id:
+            self._set_ranking_status(
+                "Ranking is running. Top 50 preview is not ready yet.",
+                ok=None,
+            )
+            return
+        self._apply_ranking_update_to_view(update)
+        self._set_ranking_status(update.message, ok=None if update.is_partial else True)
+        if not update.is_partial and getattr(self, "_apply_ranking_button", None) is not None:
             self._apply_ranking_button.configure(text="Apply Ranking")
+
+    def _apply_ranking_update_to_view(
+        self,
+        update: ProgressiveRankingUpdate,
+    ) -> None:
+        """Display one selected preview/full-ranked update."""
+        self.push_live_update(
+            update.ranked_schedules,
+            is_partial=update.is_partial,
+            systems_seen=update.processed_count if update.is_partial else update.total_count,
+        )
+        self._displayed_ranking_update = update
 
     def _handle_ranking_error(self, run_id: int, error: Exception) -> None:
         """Show ranking failures without letting stale workers repaint state."""
@@ -1246,11 +1330,7 @@ class ScheduleNavigationScreen(ctk.CTkFrame):
         )
         self._update_status_banner(is_partial, systems_seen, displayed_count)
 
-        if self.presenter.has_schedules():
-            self._build_relevant_months_grid()
-            self._grid_built = True
-
-        self._refresh()
+        self._refresh(skip_part4=is_partial)
 
     def _update_status_banner(
         self,
@@ -1290,7 +1370,7 @@ class ScheduleNavigationScreen(ctk.CTkFrame):
                 )
             else:
                 msg = (
-                    f"{icon}  Final Top {displayed_count:,} ranking complete. Showing "
+                    f"{icon}  Ranking complete. Showing "
                     f"{displayed_count:,} of {systems_seen:,} ranked schedules."
                 )
         self._status_banner.configure(fg_color=bg)
@@ -1301,10 +1381,63 @@ class ScheduleNavigationScreen(ctk.CTkFrame):
                 row=2, column=0, columnspan=2, sticky="ew", pady=(6, 2)
             )
 
-    def _refresh(self) -> None:
+    def _update_fallback_banner(self, view) -> None:
+        """Show why the current result is a compromise schedule."""
+        self._status_banner.configure(fg_color=_BANNER_FALLBACK_BG)
+        self._status_seen_label.configure(
+            text=self._fallback_banner_text(view),
+            text_color=_BANNER_FALLBACK_TEXT,
+        )
+        if not self._status_banner.winfo_ismapped():
+            self._status_banner.grid(
+                row=2, column=0, columnspan=2, sticky="ew", pady=(6, 2)
+            )
+
+    @staticmethod
+    def _fallback_banner_text(view) -> str:
+        """Build a compact explanation for best-effort fallback results."""
+        penalty_score = (
+            f"{view.penalty_score:g}"
+            if view.penalty_score is not None
+            else "n/a"
+        )
+        details = tuple(view.penalty_details or ())
+        violation_count = len(details)
+        text = (
+            "Compromise schedule: hard constraints are respected, but one or "
+            "more soft threshold constraints were relaxed.\n"
+            f"Constraint penalty: {penalty_score} | "
+            f"Violations: {violation_count}"
+        )
+        if not details:
+            return text
+
+        visible_details = [
+            ScheduleNavigationScreen._clean_fallback_detail(detail)
+            for detail in details[:3]
+        ]
+        suffix = ""
+        if len(details) > len(visible_details):
+            suffix = f"\n... and {len(details) - len(visible_details)} more."
+
+        return (
+            f"{text}\nViolation details:\n"
+            + "\n".join(f"- {detail}" for detail in visible_details)
+            + suffix
+        )
+
+    @staticmethod
+    def _clean_fallback_detail(detail: str) -> str:
+        """Remove internal requirement prefixes from GUI fallback details."""
+        if detail.startswith("Req ") and ": " in detail:
+            return detail.split(": ", 1)[1]
+        return detail
+
+    def _refresh(self, skip_part4: bool = False) -> None:
         """Refresh counter, metrics, calendar highlights, and detail panes."""
         view = self.presenter.current_view()
         if view is None:
+            self._last_view = None
             # Some unit tests and legacy callers provide a presenter test-double
             # without this property. MagicMock attributes are truthy by default,
             # so only an explicit True should switch to the live-generation copy.
@@ -1319,20 +1452,30 @@ class ScheduleNavigationScreen(ctk.CTkFrame):
             self._next_button.configure(state="disabled")
             if self._save_button is not None:
                 self._save_button.configure(state="disabled")
+            if (
+                hasattr(self, "_status_banner")
+                and self._status_banner.winfo_ismapped()
+            ):
+                self._status_banner.grid_forget()
 
             # Ranking controls remain enabled even during partial generation so
             # the user can apply ranking at any time.
             self._refresh_ranking_metrics(None)
-            self._refresh_part4_controls()
+            if not skip_part4:
+                self._refresh_part4_controls()
             return
+
+        self._last_view = view
 
         if not self._grid_built:
             for child in self._body.winfo_children():
                 child.destroy()
             self._exam_cells = {}
             self._built_months = set()
-            self._build_relevant_months_grid()
+            self._build_relevant_months_grid(view)
             self._grid_built = True
+        else:
+            self._build_relevant_months_grid(view)
 
         self._current_exams_by_iso_date = view.exams_by_iso_date
         self._current_day_status_by_iso_date = view.day_status_by_iso_date
@@ -1341,7 +1484,7 @@ class ScheduleNavigationScreen(ctk.CTkFrame):
 
         counter_text = f"System {view.position} of {view.total}"
         if view.is_fallback:
-            counter_text += " | Alternative schedule"
+            counter_text += " | Compromise schedule"
         self._counter_label.configure(text=counter_text)
         mode = getattr(self.presenter, "result_mode", None)
         if isinstance(mode, str):
@@ -1353,9 +1496,15 @@ class ScheduleNavigationScreen(ctk.CTkFrame):
             getattr(self.presenter, "is_partial", False) is True
             or (mode == ResultMode.FINAL_RANKED and not view.is_fallback)
         )
-        if self._status_banner.winfo_ismapped() and not should_show_banner:
+        if view.is_fallback:
+            self._update_fallback_banner(view)
+        elif self._status_banner.winfo_ismapped() and not should_show_banner:
             self._status_banner.grid_forget()
-        if should_show_banner and not self._status_banner.winfo_ismapped():
+        if (
+            not view.is_fallback
+            and should_show_banner
+            and not self._status_banner.winfo_ismapped()
+        ):
             raw_systems_seen = getattr(self.presenter, "systems_seen", 0)
             raw_displayed_count = getattr(self.presenter, "displayed_count", 0)
             systems_seen = (
@@ -1378,7 +1527,8 @@ class ScheduleNavigationScreen(ctk.CTkFrame):
         self._render_selected_day()
         self._render_system_exam_list(view.sections)
         self._refresh_ranking_metrics(view.metrics_summary)
-        self._refresh_part4_controls(view)
+        if not skip_part4:
+            self._refresh_part4_controls(view)
 
         self._prev_button.configure(
             state="normal" if self.presenter.can_go_previous() else "disabled"
@@ -1403,7 +1553,7 @@ class ScheduleNavigationScreen(ctk.CTkFrame):
         self._metric_labels["exams"].configure(text=str(exam_count))
         self._metric_labels["days"].configure(text=str(len(view.exams_by_iso_date)))
         self._metric_labels["sections"].configure(text=str(len(view.sections)))
-        self._metric_labels["months"].configure(text=str(len(self.presenter.relevant_months())))
+        self._metric_labels["months"].configure(text=str(len(self._months_for_view(view))))
 
     def _refresh_ranking_order(self) -> None:
         """Render the active ranking priority list."""
@@ -1536,19 +1686,43 @@ class ScheduleNavigationScreen(ctk.CTkFrame):
             ]
         )
 
-    def _build_relevant_months_grid(self) -> None:
-        """Incrementally draw only months that contain exams in any system.
+    def _build_relevant_months_grid(self, view=None) -> None:
+        """Incrementally draw only months needed for the current display.
 
-        On the first call, or after a full grid reset, every relevant month is
-        appended. On later calls from ``push_live_update`` only months not yet
-        present in ``_built_months`` are appended, avoiding a full Tkinter DOM
-        rebuild on every live batch.
+        Normal generation can expose tens of thousands of schedules. The first
+        paint must therefore use only the current schedule's dates instead of
+        scanning every generated system just to discover global month coverage.
+        On live ranked-preview updates, already-built month cards are retained
+        and only months for the current view are appended.
         """
-        for year, month in self.presenter.relevant_months():
+        months = (
+            self._months_for_view(view)
+            if view is not None
+            else self._months_for_current_view()
+        )
+        for year, month in months:
             if (year, month) in self._built_months:
                 continue
             self._build_month(year, month)
             self._built_months.add((year, month))
+
+    @staticmethod
+    def _months_for_view(view) -> list[tuple[int, int]]:
+        """Return months touched by the currently displayed schedule only."""
+        months = {
+            (int(iso_date[:4]), int(iso_date[5:7]))
+            for iso_date in view.exams_by_iso_date
+        }
+        if not months and view.calendar_year is not None:
+            months.add((view.calendar_year, 1))
+        return sorted(months)
+
+    def _months_for_current_view(self) -> list[tuple[int, int]]:
+        """Build month data lazily from the presenter current view."""
+        view = self.presenter.current_view()
+        if view is None:
+            return []
+        return self._months_for_view(view)
 
     def _build_month(self, year: int, month: int) -> None:
         """Create one compact month card."""
@@ -1798,17 +1972,17 @@ class ScheduleNavigationScreen(ctk.CTkFrame):
             border_color=_BORDER,
             corner_radius=8,
         )
-        card.grid(row=row_index, column=0, sticky="ew", padx=4, pady=(4, 8))
+        card.grid(row=row_index, column=0, sticky="ew", padx=4, pady=(3, 6))
         card.grid_columnconfigure(0, weight=1)
 
         ctk.CTkLabel(
             card,
             text=f"{exam.course_number} - {exam.course_name}",
-            font=("Segoe UI", 13, "bold"),
+            font=("Segoe UI", 12, "bold"),
             text_color=_TEXT,
             anchor="w",
             wraplength=320,
-        ).grid(row=0, column=0, sticky="ew", padx=12, pady=(10, 4))
+        ).grid(row=0, column=0, sticky="ew", padx=10, pady=(7, 2))
 
         ctk.CTkLabel(
             card,
@@ -1822,10 +1996,12 @@ class ScheduleNavigationScreen(ctk.CTkFrame):
             text_color=_MUTED,
             justify="left",
             anchor="w",
-        ).grid(row=1, column=0, sticky="ew", padx=12, pady=(0, 10))
+        ).grid(row=1, column=0, sticky="ew", padx=10, pady=(0, 7))
 
     def _refresh_part4_controls(self, view=None) -> None:
         """Refresh snapshot and manual-edit controls."""
+        if not getattr(self, "_part4_tools_built", False):
+            return
         self._refresh_snapshot_controls()
         self._refresh_manual_move_controls(view)
 
@@ -1856,6 +2032,233 @@ class ScheduleNavigationScreen(ctk.CTkFrame):
             getattr(self, "_compare_snapshot_button", None),
             len(names) >= 2,
         )
+
+    def _render_snapshot_comparison(self, comparison) -> None:
+        """Render a structured before/after snapshot comparison."""
+        container = getattr(self, "_snapshot_compare_box", None)
+        if container is None:
+            return
+
+        self._clear_widget_children(container)
+        container.grid_columnconfigure(0, weight=1)
+
+        ctk.CTkLabel(
+            container,
+            text=comparison.header,
+            font=("Segoe UI", 12, "bold"),
+            text_color=_TEXT,
+            anchor="w",
+            wraplength=300,
+            justify="left",
+        ).grid(row=0, column=0, sticky="ew", pady=(0, 8))
+
+        summary = ctk.CTkFrame(container, fg_color="transparent")
+        summary.grid(row=1, column=0, sticky="ew", pady=(0, 8))
+        summary.grid_columnconfigure(0, weight=1)
+        summary.grid_columnconfigure(1, weight=1)
+        self._build_snapshot_summary_card(
+            summary,
+            column=0,
+            title="Before",
+            name=comparison.first_name,
+            quality=comparison.first_quality,
+            penalty=comparison.first_penalty,
+            padx=(0, 4),
+        )
+        self._build_snapshot_summary_card(
+            summary,
+            column=1,
+            title="After",
+            name=comparison.second_name,
+            quality=comparison.second_quality,
+            penalty=comparison.second_penalty,
+            padx=(4, 0),
+        )
+
+        ctk.CTkLabel(
+            container,
+            text=comparison.quality_change_label,
+            font=("Segoe UI", 11, "bold"),
+            text_color=self._comparison_delta_color(
+                comparison.quality_change_status,
+            ),
+            anchor="w",
+            wraplength=300,
+            justify="left",
+        ).grid(row=2, column=0, sticky="ew", pady=(0, 10))
+
+        ctk.CTkLabel(
+            container,
+            text=comparison.penalty_delta_label,
+            font=("Segoe UI", 11),
+            text_color=self._comparison_delta_color(
+                comparison.penalty_delta_status,
+            ),
+            anchor="w",
+            wraplength=300,
+            justify="left",
+        ).grid(row=3, column=0, sticky="ew", pady=(0, 10))
+
+        ctk.CTkLabel(
+            container,
+            text="Changed exams",
+            font=("Segoe UI", 12, "bold"),
+            text_color=_TEXT,
+            anchor="w",
+        ).grid(row=4, column=0, sticky="ew", pady=(0, 6))
+
+        if not comparison.changed_rows:
+            ctk.CTkLabel(
+                container,
+                text=comparison.empty_message,
+                font=("Segoe UI", 11),
+                text_color=_MUTED,
+                anchor="w",
+                wraplength=300,
+                justify="left",
+            ).grid(row=5, column=0, sticky="ew")
+            return
+
+        rows_frame = ctk.CTkScrollableFrame(
+            container,
+            fg_color="transparent",
+            height=150,
+        )
+        rows_frame.grid(row=5, column=0, sticky="ew")
+        rows_frame.grid_columnconfigure(0, weight=1)
+        for row_index, change in enumerate(comparison.changed_rows):
+            self._build_snapshot_change_row(rows_frame, row_index, change)
+
+    def _render_snapshot_comparison_empty(self, text: str) -> None:
+        """Render a single readable empty/fallback comparison message."""
+        container = getattr(self, "_snapshot_compare_box", None)
+        if container is None:
+            return
+
+        self._clear_widget_children(container)
+        ctk.CTkLabel(
+            container,
+            text=text,
+            font=("Segoe UI", 11),
+            text_color=_MUTED,
+            anchor="nw",
+            justify="left",
+            wraplength=300,
+        ).grid(row=0, column=0, sticky="ew")
+
+    def _build_snapshot_summary_card(
+        self,
+        parent,
+        *,
+        column: int,
+        title: str,
+        name: str,
+        quality: str,
+        penalty: str,
+        padx,
+    ) -> None:
+        """Build one compact before/after summary card."""
+        card = ctk.CTkFrame(
+            parent,
+            fg_color=_SURFACE,
+            border_width=1,
+            border_color=_BORDER,
+            corner_radius=6,
+        )
+        card.grid(row=0, column=column, sticky="nsew", padx=padx)
+        card.grid_columnconfigure(0, weight=1)
+
+        lines = [
+            title,
+            f"Snapshot: {name}",
+            f"Quality: {quality}",
+            f"Constraint penalty: {penalty}",
+        ]
+        for row_index, line in enumerate(lines):
+            ctk.CTkLabel(
+                card,
+                text=line,
+                font=("Segoe UI", 10, "bold" if row_index == 0 else "normal"),
+                text_color=_TEXT if row_index == 0 else _MUTED,
+                anchor="w",
+                wraplength=130,
+                justify="left",
+            ).grid(
+                row=row_index,
+                column=0,
+                sticky="ew",
+                padx=8,
+                pady=(6 if row_index == 0 else 0, 0),
+            )
+
+    def _build_snapshot_change_row(self, parent, row_index: int, change) -> None:
+        """Build one structured changed-exam row."""
+        row = ctk.CTkFrame(
+            parent,
+            fg_color=_SURFACE,
+            border_width=1,
+            border_color=_BORDER,
+            corner_radius=6,
+        )
+        row.grid(row=row_index, column=0, sticky="ew", pady=(0, 6))
+        row.grid_columnconfigure(0, weight=1)
+
+        ctk.CTkLabel(
+            row,
+            text=change.change_label,
+            font=("Segoe UI", 10, "bold"),
+            text_color=_INFO,
+            anchor="w",
+        ).grid(row=0, column=0, sticky="ew", padx=8, pady=(6, 0))
+        ctk.CTkLabel(
+            row,
+            text=change.course_label,
+            font=("Segoe UI", 11, "bold"),
+            text_color=_TEXT,
+            anchor="w",
+            wraplength=260,
+            justify="left",
+        ).grid(row=1, column=0, sticky="ew", padx=8, pady=(2, 0))
+        ctk.CTkLabel(
+            row,
+            text=change.period_label,
+            font=("Segoe UI", 10),
+            text_color=_MUTED,
+            anchor="w",
+        ).grid(row=2, column=0, sticky="ew", padx=8, pady=(0, 0))
+        ctk.CTkLabel(
+            row,
+            text=f"Before: {change.old_date}",
+            font=("Segoe UI", 10),
+            text_color=_TEXT,
+            anchor="w",
+            wraplength=260,
+            justify="left",
+        ).grid(row=3, column=0, sticky="ew", padx=8, pady=(2, 0))
+        ctk.CTkLabel(
+            row,
+            text=f"After: {change.new_date}",
+            font=("Segoe UI", 10),
+            text_color=_TEXT,
+            anchor="w",
+            wraplength=260,
+            justify="left",
+        ).grid(row=4, column=0, sticky="ew", padx=8, pady=(0, 6))
+
+    @staticmethod
+    def _comparison_delta_color(status: str):
+        """Return the display color for a score delta classification."""
+        if status == "improved":
+            return _SUCCESS
+        if status in {"worse", "worsened"}:
+            return _ERROR
+        return _MUTED
+
+    @staticmethod
+    def _clear_widget_children(widget) -> None:
+        """Remove all child widgets from a small dynamic panel."""
+        for child in widget.winfo_children():
+            child.destroy()
 
     def _refresh_manual_move_controls(self, _view=None) -> None:
         """Refresh move choices and enable buttons only when an action exists."""

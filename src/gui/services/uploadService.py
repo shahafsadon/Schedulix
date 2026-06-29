@@ -5,6 +5,9 @@ from typing import Any
 
 from application.cache_manager import CacheManager
 from fileReader.baseFileReader import FileReaderFactory, FileReaderType
+from fileReader.fileTypeReaders.schedulingSettingsReader import (
+    SchedulingSettingsFileReader,
+)
 from models import Course, ExamPeriod
 
 
@@ -77,6 +80,7 @@ class FileUploadService:
 
     uploaded_data: UploadedInputData = field(default_factory=UploadedInputData)
     cache_manager: CacheManager | None = None
+    _uploaded_paths: dict[FileReaderType, Path] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         """
@@ -146,10 +150,12 @@ class FileUploadService:
         # Store only successfully parsed data. Failed uploads leave both the
         # local snapshot and the shared cache untouched for the next screens.
         self._store(file_type, data, mode)
+        self._uploaded_paths[file_type] = path
         if self.cache_manager is not None and file_type == FileReaderType.COURSES:
             # CacheManager merges repeat course uploads, so mirror its clean
             # source of truth in the upload screen as well.
             self.uploaded_data.courses = list(self.cache_manager.get_courses())
+        self._preload_colocated_settings()
         item_count = self._count_items(data)
         cached_count = self._current_count(file_type)
 
@@ -257,6 +263,38 @@ class FileUploadService:
 
         # Any input-data change makes previously generated schedules stale.
         self.cache_manager.invalidate_generated_schedules()
+
+    def _preload_colocated_settings(self) -> None:
+        """Load settings.txt when the three required uploads share a folder."""
+        if self.cache_manager is None or not self.uploaded_data.is_complete():
+            return
+
+        required = (
+            FileReaderType.COURSES,
+            FileReaderType.PROGRAMS,
+            FileReaderType.EXAM_PERIODS,
+        )
+        if any(file_type not in self._uploaded_paths for file_type in required):
+            return
+
+        folders = {
+            self._uploaded_paths[file_type].parent.resolve()
+            for file_type in required
+        }
+        if len(folders) != 1:
+            return
+
+        settings_path = next(iter(folders)) / "settings.txt"
+        if not settings_path.exists():
+            return
+
+        try:
+            settings = SchedulingSettingsFileReader().read(settings_path)
+        except (OSError, UnicodeError, ValueError):
+            return
+
+        self.cache_manager.set_constraint_settings(settings.constraint_settings)
+        self.cache_manager.set_ranking_settings(settings.ranking_settings)
 
     def _current_count(self, file_type: FileReaderType) -> int:
         # Prefer the shared cache count when it exists, because that is the

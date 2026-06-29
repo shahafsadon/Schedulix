@@ -1,3 +1,0 @@
-mandatory_gap_days = on, 10
-elective_conflicts_per_program = on, 0
-ranking: min_mandatory_gap

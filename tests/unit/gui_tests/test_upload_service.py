@@ -10,8 +10,14 @@ SRC = ROOT / "src"
 sys.path.insert(0, str(SRC))
 
 from application.cache_manager import CacheManager
+from constraint_settings import ThresholdConstraintType
 from fileReader.baseFileReader import FileReaderType
 from gui.services.uploadService import FileUploadService, UploadMode
+
+EXAMPLES = ROOT / "data" / "examples" / "basic_course_example"
+COURSES_PATH = EXAMPLES / "courses.txt"
+PROGRAMS_PATH = EXAMPLES / "programs.txt"
+PERIODS_PATH = EXAMPLES / "dates.txt"
 
 
 class FileUploadServiceTests(unittest.TestCase):
@@ -31,13 +37,9 @@ class FileUploadServiceTests(unittest.TestCase):
     def test_uploads_all_required_example_files(self) -> None:
         service = FileUploadService()
 
-        courses = service.upload_courses(ROOT / "data" / "examples" / "CourseExample.txt")
-        programs = service.upload_programs(
-            ROOT / "data" / "examples" / "ProgramsExample.txt"
-        )
-        periods = service.upload_exam_periods(
-            ROOT / "data" / "examples" / "DatesExample.txt"
-        )
+        courses = service.upload_courses(COURSES_PATH)
+        programs = service.upload_programs(PROGRAMS_PATH)
+        periods = service.upload_exam_periods(PERIODS_PATH)
 
         self.assertTrue(courses.success)
         self.assertTrue(programs.success)
@@ -82,13 +84,13 @@ Exam
     def test_ready_only_after_courses_programs_and_periods_are_loaded(self) -> None:
         service = FileUploadService()
 
-        service.upload_courses(ROOT / "data" / "examples" / "CourseExample.txt")
+        service.upload_courses(COURSES_PATH)
         self.assertFalse(service.is_ready_for_scheduling())
 
-        service.upload_programs(ROOT / "data" / "examples" / "ProgramsExample.txt")
+        service.upload_programs(PROGRAMS_PATH)
         self.assertFalse(service.is_ready_for_scheduling())
 
-        service.upload_exam_periods(ROOT / "data" / "examples" / "DatesExample.txt")
+        service.upload_exam_periods(PERIODS_PATH)
         self.assertTrue(service.is_ready_for_scheduling())
 
     def test_replace_upload_synchronizes_courses_to_cache(self) -> None:
@@ -97,7 +99,7 @@ Exam
         service = FileUploadService(cache_manager=cache)
 
         result = service.upload_courses(
-            ROOT / "data" / "examples" / "CourseExample.txt",
+            COURSES_PATH,
             mode=UploadMode.REPLACE,
         )
 
@@ -117,7 +119,7 @@ Exam
             "83222",
         )
 
-        service.upload_courses(ROOT / "data" / "examples" / "CourseExample.txt")
+        service.upload_courses(COURSES_PATH)
         result = service.upload_courses(extra_courses_path, mode=UploadMode.APPEND)
 
         self.assertTrue(result.success)
@@ -131,7 +133,7 @@ Exam
         """Repeating one courses upload keeps the cache ready for scheduling."""
         cache = CacheManager()
         service = FileUploadService(cache_manager=cache)
-        courses_path = ROOT / "data" / "examples" / "CourseExample.txt"
+        courses_path = COURSES_PATH
 
         service.upload_courses(courses_path)
         result = service.upload_courses(courses_path, mode=UploadMode.APPEND)
@@ -145,7 +147,7 @@ Exam
         """Appending selected programs keeps each program number only once."""
         cache = CacheManager()
         service = FileUploadService(cache_manager=cache)
-        example_programs = ROOT / "data" / "examples" / "ProgramsExample.txt"
+        example_programs = PROGRAMS_PATH
 
         service.upload_programs(example_programs)
         result = service.upload_programs(example_programs, mode=UploadMode.APPEND)
@@ -164,7 +166,7 @@ Exam
         cache.set_generated_schedules(["old schedule"])
         service = FileUploadService(cache_manager=cache)
 
-        service.upload_courses(ROOT / "data" / "examples" / "CourseExample.txt")
+        service.upload_courses(COURSES_PATH)
 
         self.assertEqual(cache.get_generated_schedules(), [])
 
@@ -172,7 +174,7 @@ Exam
         """Reader failures must not replace or append over valid cached data."""
         cache = CacheManager()
         service = FileUploadService(cache_manager=cache)
-        service.upload_courses(ROOT / "data" / "examples" / "CourseExample.txt")
+        service.upload_courses(COURSES_PATH)
 
         invalid_courses_path = Path(self._temp_cache_dir.name) / "invalid_courses.txt"
         invalid_courses_path.write_text(
@@ -192,6 +194,22 @@ Exam
         self.assertEqual(result.cached_count, 3)
         self.assertEqual(len(cache.get_courses()), 3)
         self.assertEqual(len(service.get_uploaded_data().courses), 3)
+
+    def test_colocated_settings_file_is_preloaded_after_required_uploads(self) -> None:
+        cache = CacheManager()
+        service = FileUploadService(cache_manager=cache)
+        demo = ROOT / "data" / "examples" / "fallback_compromise_demo"
+
+        service.upload_courses(demo / "courses.txt")
+        service.upload_programs(demo / "programs.txt")
+        service.upload_exam_periods(demo / "dates.txt")
+
+        mandatory_gap = cache.get_constraint_settings().constraints[
+            ThresholdConstraintType.mandatory_gap_days
+        ]
+        self.assertTrue(mandatory_gap.enabled)
+        self.assertEqual(mandatory_gap.k, 10)
+        self.assertTrue(cache.get_ranking_settings().priority_list)
 
     def _write_course_file(self, filename: str, name: str, number: str) -> Path:
         """Create a valid one-course input file inside this test's temp folder."""

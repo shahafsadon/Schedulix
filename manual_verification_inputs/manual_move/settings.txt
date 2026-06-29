@@ -1,1 +1,0 @@
-ranking: min_mandatory_gap

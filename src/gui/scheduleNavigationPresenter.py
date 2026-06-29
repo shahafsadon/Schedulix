@@ -10,6 +10,8 @@ from gui.presenters.scheduleNavigationPresenter import (
     RankingApplyResult,
     ResultMode,
     ScheduleNavigationPresenter,
+    SnapshotChangeRowView,
+    SnapshotComparisonView,
     SnapshotSummaryView,
     SystemView,
 )
@@ -25,6 +27,8 @@ __all__ = [
     "RankingApplyResult",
     "ResultMode",
     "ScheduleNavigationPresenter",
+    "SnapshotChangeRowView",
+    "SnapshotComparisonView",
     "SnapshotSummaryView",
     "SystemView",
 ]

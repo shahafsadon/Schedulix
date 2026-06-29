@@ -1,12 +1,12 @@
 $$$$
 Algorithms
 83101
-Dr. Test
+Dr. Demo
 83101,1,FALL,Obligatory
 Exam
 $$$$
 Data Structures
 83102
-Dr. Test
+Dr. Demo
 83101,1,FALL,Obligatory
 Exam

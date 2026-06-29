@@ -4,6 +4,7 @@ from application.schedulixApp import SchedulixApp
 
 
 ROOT = Path(__file__).resolve().parents[3]
+EXAMPLES = ROOT / "data" / "examples" / "basic_course_example"
 
 
 def write_text_file(tmp_path, name, content):
@@ -16,9 +17,9 @@ def test_app_run_with_repository_examples_writes_output_file(tmp_path):
     output_path = tmp_path / "exam_schedules.txt"
 
     result = SchedulixApp().run(
-        courses_path=ROOT / "data" / "examples" / "CourseExample.txt",
-        exam_periods_path=ROOT / "data" / "examples" / "DatesExample.txt",
-        programs_path=ROOT / "data" / "examples" / "ProgramsExample.txt",
+        courses_path=EXAMPLES / "courses.txt",
+        exam_periods_path=EXAMPLES / "dates.txt",
+        programs_path=EXAMPLES / "programs.txt",
         output_path=output_path,
     )
 

@@ -31,6 +31,7 @@ from ranking_settings import (
 )
 from scheduling.examConflictDetector import ScheduledExam
 from scheduling.examScheduleGenerator import ExamSchedule, ExamSystem
+from scheduling.qualityTagCalculator import ScheduleQualityTag
 from scheduling.scheduleIntrospection import flatten_exam_system
 from gui.presenters.scheduleNavigationPresenter import (
     ResultMode,
@@ -131,6 +132,17 @@ class ScheduleNavigationPresenterTests(unittest.TestCase):
         )
         self.assertEqual(presenter.position(), 1)
         self.assertEqual(presenter.total(), 3)
+
+    def test_counter_uses_full_generated_total_not_top_preview_limit(self) -> None:
+        """Normal unranked navigation reports the real generated count."""
+        presenter = ScheduleNavigationPresenter([make_system() for _ in range(75)])
+
+        view = presenter.current_view()
+
+        self.assertIsNotNone(view)
+        self.assertEqual(presenter.position(), 1)
+        self.assertEqual(presenter.total(), 75)
+        self.assertEqual(view.total, 75)
 
     def test_next_and_previous_navigation(self) -> None:
         """Next advances and previous goes back within bounds."""
@@ -323,8 +335,8 @@ class ScheduleNavigationPresenterTests(unittest.TestCase):
         self.assertIs(presenter.current_system(), second)
         self.assertEqual(presenter.position(), 1)
 
-    def test_apply_ranking_reorders_existing_ranked_systems_without_generation(self) -> None:
-        """Ranking controls should use existing metrics, not regenerate schedules."""
+    def test_apply_ranking_uses_generated_source_even_when_ranked_view_exists(self) -> None:
+        """Ranking changes must not use the previous ranked preview as input."""
         first = make_system(exams=[make_exam("First", "83001", date(2026, 1, 1))])
         second = make_system(exams=[make_exam("Second", "83002", date(2026, 1, 2))])
         first_ranked = make_ranked(first, key=1, min_gap=2)
@@ -332,26 +344,32 @@ class ScheduleNavigationPresenterTests(unittest.TestCase):
 
         class FakeRankingService:
             def __init__(self):
-                self.rank_generated_schedules_called = False
+                self.generated_source = None
 
-            def rank_generated_schedules(self, *_args):
-                self.rank_generated_schedules_called = True
-                raise AssertionError("generation-order metrics should not recalculate")
+            def rank_generated_schedules(self, schedules, ranking_settings):
+                self.generated_source = list(schedules)
+                return type(
+                    "Outcome",
+                    (),
+                    {
+                        "ranked_schedules": [
+                            make_ranked(second, key=2, min_gap=9),
+                            make_ranked(first, key=1, min_gap=2),
+                        ],
+                        "elapsed_seconds": 0.25,
+                    },
+                )()
 
             def rerank(self, ranked_schedules, ranking_settings):
-                from scheduling.scheduleRankingService import ScheduleRankingOutcome
-                from scheduling.scheduleRanker import ScheduleRanker
-
-                return ScheduleRankingOutcome(
-                    ranked_schedules=ScheduleRanker().rank(
-                        ranked_schedules,
-                        ranking_settings,
-                    ),
-                    elapsed_seconds=0.25,
-                )
+                raise AssertionError("Ranking changes must not rerank only the preview.")
 
         service = FakeRankingService()
-        presenter = ScheduleNavigationPresenter([first_ranked, second_ranked])
+        presenter = ScheduleNavigationPresenter(
+            [first_ranked, second_ranked],
+            cache_manager=_RecordingRankingCache(
+                generated_schedules=[first, second],
+            ),
+        )
 
         result = presenter.apply_ranking(
             RankingSettings(
@@ -366,7 +384,7 @@ class ScheduleNavigationPresenterTests(unittest.TestCase):
 
         self.assertTrue(result.success)
         self.assertEqual(presenter.result_mode, ResultMode.FINAL_RANKED)
-        self.assertFalse(service.rank_generated_schedules_called)
+        self.assertEqual(service.generated_source, [first, second])
         self.assertIs(presenter.current_system(), second)
         self.assertEqual(presenter.position(), 1)
         self.assertEqual(
@@ -390,13 +408,160 @@ class ScheduleNavigationPresenterTests(unittest.TestCase):
             2,
         )
 
+    def test_apply_ranking_navigation_uses_ranked_order_not_original_neighbors(self) -> None:
+        """Next/Previous in ranked mode walks the ranked view, not generated indexes."""
+        systems = [
+            make_system(
+                exams=[
+                    make_exam(
+                        f"Course {index}",
+                        f"83{index:03d}",
+                        date(2026, 1, 1),
+                    )
+                ]
+            )
+            for index in range(60)
+        ]
+        ranked_order = [
+            systems[55],
+            systems[2],
+            *systems[:2],
+            *systems[3:55],
+            *systems[56:],
+        ]
+        cache = _RecordingRankingCache(generated_schedules=systems)
+
+        class FakeRankingService:
+            def rank_generated_schedules(self, schedules, ranking_settings):
+                self.generated_source = list(schedules)
+                return type(
+                    "Outcome",
+                    (),
+                    {
+                        "ranked_schedules": [
+                            make_ranked(system, key=systems.index(system) + 1)
+                            for system in ranked_order
+                        ],
+                        "elapsed_seconds": 0.0,
+                    },
+                )()
+
+            def rerank(self, *_args):
+                raise AssertionError("Should not rerank only the ranked preview.")
+
+        service = FakeRankingService()
+        presenter = ScheduleNavigationPresenter(
+            systems,
+            cache_manager=cache,
+        )
+
+        result = presenter.apply_ranking(
+            RankingSettings(
+                [RankingPreference(RankingCriterion.average_all_gap)]
+            ),
+            ranking_service=service,
+        )
+
+        self.assertTrue(result.success)
+        self.assertEqual(len(service.generated_source), 60)
+        self.assertEqual(len(cache.get_generated_schedules()), 60)
+        self.assertEqual(presenter.total(), 60)
+        self.assertEqual(presenter.position(), 1)
+        self.assertIs(presenter.current_system(), systems[55])
+
+        presenter.next()
+
+        self.assertEqual(presenter.position(), 2)
+        self.assertIs(presenter.current_system(), systems[2])
+        self.assertIsNot(presenter.current_system(), systems[56])
+
+    def test_progressive_ranking_preview_navigation_uses_ranked_order(self) -> None:
+        """Live Top-50 updates should navigate within the ranked preview order."""
+        systems = [
+            make_system(
+                exams=[
+                    make_exam(
+                        f"Course {index}",
+                        f"83{index:03d}",
+                        date(2026, 1, 1),
+                    )
+                ]
+            )
+            for index in range(60)
+        ]
+        cache = _RecordingRankingCache(generated_schedules=systems)
+
+        class FakeProgressiveRankingService:
+            def rank_generated_batch(
+                self,
+                schedules,
+                ranking_settings,
+                starting_schedule_id,
+            ):
+                scores = {id(systems[55]): 1000.0, id(systems[2]): 999.0}
+                ranked = [
+                    make_ranked(
+                        system,
+                        key=starting_schedule_id + index,
+                        average_gap=scores.get(
+                            id(system),
+                            float(100 - systems.index(system)),
+                        ),
+                    )
+                    for index, system in enumerate(schedules)
+                ]
+                return type(
+                    "Outcome",
+                    (),
+                    {
+                        "ranked_schedules": ranked,
+                        "elapsed_seconds": 0.0,
+                    },
+                )()
+
+        presenter = ScheduleNavigationPresenter(
+            systems,
+            cache_manager=cache,
+        )
+        final_update = presenter.rank_progressively(
+            RankingSettings(
+                [RankingPreference(RankingCriterion.average_all_gap)]
+            ),
+            run_id=1,
+            ranking_service=FakeProgressiveRankingService(),
+            batch_size=13,
+            preview_limit=50,
+            min_update_interval_seconds=0,
+        )
+
+        presenter.update_schedules(
+            final_update.ranked_schedules,
+            is_partial=False,
+            systems_seen=final_update.total_count,
+            displayed_count=final_update.displayed_count,
+        )
+
+        self.assertEqual(final_update.total_count, 60)
+        self.assertEqual(presenter.total(), 60)
+        self.assertEqual(presenter.position(), 1)
+        self.assertIs(presenter.current_system(), systems[55])
+
+        presenter.next()
+
+        self.assertEqual(presenter.position(), 2)
+        self.assertIs(presenter.current_system(), systems[2])
+        self.assertIsNot(presenter.current_system(), systems[56])
+
     def test_apply_empty_ranking_restores_generation_order_by_key(self) -> None:
         """Removing all criteria restores the original generated order."""
         first = make_system(exams=[make_exam("First", "83001", date(2026, 1, 1))])
         second = make_system(exams=[make_exam("Second", "83002", date(2026, 1, 2))])
         first_ranked = make_ranked(first, key=1)
         second_ranked = make_ranked(second, key=2)
-        presenter = ScheduleNavigationPresenter([second_ranked, first_ranked])
+        presenter = ScheduleNavigationPresenter(
+            [second_ranked, first_ranked],
+            cache_manager=_RecordingRankingCache(generated_schedules=[first, second]),
+        )
 
         result = presenter.apply_ranking(RankingSettings([]))
 
@@ -413,33 +578,55 @@ class ScheduleNavigationPresenterTests(unittest.TestCase):
         """Apply Ranking reorders by the new criterion and exposes matching metrics."""
         first = make_system(exams=[make_exam("First", "83001", date(2026, 1, 1))])
         second = make_system(exams=[make_exam("Second", "83002", date(2026, 1, 2))])
+        first_ranked = make_ranked(
+            first,
+            key=1,
+            min_gap=10,
+            average_gap=3.0,
+            elective_collisions=0,
+            mandatory_span=8,
+            max_exams_per_day=1,
+        )
+        second_ranked = make_ranked(
+            second,
+            key=2,
+            min_gap=4,
+            average_gap=9.0,
+            elective_collisions=2,
+            mandatory_span=12,
+            max_exams_per_day=3,
+        )
+
+        class FakeRankingService:
+            def rank_generated_schedules(self, schedules, ranking_settings):
+                ranked = [first_ranked, second_ranked]
+                if ranking_settings.priority_list[0].criterion == (
+                    RankingCriterion.average_all_gap
+                ):
+                    ranked = [second_ranked, first_ranked]
+                return type(
+                    "Outcome",
+                    (),
+                    {
+                        "ranked_schedules": ranked,
+                        "elapsed_seconds": 0.0,
+                    },
+                )()
+
+            def rerank(self, *_args):
+                raise AssertionError("Should not rerank a previous ranked preview.")
+
+        ranking_service = FakeRankingService()
         presenter = ScheduleNavigationPresenter(
-            [
-                make_ranked(
-                    first,
-                    key=1,
-                    min_gap=10,
-                    average_gap=3.0,
-                    elective_collisions=0,
-                    mandatory_span=8,
-                    max_exams_per_day=1,
-                ),
-                make_ranked(
-                    second,
-                    key=2,
-                    min_gap=4,
-                    average_gap=9.0,
-                    elective_collisions=2,
-                    mandatory_span=12,
-                    max_exams_per_day=3,
-                ),
-            ]
+            [first_ranked, second_ranked],
+            cache_manager=_RecordingRankingCache(generated_schedules=[first, second]),
         )
 
         presenter.apply_ranking(
             RankingSettings(
                 [RankingPreference(RankingCriterion.min_mandatory_gap)]
-            )
+            ),
+            ranking_service=ranking_service,
         )
         first_metrics = presenter.current_view().metrics_summary
         self.assertEqual(first_metrics.schedule_id, 1)
@@ -448,7 +635,8 @@ class ScheduleNavigationPresenterTests(unittest.TestCase):
         presenter.apply_ranking(
             RankingSettings(
                 [RankingPreference(RankingCriterion.average_all_gap)]
-            )
+            ),
+            ranking_service=ranking_service,
         )
         second_metrics = presenter.current_view().metrics_summary
 
@@ -483,8 +671,8 @@ class ScheduleNavigationPresenterTests(unittest.TestCase):
         self.assertIs(presenter.current_system(), second)
         self.assertEqual(presenter.result_mode, ResultMode.LIVE_RANKED_PREVIEW)
 
-    def test_progressive_ranking_emits_partial_top_preview_and_final_top_only(self) -> None:
-        """Progressive Apply Ranking keeps navigation bounded to computed preview."""
+    def test_progressive_ranking_emits_partial_top_preview_and_full_final(self) -> None:
+        """Progressive ranking previews Top-N, then exposes the full ranked list."""
         systems = [
             make_system(
                 exams=[
@@ -515,8 +703,8 @@ class ScheduleNavigationPresenterTests(unittest.TestCase):
         self.assertLessEqual(updates[0].displayed_count, 3)
         self.assertFalse(final.is_partial)
         self.assertEqual(final.total_count, 6)
-        self.assertEqual(final.displayed_count, 3)
-        self.assertIn("Final Top 3", final.message)
+        self.assertEqual(final.displayed_count, 6)
+        self.assertIn("Showing all 6", final.message)
 
         presenter.update_schedules(
             updates[0].ranked_schedules,
@@ -531,6 +719,16 @@ class ScheduleNavigationPresenterTests(unittest.TestCase):
         self.assertEqual(presenter.position(), presenter.total())
         presenter.next()
         self.assertEqual(presenter.position(), presenter.total())
+
+        presenter.update_schedules(
+            final.ranked_schedules,
+            is_partial=False,
+            systems_seen=final.total_count,
+            displayed_count=final.displayed_count,
+        )
+
+        self.assertEqual(presenter.total(), 6)
+        self.assertEqual(presenter.position(), 1)
 
     def test_progressive_ranking_throttles_partial_updates(self) -> None:
         """Worker progress does not flood the Tk event queue every batch."""
@@ -594,8 +792,8 @@ class ScheduleNavigationPresenterTests(unittest.TestCase):
         self.assertIs(presenter.current_system(), second)
         self.assertEqual(presenter.position(), 2)
 
-    def test_live_update_resets_to_first_when_current_ranked_identity_disappears(self) -> None:
-        """If a browsed preview item drops out of Top 50, reset safely."""
+    def test_live_update_keeps_nearby_index_when_current_ranked_identity_disappears(self) -> None:
+        """If a browsed preview item drops out of Top 50, keep navigation usable."""
         first = make_system(exams=[make_exam("First", "83001", date(2026, 1, 1))])
         second = make_system(exams=[make_exam("Second", "83002", date(2026, 1, 2))])
         third = make_system(exams=[make_exam("Third", "83003", date(2026, 1, 3))])
@@ -617,18 +815,24 @@ class ScheduleNavigationPresenterTests(unittest.TestCase):
             displayed_count=2,
         )
 
-        self.assertIs(presenter.current_system(), third)
-        self.assertEqual(presenter.position(), 1)
+        self.assertIs(presenter.current_system(), first)
+        self.assertEqual(presenter.position(), 2)
+        self.assertTrue(presenter.can_go_previous())
+        self.assertFalse(presenter.can_go_next())
 
 if __name__ == "__main__":
     unittest.main()
 
 
 class _RecordingRankingCache:
-    def __init__(self) -> None:
+    def __init__(self, generated_schedules=None) -> None:
         self.ranking_settings = None
         self.ranked_schedules = None
         self.set_ranked_calls = 0
+        self.generated_schedules = list(generated_schedules or [])
+
+    def get_generated_schedules(self):
+        return list(self.generated_schedules)
 
     def set_ranking_settings(self, settings):
         self.ranking_settings = settings
@@ -644,7 +848,7 @@ class ScheduleNavigationPresenterCacheFinalizationTests(unittest.TestCase):
     def test_completed_ranking_change_persists_settings_and_ranked_order(self) -> None:
         first = make_system(exams=[make_exam("First", "83001", date(2026, 1, 1))])
         second = make_system(exams=[make_exam("Second", "83002", date(2026, 1, 2))])
-        cache = _RecordingRankingCache()
+        cache = _RecordingRankingCache(generated_schedules=[first, second])
         presenter = ScheduleNavigationPresenter(
             [
                 make_ranked(first, key=1, min_gap=2),
@@ -666,7 +870,7 @@ class ScheduleNavigationPresenterCacheFinalizationTests(unittest.TestCase):
     def test_partial_ranking_change_persists_settings_but_not_preview_results(self) -> None:
         first = make_system(exams=[make_exam("First", "83001", date(2026, 1, 1))])
         second = make_system(exams=[make_exam("Second", "83002", date(2026, 1, 2))])
-        cache = _RecordingRankingCache()
+        cache = _RecordingRankingCache(generated_schedules=[first, second])
         presenter = ScheduleNavigationPresenter(
             [
                 make_ranked(first, key=1, min_gap=2),
@@ -693,6 +897,294 @@ class ScheduleNavigationPresenterCacheFinalizationTests(unittest.TestCase):
         self.assertIs(cache.ranking_settings, settings)
         self.assertEqual(cache.set_ranked_calls, 0)
         self.assertIsNone(cache.ranked_schedules)
+
+    def test_ranking_change_without_full_generated_source_requires_regeneration(self) -> None:
+        """Do not silently treat a persisted Top 50 preview as the full universe."""
+        first = make_system(exams=[make_exam("First", "83001", date(2026, 1, 1))])
+        second = make_system(exams=[make_exam("Second", "83002", date(2026, 1, 2))])
+        cache = _RecordingRankingCache()
+        presenter = ScheduleNavigationPresenter(
+            [
+                make_ranked(first, key=1, min_gap=2),
+                make_ranked(second, key=2, min_gap=9),
+            ],
+            cache_manager=cache,
+            result_mode=ResultMode.FINAL_RANKED,
+        )
+
+        result = presenter.apply_ranking(
+            RankingSettings(
+                [RankingPreference(RankingCriterion.min_mandatory_gap)]
+            )
+        )
+
+        self.assertFalse(result.success)
+        self.assertIn("Regenerate schedules", result.message)
+        self.assertEqual(result.ranked_count, 2)
+        self.assertEqual(cache.set_ranked_calls, 0)
+        self.assertIsNone(cache.ranked_schedules)
+
+    def test_later_ranking_change_uses_full_generated_cache_not_previous_top_50(self) -> None:
+        systems = [
+            make_system(
+                exams=[
+                    make_exam(
+                        f"Course {index}",
+                        f"83{index:03d}",
+                        date(2026, 1, 1),
+                    )
+                ]
+            )
+            for index in range(60)
+        ]
+        previous_top_50 = [
+            make_ranked(system, key=index + 1)
+            for index, system in enumerate(systems[:50])
+        ]
+        cache = _RecordingRankingCache(generated_schedules=systems)
+
+        class FakeRankingService:
+            def __init__(self):
+                self.received_count = 0
+
+            def rank_generated_schedules(self, schedules, ranking_settings):
+                source = list(schedules)
+                self.received_count = len(source)
+                ranked = [
+                    make_ranked(system, key=index + 1, average_gap=float(index))
+                    for index, system in enumerate(source)
+                ]
+                return type(
+                    "Outcome",
+                    (),
+                    {
+                        "ranked_schedules": list(reversed(ranked)),
+                        "elapsed_seconds": 0.0,
+                    },
+                )()
+
+            def rerank(self, *_args):
+                raise AssertionError("Should not rerank the previous Top 50.")
+
+        ranking_service = FakeRankingService()
+        presenter = ScheduleNavigationPresenter(
+            previous_top_50,
+            cache_manager=cache,
+            result_mode=ResultMode.FINAL_RANKED,
+        )
+        settings = RankingSettings(
+            [RankingPreference(RankingCriterion.average_all_gap)]
+        )
+
+        result = presenter.apply_ranking(
+            settings,
+            ranking_service=ranking_service,
+        )
+
+        self.assertTrue(result.success)
+        self.assertEqual(ranking_service.received_count, 60)
+        self.assertEqual(len(cache.get_generated_schedules()), 60)
+        self.assertEqual(cache.set_ranked_calls, 1)
+        self.assertEqual(len(cache.ranked_schedules), 60)
+        self.assertIs(presenter.current_system(), systems[59])
+
+    def test_priority_change_uses_full_generated_cache_after_top_50_view(self) -> None:
+        systems = self._numbered_systems(60)
+        previous_top_50 = [
+            make_ranked(system, key=index + 1, min_gap=1000 - index)
+            for index, system in enumerate(systems[:50])
+        ]
+        cache = _RecordingRankingCache(generated_schedules=systems)
+
+        class FakeRankingService:
+            def __init__(self):
+                self.calls = []
+
+            def rank_generated_schedules(self, schedules, ranking_settings):
+                source = list(schedules)
+                self.calls.append(
+                    (
+                        len(source),
+                        tuple(
+                            preference.criterion
+                            for preference in ranking_settings.priority_list
+                        ),
+                    )
+                )
+                ranked = [
+                    make_ranked(
+                        system,
+                        key=index + 1,
+                        min_gap=1000 - index,
+                        average_gap=float(index),
+                    )
+                    for index, system in enumerate(source)
+                ]
+                if ranking_settings.priority_list[0].criterion == (
+                    RankingCriterion.average_all_gap
+                ):
+                    ranked = list(reversed(ranked))
+                return type(
+                    "Outcome",
+                    (),
+                    {
+                        "ranked_schedules": ranked,
+                        "elapsed_seconds": 0.0,
+                    },
+                )()
+
+            def rerank(self, *_args):
+                raise AssertionError("Should not rerank the previous Top 50.")
+
+        ranking_service = FakeRankingService()
+        presenter = ScheduleNavigationPresenter(
+            previous_top_50,
+            cache_manager=cache,
+            result_mode=ResultMode.FINAL_RANKED,
+        )
+        ranking_a = RankingSettings(
+            [RankingPreference(RankingCriterion.min_mandatory_gap)]
+        )
+        ranking_b = RankingSettings(
+            [
+                RankingPreference(RankingCriterion.average_all_gap),
+                RankingPreference(RankingCriterion.min_mandatory_gap),
+            ]
+        )
+
+        first_result = presenter.apply_ranking(
+            ranking_a,
+            ranking_service=ranking_service,
+        )
+        second_result = presenter.apply_ranking(
+            ranking_b,
+            ranking_service=ranking_service,
+        )
+
+        self.assertTrue(first_result.success)
+        self.assertTrue(second_result.success)
+        self.assertEqual(
+            ranking_service.calls,
+            [
+                (60, (RankingCriterion.min_mandatory_gap,)),
+                (
+                    60,
+                    (
+                        RankingCriterion.average_all_gap,
+                        RankingCriterion.min_mandatory_gap,
+                    ),
+                ),
+            ],
+        )
+        self.assertEqual(len(cache.get_generated_schedules()), 60)
+        self.assertEqual(len(cache.ranked_schedules), 60)
+        self.assertIs(presenter.current_system(), systems[59])
+
+    def test_progressive_restart_uses_full_generated_source_not_current_preview(self) -> None:
+        systems = self._numbered_systems(60)
+        previous_top_50 = [
+            make_ranked(system, key=index + 1, min_gap=1000 - index)
+            for index, system in enumerate(systems[:50])
+        ]
+        cache = _RecordingRankingCache(generated_schedules=systems)
+
+        class FakeProgressiveRankingService:
+            def __init__(self):
+                self.sources = []
+
+            def rank_generated_batch(
+                self,
+                schedules,
+                ranking_settings,
+                starting_schedule_id,
+            ):
+                batch = list(schedules)
+                self.sources.extend(batch)
+                ranked = [
+                    make_ranked(
+                        system,
+                        key=starting_schedule_id + index,
+                        min_gap=10,
+                        average_gap=float(systems.index(system)),
+                        elective_collisions=systems.index(system),
+                        mandatory_span=systems.index(system),
+                        max_exams_per_day=systems.index(system),
+                    )
+                    for index, system in enumerate(batch)
+                ]
+                return type(
+                    "Outcome",
+                    (),
+                    {
+                        "ranked_schedules": ranked,
+                        "elapsed_seconds": 0.0,
+                    },
+                )()
+
+        presenter = ScheduleNavigationPresenter(
+            previous_top_50,
+            cache_manager=cache,
+            result_mode=ResultMode.FINAL_RANKED,
+        )
+        settings = RankingSettings(
+            [
+                RankingPreference(RankingCriterion.min_mandatory_gap),
+                RankingPreference(RankingCriterion.average_all_gap),
+                RankingPreference(RankingCriterion.elective_collision_count),
+                RankingPreference(RankingCriterion.mandatory_span),
+                RankingPreference(RankingCriterion.max_exams_per_day),
+            ]
+        )
+
+        first_service = FakeProgressiveRankingService()
+        first_update = presenter.rank_progressively(
+            settings,
+            run_id=1,
+            ranking_service=first_service,
+            batch_size=17,
+            preview_limit=50,
+            min_update_interval_seconds=0,
+        )
+        presenter.update_schedules(
+            first_update.ranked_schedules,
+            is_partial=False,
+            systems_seen=first_update.total_count,
+            displayed_count=first_update.displayed_count,
+        )
+
+        second_service = FakeProgressiveRankingService()
+        second_update = presenter.rank_progressively(
+            settings,
+            run_id=2,
+            ranking_service=second_service,
+            batch_size=19,
+            preview_limit=50,
+            min_update_interval_seconds=0,
+        )
+
+        self.assertEqual(first_service.sources, systems)
+        self.assertEqual(second_service.sources, systems)
+        self.assertEqual(first_update.total_count, 60)
+        self.assertEqual(second_update.total_count, 60)
+        self.assertEqual(len(second_update.ranked_schedules), 60)
+        self.assertIs(second_update.ranked_schedules[0].exam_system, systems[59])
+        self.assertEqual(len(cache.get_generated_schedules()), 60)
+        self.assertEqual(len(cache.ranked_schedules), 60)
+
+    @staticmethod
+    def _numbered_systems(count: int) -> list[ExamSystem]:
+        return [
+            make_system(
+                exams=[
+                    make_exam(
+                        f"Course {index}",
+                        f"83{index:03d}",
+                        date(2026, 1, 1),
+                    )
+                ]
+            )
+            for index in range(count)
+        ]
 
 
 class ScheduleNavigationPresenterPart4Tests(unittest.TestCase):
@@ -795,6 +1287,23 @@ class ScheduleNavigationPresenterPart4Tests(unittest.TestCase):
         snapshot = presenter._snapshot_by_name("fallback")
         self.assertEqual(snapshot.penalty_score, 50.0)
 
+    def test_snapshot_summaries_use_friendly_quality_labels(self) -> None:
+        """Snapshot list labels should not expose raw enum names."""
+        system = make_system(
+            exams=[make_exam("Algorithms", "83001", date(2026, 1, 1))]
+        )
+        presenter = ScheduleNavigationPresenter([system])
+        presenter._snapshot_manager.save(
+            "review",
+            system,
+            quality_tag=ScheduleQualityTag.NEEDS_REVIEW,
+        )
+
+        summaries = presenter.snapshot_summaries()
+
+        self.assertEqual(summaries[0].quality_tag, "Needs Review")
+        self.assertNotIn("ScheduleQualityTag", summaries[0].quality_tag)
+
     def test_compare_snapshots_reports_penalty_delta_without_date_changes(self) -> None:
         """Score-only differences should still appear in comparison output."""
         system = make_system(
@@ -816,6 +1325,72 @@ class ScheduleNavigationPresenterPart4Tests(unittest.TestCase):
         self.assertIn("50 -> 10", comparison.details)
         self.assertIn("-40", comparison.details)
         self.assertIn("No changed courses.", comparison.details)
+        self.assertIsNotNone(comparison.comparison)
+        self.assertEqual(comparison.comparison.first_penalty, "50")
+        self.assertEqual(comparison.comparison.second_penalty, "10")
+        self.assertEqual(
+            comparison.comparison.penalty_delta_label,
+            "Constraint penalty: 50 \u2192 10 \u2014 improved",
+        )
+        self.assertEqual(
+            comparison.comparison.quality_change_label,
+            "Quality change: Risky \u2192 Risky \u2014 unchanged",
+        )
+        self.assertEqual(
+            comparison.comparison.empty_message,
+            "No exam date changes between these snapshots.",
+        )
+
+    def test_compare_snapshots_builds_structured_display_model(self) -> None:
+        """Presenter exposes GUI-ready comparison sections and changed rows."""
+        system = make_system(
+            exams=[make_exam("Algorithms", "83001", date(2026, 1, 1))]
+        )
+        presenter = ScheduleNavigationPresenter(
+            [system],
+            cache_manager=FakeCache(periods=[self._fall_period()]),
+        )
+        presenter._snapshot_manager.save(
+            "original",
+            system,
+            quality_tag=ScheduleQualityTag.RISKY,
+            penalty_score=4,
+        )
+
+        course = presenter.manual_move_course_options()[0]
+        self.assertTrue(presenter.apply_manual_move(course, "02-01-2026").success)
+        presenter._snapshot_manager.save(
+            "after-change",
+            presenter.current_system(),
+            quality_tag=ScheduleQualityTag.NEEDS_REVIEW,
+            penalty_score=2,
+        )
+
+        result = presenter.compare_snapshots("original", "after-change")
+
+        self.assertTrue(result.success)
+        view = result.comparison
+        self.assertIsNotNone(view)
+        self.assertEqual(view.header, "Comparison: original \u2192 after-change")
+        self.assertEqual(view.first_quality, "Risky")
+        self.assertEqual(view.second_quality, "Needs Review")
+        self.assertEqual(view.first_penalty, "4")
+        self.assertEqual(view.second_penalty, "2")
+        self.assertEqual(
+            view.quality_change_label,
+            "Quality change: Risky \u2192 Needs Review \u2014 improved",
+        )
+        self.assertEqual(
+            view.penalty_delta_label,
+            "Constraint penalty: 4 \u2192 2 \u2014 improved",
+        )
+        self.assertEqual(len(view.changed_rows), 1)
+        row = view.changed_rows[0]
+        self.assertEqual(row.change_label, "Moved exam")
+        self.assertEqual(row.course_label, "83001 - Algorithms")
+        self.assertEqual(row.period_label, "FALL Aleph")
+        self.assertEqual(row.old_date, "01-01-2026")
+        self.assertEqual(row.new_date, "02-01-2026")
 
     def test_manual_move_undo_and_redo_update_visible_schedule(self) -> None:
         """Undo and redo change only the active visible schedule."""

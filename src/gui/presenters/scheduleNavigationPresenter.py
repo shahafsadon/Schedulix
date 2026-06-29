@@ -35,6 +35,7 @@ from scheduling.scheduleDiffService import ScheduleDiffService
 from scheduling.scheduleIntrospection import flatten_exam_system
 from scheduling.scheduleMetricsCalculator import ScheduleMetricsCalculator
 from scheduling.schedulePenaltyScorer import SchedulePenaltyScorer
+from scheduling.scheduleRanker import ScheduleRanker
 from scheduling.scheduleSnapshot import ScheduleSnapshot, SnapshotManager
 from scheduling.scheduleRankingService import ScheduleRankingService
 
@@ -152,11 +153,32 @@ class SnapshotSummaryView:
 
 @dataclass(frozen=True)
 class SnapshotComparisonView:
-    """Readable comparison between two saved schedule snapshots."""
+    """Display-ready comparison between two saved schedule snapshots."""
 
+    header: str
     first_name: str
     second_name: str
-    lines: list[str]
+    first_quality: str
+    second_quality: str
+    first_penalty: str
+    second_penalty: str
+    quality_change_label: str
+    quality_change_status: str
+    penalty_delta_label: str
+    penalty_delta_status: str
+    changed_rows: list["SnapshotChangeRowView"]
+    empty_message: str
+
+
+@dataclass(frozen=True)
+class SnapshotChangeRowView:
+    """One changed exam row formatted for the GUI comparison panel."""
+
+    change_label: str
+    course_label: str
+    period_label: str
+    old_date: str
+    new_date: str
 
 
 @dataclass(frozen=True)
@@ -166,6 +188,7 @@ class GuiActionResult:
     success: bool
     message: str
     details: str = ""
+    comparison: SnapshotComparisonView | None = None
 
 
 @dataclass(frozen=True)
@@ -232,10 +255,20 @@ class ScheduleNavigationPresenter:
 
         self._replace_schedules(schedules)
         self._result_mode = self._normalize_result_mode(result_mode, schedules)
-        # Keep one source list until a ranking action creates a different
-        # display order. The old full-generation path can contain many systems,
-        # so an eager duplicate here would waste memory for no user benefit.
-        self._generated_schedules = self._schedules
+        # Keep the full generated universe separate from ranked previews.
+        # Raw schedules mean the presenter was opened from normal generation;
+        # ranked wrappers may only be a derived Top-N view, so they are not
+        # automatically treated as the complete source.
+        if self._ranked_schedules:
+            self._generated_schedules = []
+        else:
+            self._generated_schedules = self._schedules
+        if cache_manager is not None:
+            cached_generated = getattr(cache_manager, "get_generated_schedules", None)
+            if callable(cached_generated):
+                generated_schedules = cached_generated()
+                if generated_schedules:
+                    self._generated_schedules = generated_schedules
 
         # Start on the first system; stays at 0 when there are no systems.
         self._index = 0
@@ -338,8 +371,16 @@ class ScheduleNavigationPresenter:
                 # log the reason and keep the incoming generation order.
                 logger.warning("Live preview ranking failed: %s", error)
 
-        current_key = self._current_ranked_key()
-        current_system = self.current_system()
+        is_ranked_update = bool(
+            new_schedules and isinstance(new_schedules[0], RankedExamSystem)
+        )
+        is_first_ranked_update = is_ranked_update and not self._ranked_schedules
+        is_final_ranked_update = is_ranked_update and self._is_partial and not is_partial
+        should_preserve_current = not (
+            is_first_ranked_update or is_final_ranked_update
+        )
+        current_key = self._current_ranked_key() if should_preserve_current else None
+        current_system = self.current_system() if should_preserve_current else None
 
         self._replace_schedules(new_schedules)
         self._is_partial = is_partial
@@ -351,10 +392,13 @@ class ScheduleNavigationPresenter:
         self._systems_seen = systems_seen
         self._displayed_count = displayed_count
 
-        self._restore_or_reset_index(
-            current_key=current_key,
-            current_system=current_system,
-        )
+        if should_preserve_current:
+            self._restore_or_reset_index(
+                current_key=current_key,
+                current_system=current_system,
+            )
+        else:
+            self._index = 0
 
     def has_schedules(self) -> bool:
         """Return True when there is at least one system to display."""
@@ -533,7 +577,7 @@ class ScheduleNavigationPresenter:
             SnapshotSummaryView(
                 name=snapshot.name,
                 created_at=snapshot.created_at.strftime("%d-%m-%Y %H:%M"),
-                quality_tag=snapshot.quality_tag or "unknown",
+                quality_tag=self._friendly_quality_label(snapshot.quality_tag),
             )
             for snapshot in self._snapshot_manager.list_snapshots()
         ]
@@ -614,10 +658,12 @@ class ScheduleNavigationPresenter:
         # The service reads both copies and does not change either snapshot.
         comparison = self._diff_service.compare(first, second)
         lines = self._comparison_lines(comparison, first, second)
+        comparison_view = self._comparison_view(comparison, first, second)
         return GuiActionResult(
             True,
             f"Compared '{first.name}' with '{second.name}'.",
             details="\n".join(lines),
+            comparison=comparison_view,
         )
 
     def manual_move_course_options(self) -> list[str]:
@@ -1005,6 +1051,143 @@ class ScheduleNavigationPresenter:
 
         return lines
 
+    def _comparison_view(
+        self,
+        comparison,
+        first: ScheduleSnapshot,
+        second: ScheduleSnapshot,
+    ) -> SnapshotComparisonView:
+        """Build the structured comparison model rendered by the GUI."""
+        rows = [
+            SnapshotChangeRowView(
+                change_label=self._friendly_change_label(row.change_type),
+                course_label=f"{row.course_id} - {row.course_name}",
+                period_label=f"{row.semester} {row.moed}",
+                old_date=_format_optional_date(row.old_date),
+                new_date=_format_optional_date(row.new_date),
+            )
+            for row in comparison.changed_courses
+        ]
+        first_quality = self._friendly_quality_label(first.quality_tag)
+        second_quality = self._friendly_quality_label(second.quality_tag)
+        return SnapshotComparisonView(
+            header=(
+                f"Comparison: {comparison.first_name} "
+                f"\u2192 {comparison.second_name}"
+            ),
+            first_name=first.name,
+            second_name=second.name,
+            first_quality=first_quality,
+            second_quality=second_quality,
+            first_penalty=self._format_penalty(first.penalty_score),
+            second_penalty=self._format_penalty(second.penalty_score),
+            quality_change_label=self._format_quality_change(
+                first_quality,
+                second_quality,
+            ),
+            quality_change_status=self._quality_change_status(
+                first_quality,
+                second_quality,
+            ),
+            penalty_delta_label=self._format_penalty_delta(
+                first.penalty_score,
+                second.penalty_score,
+                comparison.penalty_delta,
+            ),
+            penalty_delta_status=self._penalty_delta_status(
+                comparison.penalty_delta,
+            ),
+            changed_rows=rows,
+            empty_message="No exam date changes between these snapshots.",
+        )
+
+    @staticmethod
+    def _friendly_quality_label(quality_tag) -> str:
+        """Return a user-facing quality label instead of a raw enum value."""
+        if quality_tag is None:
+            return "Unknown"
+
+        value = getattr(quality_tag, "value", quality_tag)
+        text = str(value)
+        if "." in text:
+            text = text.rsplit(".", 1)[-1]
+        text = text.replace("_", " ").strip()
+        return text.title() if text else "Unknown"
+
+    @staticmethod
+    def _friendly_change_label(change_type: str) -> str:
+        """Return a concise title for one diff row."""
+        labels = {
+            "moved": "Moved exam",
+            "added": "Added exam",
+            "removed": "Removed exam",
+        }
+        return labels.get(change_type, change_type.replace("_", " ").title())
+
+    @staticmethod
+    def _format_penalty(penalty_score: float | None) -> str:
+        """Format optional penalty values for compact GUI display."""
+        return f"{penalty_score:g}" if penalty_score is not None else "n/a"
+
+    @classmethod
+    def _format_quality_change(cls, first_quality: str, second_quality: str) -> str:
+        """Format the before/after quality movement as the primary verdict."""
+        status = cls._quality_change_status(first_quality, second_quality)
+        return (
+            f"Quality change: {first_quality} \u2192 {second_quality} "
+            f"\u2014 {status}"
+        )
+
+    @staticmethod
+    def _quality_change_status(first_quality: str, second_quality: str) -> str:
+        """Classify quality movement using the review-friendly tag order."""
+        quality_order = {
+            "Risky": 0,
+            "Needs Review": 1,
+            "Good": 2,
+            "Excellent": 3,
+        }
+        first_rank = quality_order.get(first_quality)
+        second_rank = quality_order.get(second_quality)
+        if first_rank is None or second_rank is None:
+            return "unchanged" if first_quality == second_quality else "changed"
+        if second_rank > first_rank:
+            return "improved"
+        if second_rank < first_rank:
+            return "worsened"
+        return "unchanged"
+
+    @classmethod
+    def _format_penalty_delta(
+        cls,
+        first_penalty: float | None,
+        second_penalty: float | None,
+        penalty_delta: float | None,
+    ) -> str:
+        """Format constraint-penalty movement separately from quality."""
+        first_text = cls._format_penalty(first_penalty)
+        second_text = cls._format_penalty(second_penalty)
+        if penalty_delta is None:
+            return f"Constraint penalty: {first_text} \u2192 {second_text} \u2014 n/a"
+        if penalty_delta < 0:
+            return (
+                f"Constraint penalty: {first_text} \u2192 {second_text} "
+                "\u2014 improved"
+            )
+        if penalty_delta > 0:
+            return (
+                f"Constraint penalty: {first_text} \u2192 {second_text} "
+                "\u2014 worsened"
+            )
+        return f"Constraint penalty: {first_text} \u2192 {second_text} \u2014 unchanged"
+
+    @staticmethod
+    def _penalty_delta_status(penalty_delta: float | None) -> str:
+        """Classify the score delta so the GUI can color it consistently."""
+        if penalty_delta is None or penalty_delta == 0:
+            return "neutral"
+        return "improved" if penalty_delta < 0 else "worse"
+
     @staticmethod
     def _impact_details(impact) -> str:
         """Format manual-move impact analysis for the GUI."""
@@ -1046,8 +1229,9 @@ class ScheduleNavigationPresenter:
         """Rank generated schedules in bounded batches for live GUI preview.
 
         This ranks the already generated schedule list without regenerating
-        dates. Only the current Top-N preview is retained and emitted. The
-        final update is therefore an explicit final Top-N result set.
+        dates. Partial updates emit a bounded Top-N preview. The final update
+        emits the full ranked list so completed ranked navigation can browse
+        every generated schedule from best to worst.
         """
         source_schedules = self._ranking_source_schedules()
         total_count = len(source_schedules)
@@ -1078,6 +1262,7 @@ class ScheduleNavigationPresenter:
             ranking_settings=ranking_settings,
             preview_limit=preview_limit,
         )
+        full_ranked_schedules: list[RankedExamSystem] = []
 
         final_update: ProgressiveRankingUpdate | None = None
         last_emit_at: float | None = None
@@ -1094,6 +1279,7 @@ class ScheduleNavigationPresenter:
                 ranking_settings,
                 starting_schedule_id=batch.starting_schedule_id,
             )
+            full_ranked_schedules.extend(outcome.ranked_schedules)
             ranked_preview = preview.add_ranked_batch(
                 outcome.ranked_schedules,
                 generated_count=batch.size,
@@ -1127,7 +1313,17 @@ class ScheduleNavigationPresenter:
                 on_update(final_update)
                 last_emit_at = now
 
-        ranked_schedules = preview.current_preview()
+        if hasattr(service, "rerank"):
+            final_outcome = service.rerank(
+                full_ranked_schedules,
+                ranking_settings,
+            )
+            ranked_schedules = final_outcome.ranked_schedules
+        else:
+            ranked_schedules = ScheduleRanker().rank(
+                full_ranked_schedules,
+                ranking_settings,
+            )
         final_update = ProgressiveRankingUpdate(
             run_id=run_id,
             ranked_schedules=ranked_schedules,
@@ -1136,8 +1332,8 @@ class ScheduleNavigationPresenter:
             total_count=total_count,
             displayed_count=len(ranked_schedules),
             message=(
-                f"Final Top {len(ranked_schedules):,} ranking complete from "
-                f"{total_count:,} generated schedule(s)."
+                f"Ranking complete. Showing all "
+                f"{len(ranked_schedules):,} ranked schedule(s)."
             ),
         )
 
@@ -1162,21 +1358,25 @@ class ScheduleNavigationPresenter:
             )
 
         service = ranking_service or ScheduleRankingService()
+        source_schedules = self._ranking_source_schedules()
 
-        if self._ranked_schedules:
-            if not ranking_settings.priority_list:
-                ranked_schedules = sorted(
-                    self._ranked_schedules,
-                    key=lambda ranked_system: ranked_system.key,
-                )
-                elapsed_seconds = 0.0
-            else:
-                outcome = service.rerank(
-                    self._ranked_schedules,
-                    ranking_settings,
-                )
-                ranked_schedules = outcome.ranked_schedules
-                elapsed_seconds = outcome.elapsed_seconds
+        if source_schedules:
+            outcome = service.rank_generated_schedules(
+                source_schedules,
+                ranking_settings,
+            )
+            ranked_schedules = outcome.ranked_schedules
+            elapsed_seconds = outcome.elapsed_seconds
+        elif self._ranked_schedules:
+            return RankingApplyResult(
+                success=False,
+                message=(
+                    "Full generated schedule list is not available. "
+                    "Regenerate schedules before changing ranking criteria."
+                ),
+                ranked_count=len(self._ranked_schedules),
+                ranked_schedules=list(self._ranked_schedules),
+            )
         else:
             outcome = service.rank_generated_schedules(
                 self._schedules,
@@ -1245,7 +1445,7 @@ class ScheduleNavigationPresenter:
         """Return the generated schedules without making an extra full copy."""
         if self._generated_schedules:
             return self._generated_schedules
-        return self._schedules
+        return []
 
     def _restore_or_reset_index(
         self,
@@ -1269,7 +1469,7 @@ class ScheduleNavigationPresenter:
                     self._index = index
                     return
 
-        self._index = 0
+        self._index = min(self._index, len(self._schedules) - 1)
 
     @staticmethod
     def _normalize_result_mode(

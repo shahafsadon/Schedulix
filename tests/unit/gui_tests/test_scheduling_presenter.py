@@ -53,7 +53,10 @@ class SchedulingPresenterTests(unittest.TestCase):
         self.assertTrue(result.success)
         self.assertEqual(result.schedule_count, 5)
         self.assertEqual(result.displayed_count, 5)
-        self.assertEqual(service.run_kwargs, {"rank_results": False})
+        self.assertEqual(
+            service.run_kwargs,
+            {"rank_results": False, "allow_fallback": True},
+        )
 
     def test_zero_schedules_is_success_with_explanation(self) -> None:
         """Zero systems is still a success, with an explanatory message."""

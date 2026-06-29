@@ -18,7 +18,6 @@ from application.async_runner import AsyncScheduleRunner
 from gui.presenters.dateManagementPresenter import DateManagementPresenter
 from gui.presenters.schedulingPresenter import GenerationResult, SchedulingPresenter
 from scheduling.progressiveGeneration import (
-    ProgressiveGenerationOptions,
     ProgressiveRankedSnapshot,
     ProgressiveResultState,
 )
@@ -511,26 +510,18 @@ class DateManagementScreen(ctk.CTkFrame):
             on_next()
 
     def _handle_generate(self) -> None:
-        """Generate schedules in the background with bounded live progress."""
+        """Generate the complete valid schedule set in the background."""
         if self._scheduling_presenter is None:
             self._show_message("Schedule generator is not available.", ok=False)
             return
 
-        def task(token, _on_progress):
-            """Run the lazy generation path and post snapshots safely to Tk."""
-            return self._scheduling_presenter.generate_progressive(
-                on_snapshot=self._post_progress,
-                cancellation_token=token,
-                options=ProgressiveGenerationOptions(
-                    batch_size=100,
-                    display_limit=50,
-                    min_update_interval_seconds=0.35,
-                ),
-            )
+        def task():
+            """Run base generation without applying the Top-N ranking preview."""
+            return self._scheduling_presenter.generate()
 
-        accepted = self._runner.run_with_progress(
+        accepted = self._runner.run(
             task=task,
-            on_started=self._show_generation_started_progressive,
+            on_started=self._show_generation_started,
             on_complete=lambda result: self.after(
                 0,
                 lambda: self._show_generation_result(result),
@@ -657,10 +648,12 @@ class DateManagementScreen(ctk.CTkFrame):
         self._generation_in_progress = False
 
         if result.success and result.schedule_count > 0:
-            if 0 < result.displayed_count < result.schedule_count:
+            if self._is_fallback_result(result):
+                message = result.message
+            elif 0 < result.displayed_count < result.schedule_count:
                 message = (
                     f"{result.schedule_count:,} schedule systems generated. "
-                    f"Final Top {result.displayed_count:,} ranking is ready."
+                    f"Temporary Top {result.displayed_count:,} ranking preview is ready."
                 )
             else:
                 message = (
@@ -668,8 +661,11 @@ class DateManagementScreen(ctk.CTkFrame):
                 )
 
             self._show_message(message, ok=True)
-            if self._on_generation_success is not None:
-                self.after(900, self._on_generation_success)
+            if self._is_fallback_result(result):
+                self._set_editing_enabled(True)
+                self._show_compromise_confirmation(result)
+            elif self._on_generation_success is not None:
+                self.after(0, self._on_generation_success)
             return
 
         self._set_editing_enabled(True)
@@ -683,6 +679,91 @@ class DateManagementScreen(ctk.CTkFrame):
             f"Schedule generation failed unexpectedly: {type(error).__name__}.",
             ok=False,
         )
+
+    @staticmethod
+    def _is_fallback_result(result: GenerationResult) -> bool:
+        """Return True when generation produced compromise/fallback schedules."""
+        return bool(
+            getattr(result, "is_fallback", False)
+            or result.message.startswith("Fallback schedule:")
+        )
+
+    def _show_compromise_confirmation(self, result: GenerationResult) -> None:
+        """Ask before navigating to compromise schedules."""
+        parent = self.winfo_toplevel()
+        popup = ctk.CTkToplevel(parent)
+        popup.title("Compromise schedules available")
+        popup.geometry(self._centered_popup_geometry(parent, 560, 300))
+        popup.transient(parent)
+        popup.grab_set()
+        if hasattr(popup, "resizable"):
+            popup.resizable(False, False)
+        popup.configure(fg_color=_PAGE_BG)
+
+        container = ctk.CTkFrame(popup, fg_color=_SURFACE, corner_radius=14)
+        container.pack(fill="both", expand=True, padx=18, pady=18)
+        container.grid_columnconfigure(0, weight=1)
+
+        ctk.CTkLabel(
+            container,
+            text="No fully valid schedule was found.",
+            font=("Segoe UI", 18, "bold"),
+            text_color=_TEXT,
+            anchor="w",
+        ).grid(row=0, column=0, sticky="ew", padx=18, pady=(18, 8))
+
+        ctk.CTkLabel(
+            container,
+            text=(
+                "Schedulix found compromise schedules that still respect hard "
+                "constraints, but relax one or more soft threshold constraints.\n\n"
+                "Would you like to view the compromise schedules?"
+            ),
+            font=("Segoe UI", 12),
+            text_color=_TEXT,
+            wraplength=500,
+            justify="left",
+            anchor="w",
+        ).grid(row=1, column=0, sticky="ew", padx=18, pady=(0, 10))
+
+        ctk.CTkLabel(
+            container,
+            text=result.message,
+            font=("Segoe UI", 11),
+            text_color=_MUTED,
+            wraplength=500,
+            justify="left",
+            anchor="w",
+        ).grid(row=2, column=0, sticky="ew", padx=18, pady=(0, 14))
+
+        actions = ctk.CTkFrame(container, fg_color="transparent")
+        actions.grid(row=3, column=0, sticky="e", padx=18, pady=(0, 18))
+
+        def view_compromise() -> None:
+            popup.destroy()
+            if self._on_generation_success is not None:
+                self.after(0, self._on_generation_success)
+
+        ctk.CTkButton(
+            actions,
+            text="Back to settings",
+            width=120,
+            fg_color="transparent",
+            border_width=1,
+            border_color=_BORDER,
+            text_color=(_PRIMARY, "#93C5FD"),
+            hover_color=("#DCE8FF", "#1E293B"),
+            command=popup.destroy,
+        ).grid(row=0, column=0, padx=(0, 10))
+
+        ctk.CTkButton(
+            actions,
+            text="View compromise schedules",
+            width=190,
+            fg_color=_PRIMARY,
+            hover_color=_PRIMARY_HOVER,
+            command=view_compromise,
+        ).grid(row=0, column=1)
 
     def _set_editing_enabled(self, enabled: bool) -> None:
         """Enable or disable all date editing and navigation controls."""

@@ -5,6 +5,7 @@ from application.schedulixApp import SchedulixApp
 
 
 ROOT = Path(__file__).resolve().parents[3]
+EXAMPLES = ROOT / "data" / "examples" / "basic_course_example"
 
 
 def write_text_file(tmp_path: Path, name: str, content: str) -> Path:
@@ -18,9 +19,9 @@ def test_run_without_commands_path_is_unchanged(tmp_path) -> None:
     output_path = tmp_path / "exam_schedules.txt"
 
     result = SchedulixApp().run(
-        courses_path=ROOT / "data" / "examples" / "CourseExample.txt",
-        exam_periods_path=ROOT / "data" / "examples" / "DatesExample.txt",
-        programs_path=ROOT / "data" / "examples" / "ProgramsExample.txt",
+        courses_path=EXAMPLES / "courses.txt",
+        exam_periods_path=EXAMPLES / "dates.txt",
+        programs_path=EXAMPLES / "programs.txt",
         output_path=output_path,
         commands_path=None,
     )
@@ -101,9 +102,9 @@ def test_run_with_commands_path_executes_commands(tmp_path) -> None:
 
 def test_run_with_invalid_command_raises_value_error(tmp_path) -> None:
     """Providing a commands file with a syntax/unrecognized command error must raise ValueError immediately."""
-    courses_path = ROOT / "data" / "examples" / "CourseExample.txt"
-    periods_path = ROOT / "data" / "examples" / "DatesExample.txt"
-    programs_path = ROOT / "data" / "examples" / "ProgramsExample.txt"
+    courses_path = EXAMPLES / "courses.txt"
+    periods_path = EXAMPLES / "dates.txt"
+    programs_path = EXAMPLES / "programs.txt"
     commands_path = write_text_file(
         tmp_path,
         "commands.txt",

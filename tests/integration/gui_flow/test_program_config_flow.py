@@ -28,7 +28,9 @@ from gui.presenters.programDetailsPresenter import ProgramDetailsPresenter
 
 # Real example file shipped with the project; using it (instead of hand-built
 # data) is what makes this an integration test rather than a unit test.
-EXAMPLE_COURSES = ROOT / "data" / "examples" / "CourseExample.txt"
+EXAMPLE_COURSES = (
+    ROOT / "data" / "examples" / "basic_course_example" / "courses.txt"
+)
 
 
 class ProgramConfigFlowTests(unittest.TestCase):

@@ -15,9 +15,11 @@ from gui.scheduleNavigationPresenter import (
     MetricsSummaryView,
     MoedSection,
     ResultMode,
+    SnapshotChangeRowView,
+    SnapshotComparisonView,
     SystemView,
 )
-from ranking_settings import RankingCriterion
+from ranking_settings import RankingCriterion, RankingPreference, RankingSettings
 
 from .gui_test_support import FakeButton, FakeLabel, load_screen_module, widgets_with_text
 
@@ -112,7 +114,131 @@ def test_constructor_builds_grid_once_and_highlights_current_exam_day() -> None:
 
     screen._refresh()
 
-    build.assert_not_called()
+    build.assert_called_once()
+
+
+def test_constructor_does_not_scan_all_schedules_for_relevant_months() -> None:
+    module, fake_ctk = load_screen_module("scheduleNavigationScreen.py")
+
+    view = SystemView(
+        1,
+        76032,
+        [],
+        2026,
+        {"2026-01-05": [_exam()]},
+    )
+    presenter = _presenter(view)
+    presenter.relevant_months.side_effect = AssertionError(
+        "first paint must not scan every generated schedule"
+    )
+
+    screen = module.ScheduleNavigationScreen(
+        fake_ctk.CTkFrame(),
+        presenter,
+    )
+
+    assert screen._counter_label.options["text"] == "System 1 of 76032"
+    presenter.relevant_months.assert_not_called()
+
+
+def test_part4_and_ranking_panels_are_deferred_until_after_first_paint() -> None:
+    module, fake_ctk = load_screen_module("scheduleNavigationScreen.py")
+
+    view = SystemView(
+        1,
+        76032,
+        [],
+        2026,
+        {"2026-01-05": [_exam()]},
+    )
+    presenter = _presenter(view)
+    delayed_callbacks = []
+    original_after = fake_ctk.CTkFrame.after
+
+    def delayed_after(self, delay_ms, callback=None):
+        delayed_callbacks.append((delay_ms, callback))
+        return None
+
+    fake_ctk.CTkFrame.after = delayed_after
+    try:
+        screen = module.ScheduleNavigationScreen(
+            fake_ctk.CTkFrame(),
+            presenter,
+        )
+    finally:
+        fake_ctk.CTkFrame.after = original_after
+
+    assert screen._counter_label.options["text"] == "System 1 of 76032"
+    assert screen._part4_tools_built is False
+    assert screen._ranking_panel_built is False
+    assert delayed_callbacks
+    assert delayed_callbacks[0][0] == 50
+
+    delayed_callbacks[0][1]()
+
+    assert screen._part4_tools_built is True
+    assert screen._ranking_panel_built is True
+
+
+def test_summary_cards_use_compact_left_aligned_size() -> None:
+    module, fake_ctk = load_screen_module("scheduleNavigationScreen.py")
+
+    view = SystemView(
+        1,
+        56,
+        [],
+        2026,
+        {"2026-01-05": [_exam()]},
+    )
+
+    module.ScheduleNavigationScreen(fake_ctk.CTkFrame(), _presenter(view))
+
+    summary_cards = [
+        frame
+        for frame in fake_ctk.CTkFrame.created
+        if (
+            frame.options.get("width") == module._SUMMARY_CARD_WIDTH
+            and frame.options.get("height") == module._SUMMARY_CARD_HEIGHT
+        )
+    ]
+
+    assert len(summary_cards) == 4
+    assert all(card.grid_calls[-1]["sticky"] == "w" for card in summary_cards)
+    assert module._SUMMARY_CARD_HEIGHT <= 90
+
+
+def test_fallback_schedule_is_labeled_with_penalty_details() -> None:
+    module, fake_ctk = load_screen_module("scheduleNavigationScreen.py")
+
+    view = SystemView(
+        1,
+        1,
+        [],
+        2026,
+        {"2026-01-05": [_exam()]},
+        is_fallback=True,
+        penalty_score=50.0,
+        penalty_details=(
+            "Req 2.1: Mandatory exams are only 1 days apart; "
+            "required minimum is 10. (penalty 50)",
+        ),
+    )
+
+    screen = module.ScheduleNavigationScreen(
+        fake_ctk.CTkFrame(),
+        _presenter(view),
+    )
+
+    assert screen._counter_label.options["text"] == (
+        "System 1 of 1 | Compromise schedule"
+    )
+    banner_text = screen._status_seen_label.options["text"]
+    assert "Compromise schedule" in banner_text
+    assert "Constraint penalty: 50" in banner_text
+    assert "Violations: 1" in banner_text
+    assert "Mandatory exams are only 1 days apart" in banner_text
+    assert "Req 2.1" not in banner_text
+    assert screen._status_banner.winfo_ismapped()
 
 
 def test_next_and_previous_delegate_then_refresh() -> None:
@@ -402,10 +528,138 @@ def test_part4_result_areas_use_readable_labels_not_textboxes() -> None:
 
     screen = module.ScheduleNavigationScreen(fake_ctk.CTkFrame(), _presenter(view))
 
-    assert isinstance(screen._snapshot_compare_box, fake_ctk.CTkLabel)
+    assert isinstance(screen._snapshot_compare_box, fake_ctk.CTkFrame)
     assert isinstance(screen._move_impact_box, fake_ctk.CTkLabel)
-    assert "Comparison results" in screen._snapshot_compare_box.options["text"]
+    assert widgets_with_text(fake_ctk.CTkLabel, "Comparison results will appear here.")
     assert "Move impact" in screen._move_impact_box.options["text"]
+
+
+def test_snapshot_comparison_renders_structured_moved_exam_rows() -> None:
+    module, fake_ctk = load_screen_module("scheduleNavigationScreen.py")
+
+    screen = object.__new__(module.ScheduleNavigationScreen)
+    screen._snapshot_compare_box = fake_ctk.CTkFrame()
+    comparison = SnapshotComparisonView(
+        header="Comparison: original \u2192 after-change",
+        first_name="original",
+        second_name="after-change",
+        first_quality="Risky",
+        second_quality="Needs Review",
+        first_penalty="4",
+        second_penalty="2",
+        quality_change_label="Quality change: Risky \u2192 Needs Review \u2014 improved",
+        quality_change_status="improved",
+        penalty_delta_label="Constraint penalty: 4 \u2192 2 \u2014 improved",
+        penalty_delta_status="improved",
+        changed_rows=[
+            SnapshotChangeRowView(
+                change_label="Moved exam",
+                course_label="83112 - Calculus 1",
+                period_label="FALL Aleph",
+                old_date="30-01-2026",
+                new_date="01-02-2026",
+            )
+        ],
+        empty_message="No exam date changes between these snapshots.",
+    )
+
+    screen._render_snapshot_comparison(comparison)
+
+    texts = [widget.options.get("text") for widget in fake_ctk.CTkLabel.created]
+    assert "Comparison: original \u2192 after-change" in texts
+    assert "Before" in texts
+    assert "Snapshot: original" in texts
+    assert "Quality: Risky" in texts
+    assert "Constraint penalty: 4" in texts
+    assert "After" in texts
+    assert "Snapshot: after-change" in texts
+    assert "Quality: Needs Review" in texts
+    assert "Quality change: Risky \u2192 Needs Review \u2014 improved" in texts
+    assert "Constraint penalty: 4 \u2192 2 \u2014 improved" in texts
+    assert "Moved exam" in texts
+    assert "83112 - Calculus 1" in texts
+    assert "FALL Aleph" in texts
+    assert "Before: 30-01-2026" in texts
+    assert "After: 01-02-2026" in texts
+
+
+def test_snapshot_comparison_empty_state_is_friendly() -> None:
+    module, fake_ctk = load_screen_module("scheduleNavigationScreen.py")
+
+    screen = object.__new__(module.ScheduleNavigationScreen)
+    screen._snapshot_compare_box = fake_ctk.CTkFrame()
+    comparison = SnapshotComparisonView(
+        header="Comparison: original \u2192 after-change",
+        first_name="original",
+        second_name="after-change",
+        first_quality="Good",
+        second_quality="Good",
+        first_penalty="0",
+        second_penalty="0",
+        quality_change_label="Quality change: Good \u2192 Good \u2014 unchanged",
+        quality_change_status="unchanged",
+        penalty_delta_label="Constraint penalty: 0 \u2192 0 \u2014 unchanged",
+        penalty_delta_status="neutral",
+        changed_rows=[],
+        empty_message="No exam date changes between these snapshots.",
+    )
+
+    screen._render_snapshot_comparison(comparison)
+
+    texts = [widget.options.get("text") for widget in fake_ctk.CTkLabel.created]
+    assert "No exam date changes between these snapshots." in texts
+    assert "No changed courses." not in texts
+
+
+def test_snapshot_comparison_summary_uses_semantic_colours() -> None:
+    module, fake_ctk = load_screen_module("scheduleNavigationScreen.py")
+
+    improved = module.ScheduleNavigationScreen._comparison_delta_color("improved")
+    worsened = module.ScheduleNavigationScreen._comparison_delta_color("worsened")
+    unchanged = module.ScheduleNavigationScreen._comparison_delta_color("unchanged")
+    neutral = module.ScheduleNavigationScreen._comparison_delta_color("neutral")
+
+    assert improved == module._SUCCESS
+    assert worsened == module._ERROR
+    assert unchanged == module._MUTED
+    assert neutral == module._MUTED
+
+    screen = object.__new__(module.ScheduleNavigationScreen)
+    screen._snapshot_compare_box = fake_ctk.CTkFrame()
+    comparison = SnapshotComparisonView(
+        header="Comparison: before \u2192 after",
+        first_name="before",
+        second_name="after",
+        first_quality="Risky",
+        second_quality="Excellent",
+        first_penalty="0",
+        second_penalty="0",
+        quality_change_label="Quality change: Risky \u2192 Excellent \u2014 improved",
+        quality_change_status="improved",
+        penalty_delta_label="Constraint penalty: 0 \u2192 0 \u2014 unchanged",
+        penalty_delta_status="neutral",
+        changed_rows=[],
+        empty_message="No exam date changes between these snapshots.",
+    )
+
+    screen._render_snapshot_comparison(comparison)
+
+    labels = {
+        widget.options.get("text"): widget
+        for widget in fake_ctk.CTkLabel.created
+    }
+    assert (
+        labels[
+            "Quality change: Risky \u2192 Excellent \u2014 improved"
+        ].options["text_color"]
+        == module._SUCCESS
+    )
+    assert (
+        labels[
+            "Constraint penalty: 0 \u2192 0 \u2014 unchanged"
+        ].options["text_color"]
+        == module._MUTED
+    )
 
 
 def test_apply_move_success_resets_calendar_and_refreshes_screen() -> None:
@@ -604,6 +858,49 @@ def test_partial_preview_disables_save_and_uses_live_copy() -> None:
     assert screen._save_button.options["state"] == "disabled"
     assert "Live preview" in screen._status_seen_label.options["text"]
     assert "temporary Top 50" in screen._status_seen_label.options["text"]
+
+
+def test_partial_live_update_skips_part4_refresh_and_keeps_navigation_enabled() -> None:
+    module, fake_ctk = load_screen_module("scheduleNavigationScreen.py")
+
+    first_view = SystemView(
+        1,
+        2,
+        [],
+        2026,
+        {"2026-01-05": [_exam()]},
+    )
+    second_view = SystemView(
+        2,
+        50,
+        [],
+        2026,
+        {"2026-01-06": [_exam("54321", "Databases", "06-01-2026")]},
+    )
+    presenter = _presenter(first_view)
+    presenter.current_view.side_effect = [first_view, second_view]
+    presenter.can_go_previous.return_value = True
+    presenter.can_go_next.return_value = True
+
+    screen = module.ScheduleNavigationScreen(
+        fake_ctk.CTkFrame(),
+        presenter,
+        export_presenter=MagicMock(),
+    )
+    screen._refresh_part4_controls = MagicMock()
+
+    screen.push_live_update(
+        [MagicMock() for _ in range(50)],
+        is_partial=True,
+        systems_seen=67750,
+    )
+
+    presenter.update_schedules.assert_called_once()
+    screen._refresh_part4_controls.assert_not_called()
+    assert screen._counter_label.options["text"] == "System 2 of 50"
+    assert "67,750 ranked so far" in screen._status_seen_label.options["text"]
+    assert screen._prev_button.options["state"] == "normal"
+    assert screen._next_button.options["state"] == "normal"
 
 
 def test_unranked_generated_results_do_not_show_final_top_50_banner() -> None:
@@ -910,7 +1207,7 @@ def test_apply_ranking_refreshes_displayed_metric_labels() -> None:
                 processed_count=2,
                 total_count=2,
                 displayed_count=2,
-                message="Final Top 2 ranking complete from 2 generated schedule(s).",
+                message="Ranking complete. Showing all 2 ranked schedule(s).",
             )
             presenter.current_view.return_value = after
             if on_complete is not None:
@@ -1027,7 +1324,7 @@ def test_apply_ranking_receives_partial_preview_before_final_completion() -> Non
         processed_count=100,
         total_count=100,
         displayed_count=1,
-        message="Final Top 1",
+        message="Ranking complete. Showing all 100 ranked schedule(s).",
     )
 
     screen = object.__new__(module.ScheduleNavigationScreen)
@@ -1048,20 +1345,13 @@ def test_apply_ranking_receives_partial_preview_before_final_completion() -> Non
 
     screen._handle_apply_ranking()
 
-    assert screen.push_live_update.call_args_list[0].args == (
+    screen.push_live_update.assert_called_once_with(
         ["partial"],
+        is_partial=True,
+        systems_seen=10,
     )
-    assert screen.push_live_update.call_args_list[0].kwargs == {
-        "is_partial": True,
-        "systems_seen": 10,
-    }
-    assert screen.push_live_update.call_args_list[1].args == (
-        ["final"],
-    )
-    assert screen.push_live_update.call_args_list[1].kwargs == {
-        "is_partial": False,
-        "systems_seen": 100,
-    }
+    assert screen._completed_ranking_update is final
+    assert screen._apply_ranking_button.options["text"] == "Show Full Ranking"
 
 
 def test_apply_ranking_returns_without_running_ranking_when_runner_defers_work() -> None:
@@ -1093,6 +1383,48 @@ def test_apply_ranking_returns_without_running_ranking_when_runner_defers_work()
     screen.presenter.rank_progressively.assert_not_called()
 
 
+def test_apply_button_refreshes_latest_preview_while_ranking_is_running() -> None:
+    module, _ = load_screen_module("scheduleNavigationScreen.py")
+
+    screen = object.__new__(module.ScheduleNavigationScreen)
+    screen.presenter = MagicMock()
+    runner = MagicMock()
+    runner.is_running = True
+    screen._ranking_runner = runner
+    screen._ranking_run_id = 4
+    screen._ranking_criteria = [RankingCriterion.max_exams_per_day]
+    screen._ranking_run_settings = RankingSettings(
+        [RankingPreference(RankingCriterion.max_exams_per_day)]
+    )
+    screen._set_ranking_status = MagicMock()
+    screen.push_live_update = MagicMock()
+    screen._completed_ranking_update = None
+    screen._displayed_ranking_update = None
+    screen._latest_ranking_update = module.ProgressiveRankingUpdate(
+        run_id=4,
+        ranked_schedules=["latest"],
+        is_partial=True,
+        processed_count=20000,
+        total_count=76032,
+        displayed_count=50,
+        message="Live preview: showing temporary Top 50 from 20,000 ranked so far.",
+    )
+
+    screen._handle_apply_ranking()
+
+    runner.run_with_progress.assert_not_called()
+    screen.presenter.rank_progressively.assert_not_called()
+    screen.push_live_update.assert_called_once_with(
+        ["latest"],
+        is_partial=True,
+        systems_seen=20000,
+    )
+    screen._set_ranking_status.assert_called_once_with(
+        "Live preview: showing temporary Top 50 from 20,000 ranked so far.",
+        ok=None,
+    )
+
+
 def test_stale_ranking_updates_are_ignored() -> None:
     module, _ = load_screen_module("scheduleNavigationScreen.py")
 
@@ -1101,6 +1433,8 @@ def test_stale_ranking_updates_are_ignored() -> None:
     screen.push_live_update = MagicMock()
     screen._set_ranking_status = MagicMock()
     screen._apply_ranking_button = FakeButton()
+    screen._latest_ranking_update = None
+    screen._displayed_ranking_update = None
 
     stale = module.ProgressiveRankingUpdate(
         run_id=1,
@@ -1131,6 +1465,89 @@ def test_stale_ranking_updates_are_ignored() -> None:
     )
 
 
+def test_background_ranking_updates_do_not_replace_displayed_preview_until_refresh() -> None:
+    module, _ = load_screen_module("scheduleNavigationScreen.py")
+
+    screen = object.__new__(module.ScheduleNavigationScreen)
+    screen._ranking_run_id = 3
+    screen.push_live_update = MagicMock()
+    screen._set_ranking_status = MagicMock()
+    screen._latest_ranking_update = None
+    screen._displayed_ranking_update = None
+
+    first = module.ProgressiveRankingUpdate(
+        run_id=3,
+        ranked_schedules=["first-preview"],
+        is_partial=True,
+        processed_count=10000,
+        total_count=76032,
+        displayed_count=50,
+        message="Showing Top 50 from 10,000 ranked schedules so far.",
+    )
+    later = module.ProgressiveRankingUpdate(
+        run_id=3,
+        ranked_schedules=["later-preview"],
+        is_partial=True,
+        processed_count=30000,
+        total_count=76032,
+        displayed_count=50,
+        message="Background ranked: 30,000 of 76,032.",
+    )
+
+    screen._handle_ranking_update(first)
+    screen._handle_ranking_update(later)
+
+    screen.push_live_update.assert_called_once_with(
+        ["first-preview"],
+        is_partial=True,
+        systems_seen=10000,
+    )
+    assert screen._latest_ranking_update is later
+
+
+def test_refresh_after_ranking_complete_switches_to_full_ranked_list() -> None:
+    module, _ = load_screen_module("scheduleNavigationScreen.py")
+
+    screen = object.__new__(module.ScheduleNavigationScreen)
+    screen._ranking_run_id = 5
+    screen.push_live_update = MagicMock()
+    screen._set_ranking_status = MagicMock()
+    screen._apply_ranking_button = FakeButton()
+    screen._latest_ranking_update = None
+    screen._displayed_ranking_update = module.ProgressiveRankingUpdate(
+        run_id=5,
+        ranked_schedules=["preview"],
+        is_partial=True,
+        processed_count=10000,
+        total_count=76032,
+        displayed_count=50,
+        message="Preview",
+    )
+    final = module.ProgressiveRankingUpdate(
+        run_id=5,
+        ranked_schedules=["full-ranked"],
+        is_partial=False,
+        processed_count=76032,
+        total_count=76032,
+        displayed_count=76032,
+        message="Ranking complete. Showing all 76,032 ranked schedule(s).",
+    )
+
+    screen._handle_ranking_complete(5, final)
+
+    screen.push_live_update.assert_not_called()
+    assert screen._completed_ranking_update is final
+    assert screen._apply_ranking_button.options["text"] == "Show Full Ranking"
+
+    screen._refresh_current_ranking_preview()
+
+    screen.push_live_update.assert_called_once_with(
+        ["full-ranked"],
+        is_partial=False,
+        systems_seen=76032,
+    )
+
+
 def test_live_preview_update_reuses_existing_calendar_grid() -> None:
     module, _ = load_screen_module("scheduleNavigationScreen.py")
 
@@ -1152,8 +1569,8 @@ def test_live_preview_update_reuses_existing_calendar_grid() -> None:
         displayed_count=1,
     )
     screen._reset_calendar_grid.assert_not_called()
-    screen._build_relevant_months_grid.assert_called_once()
-    screen._refresh.assert_called_once()
+    screen._build_relevant_months_grid.assert_not_called()
+    screen._refresh.assert_called_once_with(skip_part4=True)
 
 
 def test_ranking_metric_values_are_rendered_for_current_system() -> None:
@@ -1349,8 +1766,11 @@ def test_details_card_is_single_scrollable_container() -> None:
         _presenter(view),
     )
 
-    assert [
+    details_cards = [
         frame
         for frame in fake_ctk.CTkFrame.created
         if frame.options.get("height") == 430
     ]
+
+    assert details_cards
+    assert details_cards[0].grid_calls[-1]["sticky"] == "nsew"

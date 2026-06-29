@@ -1,0 +1,12 @@
+# Basic Course Example settings
+#
+# Keep threshold constraints disabled for the live demo so normal generation
+# exposes the complete classic schedule universe, around 76,032 schedules.
+mandatory_gap_days = off, 0
+any_course_gap_days = off, 0
+elective_conflicts_per_program = off, 0
+mandatory_span_days = off, 0
+max_exams_per_day = off, 0
+
+ranking: min_mandatory_gap
+ranking: average_all_gap : desc

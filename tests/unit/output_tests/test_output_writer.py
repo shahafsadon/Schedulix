@@ -102,6 +102,23 @@ class OutputWriterTests(unittest.TestCase):
             self.assertTrue(output_path.exists())
             self.assertIn("Semester: SPRI", output_path.read_text(encoding="utf-8"))
 
+    def test_write_with_count_outputs_all_unranked_schedules_without_top_limit(self) -> None:
+        """Normal CLI-style output writes every generated schedule it receives."""
+        schedules = [ExamSystem(period_schedules=[]) for _ in range(60)]
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_path = Path(temp_dir) / "exam_schedules.txt"
+
+            created_path, written_count = OutputWriter().write_with_count(
+                schedules,
+                output_path,
+            )
+
+            text = created_path.read_text(encoding="utf-8")
+            self.assertEqual(written_count, 60)
+            self.assertIn("Schedule 60", text)
+            self.assertNotIn("Schedule 61", text)
+
     # ------------------------------------------------------------------
     # write_ranked_with_count (SCRUM-166)
     # ------------------------------------------------------------------

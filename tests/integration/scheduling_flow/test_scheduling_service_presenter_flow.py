@@ -11,8 +11,9 @@ the two zero-result cases that the message routing must distinguish:
 1. Zero result caused by date/conflict availability alone, with no Part 3
    threshold constraint enabled -> date-focused message (pre-Part-3
    behavior, must be preserved).
-2. Zero result while a Part 3 threshold constraint is enabled ->
-   constraint-focused message.
+2. Zero strict result while a Part 3 threshold constraint is enabled ->
+   normal GUI generation offers a clearly marked compromise schedule when a
+   hard-valid fallback exists.
 """
 import sys
 import tempfile
@@ -120,15 +121,16 @@ class SchedulingServicePresenterFlowTests(unittest.TestCase):
         self.assertIn("excluding", result.message)
         self.assertNotIn("constraint", result.message.lower())
 
-    def test_zero_result_with_constraint_enabled_gives_constraint_focused_message(
+    def test_zero_result_with_constraint_enabled_offers_fallback_schedule(
         self,
     ) -> None:
         """The same two-course setup, but with two usable dates so the base
         rule alone would succeed, and max_exams_per_day = 1 enabled.
 
         With k = 1 and two mandatory exams needing two different days, the
-        constraint forces zero complete systems while any_constraint_enabled
-        is True, so the message must point at constraints.
+        constraint forces zero strict complete systems while any_constraint_enabled
+        is True. The normal GUI generation path should then offer a fallback
+        schedule that still respects hard constraints.
         """
         self.cache.set_courses(
             [
@@ -156,8 +158,12 @@ class SchedulingServicePresenterFlowTests(unittest.TestCase):
         result = presenter.generate()
 
         self.assertTrue(result.success)
-        self.assertEqual(result.schedule_count, 0)
-        self.assertIn("constraint", result.message.lower())
+        self.assertTrue(result.is_fallback)
+        self.assertEqual(result.schedule_count, 1)
+        self.assertIn("Fallback schedule", result.message)
+        self.assertEqual(len(self.cache.get_generated_schedules()), 1)
+        self.assertEqual(len(self.cache.get_ranked_schedules()), 1)
+        self.assertTrue(self.cache.get_ranked_schedules()[0].is_fallback)
 
 
 if __name__ == "__main__":

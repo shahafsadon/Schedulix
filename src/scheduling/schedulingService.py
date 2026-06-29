@@ -70,6 +70,10 @@ class SchedulingOutcome:
     accepted_candidates: int = 0
     pruned_candidates: int = 0
     any_constraint_enabled: bool = False
+    is_fallback: bool = False
+    penalty_score: float | None = None
+    penalty_details: tuple[str, ...] = ()
+    message: str | None = None
 
 
 @dataclass(frozen=True)
@@ -135,7 +139,12 @@ class SchedulingService:
         self._clock = clock
         self._run_counter = 0
 
-    def run(self, cache: CacheManager, rank_results: bool = True) -> SchedulingOutcome:
+    def run(
+        self,
+        cache: CacheManager,
+        rank_results: bool = True,
+        allow_fallback: bool = False,
+    ) -> SchedulingOutcome:
         """Generate all exam systems from cached data and store them back.
 
         This compatibility path still materializes the full list because older
@@ -145,8 +154,9 @@ class SchedulingService:
         Side effects
         ------------
         Writes generated schedules to ``CacheManager`` and, when requested,
-        writes ranked schedules as well.  This is safe for the old path because
-        the method only returns after full generation completes.
+        writes ranked schedules as well.  ``allow_fallback`` lets non-ranking
+        GUI generation show best-effort compromise schedules only when strict
+        generation returns zero systems.
         """
         # Step 1: normalize all cache state into a single prepared input object.
         # This keeps validation, filtering, and settings lookup outside the
@@ -162,7 +172,18 @@ class SchedulingService:
             prepared.exam_periods,
         )
 
-        if rank_results and not schedules and self._injected_generator is None:
+        is_fallback = False
+        penalty_score = None
+        penalty_details: tuple[str, ...] = ()
+        message = None
+
+        should_try_fallback = (
+            (rank_results or allow_fallback)
+            and not schedules
+            and self._injected_generator is None
+        )
+
+        if should_try_fallback:
             fallback = self._fallback_service.generate_best_alternatives(
                 prepared.relevant_courses,
                 prepared.exam_periods,
@@ -176,6 +197,12 @@ class SchedulingService:
                 for ranked_system in ranked_schedules
             ]
             ranking_seconds = 0.0
+            if ranked_schedules:
+                is_fallback = True
+                best_fallback = ranked_schedules[0]
+                penalty_score = best_fallback.penalty_score
+                penalty_details = best_fallback.penalty_details
+                message = self._fallback_message(best_fallback)
         elif rank_results:
             # Ranking is a separate service because "valid" and "best" are two
             # different questions.  The generator answers validity; this
@@ -192,7 +219,7 @@ class SchedulingService:
             ranking_seconds = 0.0
 
         cache.set_generated_schedules(schedules)
-        if rank_results:
+        if rank_results or is_fallback:
             cache.set_ranked_schedules(ranked_schedules)
 
         diagnostics = self._diagnostics(generator)
@@ -206,6 +233,10 @@ class SchedulingService:
             accepted_candidates=diagnostics.accepted_candidates,
             pruned_candidates=diagnostics.pruned_candidates,
             any_constraint_enabled=prepared.any_constraint_enabled,
+            is_fallback=is_fallback,
+            penalty_score=penalty_score,
+            penalty_details=penalty_details,
+            message=message,
         )
 
     def run_progressive(
@@ -252,6 +283,7 @@ class SchedulingService:
             ranking_settings=prepared.ranking_settings,
             preview_limit=options.display_limit,
         )
+        full_ranked_schedules: list[RankedExamSystem] = []
 
         if self._is_cancelled(cancellation_token):
             # Edge case: cancellation can be requested before the worker enters
@@ -309,11 +341,12 @@ class SchedulingService:
                 preview.rerank(latest_settings)
                 ranking_version += 1
 
-            self._rank_batch_into_preview(
+            ranked_batch = self._rank_batch_into_preview(
                 preview=preview,
                 schedule_batch=schedule_batch,
                 ranking_settings=latest_settings,
             )
+            full_ranked_schedules.extend(ranked_batch)
 
             if self._is_cancelled(cancellation_token):
                 # Cancellation after a batch is ranked still returns the latest
@@ -327,6 +360,7 @@ class SchedulingService:
                     run_id=run_id,
                     state=ProgressiveResultState.CANCELLED,
                     preview=preview,
+                    full_ranked_schedules=full_ranked_schedules,
                     generator=generator,
                     relevant_course_count=len(prepared.relevant_courses),
                     ranking_version=ranking_version,
@@ -365,6 +399,7 @@ class SchedulingService:
                 run_id=run_id,
                 state=ProgressiveResultState.CANCELLED,
                 preview=preview,
+                full_ranked_schedules=full_ranked_schedules,
                 generator=generator,
                 relevant_course_count=len(prepared.relevant_courses),
                 ranking_version=ranking_version,
@@ -403,6 +438,7 @@ class SchedulingService:
                     run_id=run_id,
                     state=ProgressiveResultState.COMPLETE,
                     preview=preview,
+                    full_ranked_schedules=fallback.ranked_schedules,
                     generator=generator,
                     relevant_course_count=len(prepared.relevant_courses),
                     ranking_version=ranking_version,
@@ -420,6 +456,7 @@ class SchedulingService:
             run_id=run_id,
             state=ProgressiveResultState.COMPLETE,
             preview=preview,
+            full_ranked_schedules=full_ranked_schedules,
             generator=generator,
             relevant_course_count=len(prepared.relevant_courses),
             ranking_version=ranking_version,
@@ -532,7 +569,7 @@ class SchedulingService:
         preview: RankedResultsBuffer,
         schedule_batch: GeneratedScheduleBatch,
         ranking_settings: RankingSettings,
-    ) -> None:
+    ) -> list[RankedExamSystem]:
         """Rank one small batch and keep only the best visible schedules.
 
         Parameters
@@ -550,7 +587,7 @@ class SchedulingService:
         retained Top-N schedules.  It does not write to cache.
         """
         if schedule_batch.is_empty:
-            return
+            return []
 
         # The ranking service gives every schedule its metrics and a stable id.
         ranking_outcome = self._ranking_service.rank_generated_batch(
@@ -567,6 +604,7 @@ class SchedulingService:
             processed_count=schedule_batch.size,
             ranking_seconds=ranking_outcome.elapsed_seconds,
         )
+        return ranking_outcome.ranked_schedules
 
     def _finish_progressive_run(
         self,
@@ -576,6 +614,7 @@ class SchedulingService:
         run_id: int,
         state: ProgressiveResultState,
         preview: RankedResultsBuffer,
+        full_ranked_schedules: list[RankedExamSystem],
         generator: Any,
         relevant_course_count: int,
         ranking_version: int,
@@ -615,29 +654,44 @@ class SchedulingService:
         # and never reach this helper; the guard below is an extra defensive
         # layer ensuring that a future code path cannot accidentally persist a
         # partial preview to the cache.
-        if state == ProgressiveResultState.COMPLETE and options.cache_final_preview:
-            # Persist only the bounded top-N ranked preview, not the full set.
-            # Storing every generated system would undo the lazy-generation
-            # optimization that this progressive flow exists to protect.
+        if state == ProgressiveResultState.COMPLETE:
+            # Partial snapshots stay bounded to the Top-N preview.  A complete
+            # run, however, should let the user browse the full ranked order, so
+            # finalization reranks every processed wrapper collected during the
+            # background run.
             latest_settings = cache.get_ranking_settings()
             final_outcome = self._ranking_service.rerank(
-                snapshot.ranked_schedules,
+                full_ranked_schedules or snapshot.ranked_schedules,
                 latest_settings,
             )
             final_ranked_schedules = final_outcome.ranked_schedules
 
-            # Save only the same small preview that the GUI shows. This keeps
-            # the next application start fast and avoids large cache files.
-            cache.store_final_schedule_results(
-                [ranked.exam_system for ranked in final_ranked_schedules],
-                final_ranked_schedules,
-                latest_settings,
-            )
+            if options.cache_final_preview:
+                cache.store_final_schedule_results(
+                    [ranked.exam_system for ranked in final_ranked_schedules],
+                    final_ranked_schedules,
+                    latest_settings,
+                )
 
             import dataclasses
             # ``ProgressiveRankedSnapshot`` is frozen, so replacing the ranked
             # list uses dataclasses.replace instead of mutating the object.
-            snapshot = dataclasses.replace(snapshot, ranked_schedules=final_ranked_schedules)
+            final_message = (
+                "Ranking complete. Showing all "
+                f"{len(final_ranked_schedules):,} ranked schedule(s)."
+                if final_ranked_schedules and not is_fallback
+                else snapshot.message
+            )
+            snapshot = dataclasses.replace(
+                snapshot,
+                ranked_schedules=final_ranked_schedules,
+                counters=dataclasses.replace(
+                    snapshot.counters,
+                    displayed_count=len(final_ranked_schedules),
+                    displayed_schedule_count=len(final_ranked_schedules),
+                ),
+                message=final_message,
+            )
 
         self._emit(on_snapshot, snapshot)
         return snapshot
@@ -751,8 +805,9 @@ class SchedulingService:
         preview: RankedResultsBuffer,
         display_limit: int,
     ) -> str:
-        # Completion messages distinguish between "all generated schedules fit
-        # in the display limit" and "we are showing a bounded final Top-N".
+        # The initial completion message is used before finalization replaces
+        # the bounded preview with the full ranked list.  It remains defensive
+        # for callers that inspect the pre-finalized preview state.
         if preview.systems_seen == 0:
             return "No valid exam systems could be generated."
         shown = min(len(preview.ranked_schedules), display_limit)
@@ -762,7 +817,7 @@ class SchedulingService:
                 f"{preview.systems_seen:,} generated schedule(s)."
             )
         return (
-            f"Final Top {shown:,} ranking complete from "
+            f"Temporary Top {shown:,} preview complete from "
             f"{preview.systems_seen:,} generated schedule(s)."
         )
 

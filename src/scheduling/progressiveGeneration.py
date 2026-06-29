@@ -71,8 +71,9 @@ class ProgressiveGenerationOptions:
         Minimum time between emitted partial snapshots.  This protects the GUI
         event queue from excessive updates on fast runs.
     cache_final_preview:
-        Whether a complete progressive run should persist the final bounded
-        preview to ``CacheManager``.
+        Whether a complete progressive run should persist the final ranked
+        result to ``CacheManager``. Partial previews remain bounded to
+        ``display_limit``.
     """
 
     batch_size: int = 100
