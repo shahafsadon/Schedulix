@@ -21,7 +21,13 @@ from gui.scheduleNavigationPresenter import (
 )
 from ranking_settings import RankingCriterion, RankingPreference, RankingSettings
 
-from .gui_test_support import FakeButton, FakeLabel, load_screen_module, widgets_with_text
+from .gui_test_support import (
+    FakeButton,
+    FakeFrame,
+    FakeLabel,
+    load_screen_module,
+    widgets_with_text,
+)
 
 
 def _exam(
@@ -234,9 +240,10 @@ def test_fallback_schedule_is_labeled_with_penalty_details() -> None:
     )
     banner_text = screen._status_seen_label.options["text"]
     assert "Compromise schedule" in banner_text
-    assert "Constraint penalty: 50" in banner_text
+    assert "Penalty: 50" in banner_text
     assert "Violations: 1" in banner_text
-    assert "Mandatory exams are only 1 days apart" in banner_text
+    assert "Soft preferences were relaxed" in banner_text
+    assert "Mandatory exams are only 1 days apart" not in banner_text
     assert "Req 2.1" not in banner_text
     assert screen._status_banner.winfo_ismapped()
 
@@ -1523,6 +1530,8 @@ def test_refresh_after_ranking_complete_switches_to_full_ranked_list() -> None:
         displayed_count=50,
         message="Preview",
     )
+    screen._status_banner = FakeFrame()
+    screen._status_seen_label = FakeLabel(screen._status_banner)
     final = module.ProgressiveRankingUpdate(
         run_id=5,
         ranked_schedules=["full-ranked"],
@@ -1538,6 +1547,15 @@ def test_refresh_after_ranking_complete_switches_to_full_ranked_list() -> None:
     screen.push_live_update.assert_not_called()
     assert screen._completed_ranking_update is final
     assert screen._apply_ranking_button.options["text"] == "Show Full Ranking"
+    assert screen._status_seen_label.options["text"] == (
+        "Ranking complete, Top 50 is shown. "
+        "Full 76,032 ranked schedule(s) are ready."
+    )
+    screen._set_ranking_status.assert_called_once_with(
+        "Ranking complete, Top 50 is shown. "
+        "Full 76,032 ranked schedule(s) are ready.",
+        ok=True,
+    )
 
     screen._refresh_current_ranking_preview()
 

@@ -108,6 +108,7 @@ class _FakeRunner:
         self,
         task,
         on_started=None,
+        on_progress=None,
         on_complete=None,
         on_error=None,
     ) -> bool:
@@ -118,7 +119,10 @@ class _FakeRunner:
         result = (
             self.result
             if self.result is not None
-            else task(SimpleNamespace(is_cancelled=False), lambda _update: None)
+            else task(
+                SimpleNamespace(is_cancelled=False),
+                on_progress or (lambda _update: None),
+            )
         )
         if on_complete is not None:
             on_complete(result)
@@ -184,7 +188,10 @@ class TestDateManagementScreenHelpers(unittest.TestCase):
         screen._scheduling_presenter = type(
             "FakeSchedulingPresenter",
             (),
-            {"generate": lambda self: result},
+            {
+                "generate": lambda self: result,
+                "generate_progressive": lambda self, **_kwargs: result,
+            },
         )()
         screen._runner = _FakeRunner(result)
         screen._on_generation_success = lambda: visited.append("results")
@@ -281,27 +288,30 @@ class TestDateManagementScreenHelpers(unittest.TestCase):
         self.assertEqual(visited, [])
         self.assertEqual(screen._status_label.options["text"], "")
 
-    def test_generation_uses_background_full_generation_path(self) -> None:
-        """The base GUI Generate action must not apply the Top-N preview."""
+    def test_generation_uses_background_progressive_generation_path(self) -> None:
+        """The GUI Generate action must stream progress instead of freezing."""
         visited: list[str] = []
         result = GenerationResult(True, "Generated.", 1, displayed_count=1)
         screen = self._generation_screen(result, visited)
         screen._runner = _FakeRunner(result=None)
         calls: list[str] = []
 
-        class FullGenerationPresenter:
+        class ProgressiveGenerationPresenter:
             def generate(self):
-                calls.append("generate")
-                return result
+                raise AssertionError("GUI Generate should use progressive generation.")
 
             def generate_progressive(self, **kwargs):
-                raise AssertionError("Top-N progressive preview must not be used.")
+                calls.append("generate_progressive")
+                assert kwargs["on_snapshot"] is not None
+                assert kwargs["cancellation_token"] is not None
+                assert kwargs["options"].display_limit == 50
+                return result
 
-        screen._scheduling_presenter = FullGenerationPresenter()
+        screen._scheduling_presenter = ProgressiveGenerationPresenter()
 
         DateManagementScreen._handle_generate(screen)
 
-        self.assertEqual(calls, ["generate"])
+        self.assertEqual(calls, ["generate_progressive"])
 
 
 if __name__ == "__main__":
