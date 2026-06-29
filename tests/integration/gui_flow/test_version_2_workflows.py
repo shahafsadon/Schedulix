@@ -29,10 +29,10 @@ from gui.presenters.uploadedDataPresenter import UploadedDataSnapshot, UploadedD
 
 
 ROOT = Path(__file__).resolve().parents[3]
-EXAMPLES = ROOT / "data" / "examples"
-COURSES_PATH = EXAMPLES / "CourseExample.txt"
-PROGRAMS_PATH = EXAMPLES / "ProgramsExample.txt"
-PERIODS_PATH = EXAMPLES / "DatesExample.txt"
+EXAMPLES = ROOT / "data" / "examples" / "basic_course_example"
+COURSES_PATH = EXAMPLES / "courses.txt"
+PROGRAMS_PATH = EXAMPLES / "programs.txt"
+PERIODS_PATH = EXAMPLES / "dates.txt"
 
 
 class _FakeLabel:
@@ -316,6 +316,8 @@ def test_part3_gui_flow_saves_settings_generates_and_reranks(
     assert ranking_result.success
     assert ranking_result.ranked_count == schedule_count
     assert ranking_result.ranked_schedules is not None
+    assert len(ranking_result.ranked_schedules) == schedule_count
+    assert len(cache.get_ranked_schedules()) == schedule_count
     assert cache.get_generated_schedules() == generated_before_ranking
 
 

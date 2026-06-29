@@ -265,6 +265,8 @@ def test_constructor_builds_three_required_upload_rows_and_preview() -> None:
         "Load all required files to continue."
     )
 
+    assert not widgets_with_text(fake_ctk.CTkLabel, "Version 2.0")
+
 
 def test_constructor_includes_dark_mode_button() -> None:
     module, fake_ctk = load_screen_module("fileUploadScreen.py")
@@ -298,7 +300,7 @@ def test_constructor_includes_dark_mode_button() -> None:
     assert buttons[0].options["text"] == "\u2600"
 
 
-def test_format_snapshot_lists_loaded_rows() -> None:
+def test_format_snapshot_shows_only_concise_overview() -> None:
     from gui.uploadedDataPresenter import CoursePreview, ExamPeriodPreview
 
     module, _ = load_screen_module("fileUploadScreen.py")
@@ -339,7 +341,13 @@ def test_format_snapshot_lists_loaded_rows() -> None:
 
     report = module.FileUploadScreen._format_snapshot(snapshot)
 
-    assert "12345 - Algorithms" in report
-    assert "83101" in report
-    assert "FALL Aleph" in report
-    assert "Excluded dates: 1" in report
+    assert "Overview" in report
+    assert "Courses: 1 loaded, 1 exam course(s)" in report
+    assert "Programs: 1 selected" in report
+    assert "Exam periods: 1 loaded, 1 excluded date(s)" in report
+    assert "Enrollment links: 1" in report
+    assert "Status: Ready for scheduling" in report
+    assert "Evaluation types: Exam: 1" in report
+    assert "12345 - Algorithms" not in report
+    assert "FALL Aleph" not in report
+    assert "Excluded dates: 1" not in report

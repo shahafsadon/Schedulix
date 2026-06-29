@@ -43,6 +43,7 @@ sys.path.insert(0, str(_SRC))
 
 from application.cache_manager import (
     CacheManager,
+    MAX_PERSISTED_GENERATED_SCHEDULES,
     _CacheState,
     _SENTINEL,
     _SENTINEL_V2,
@@ -341,6 +342,23 @@ class TestV3RoundTrip(_CacheManagerTestBase):
         self.assertTrue(gap.enabled)
         self.assertEqual(gap.k, 2)
         self.assertEqual(len(second.get_ranking_settings().priority_list), 1)
+
+    def test_large_generated_schedule_sets_remain_session_only(self) -> None:
+        """Large derived results stay in memory but are not pickled to disk."""
+        first = CacheManager()
+        schedules = [
+            _make_exam_system()
+            for _ in range(MAX_PERSISTED_GENERATED_SCHEDULES + 1)
+        ]
+
+        first.set_generated_schedules(schedules)
+
+        self.assertEqual(
+            len(first.get_generated_schedules()),
+            MAX_PERSISTED_GENERATED_SCHEDULES + 1,
+        )
+        second = CacheManager()
+        self.assertEqual(second.get_generated_schedules(), [])
 
     def test_v3_sentinel_is_written_to_disk(self) -> None:
         """After any write the pickle must carry the v3 sentinel."""

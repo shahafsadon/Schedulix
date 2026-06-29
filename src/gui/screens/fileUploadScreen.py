@@ -86,7 +86,7 @@ class FileUploadScreen(ctk.CTkFrame):
         ghost_text_color = ("#1D4ED8", "#93C5FD")
         ghost_border_color = ("#B8C0CC", "#3F3F46")
 
-        #header frame holds the logo, title, and version badge.
+        #header frame holds the logo and title.
         header = ctk.CTkFrame(self, fg_color="transparent")
         header.grid(row=0, column=0, sticky="ew", padx=24, pady=(12, 10))
         header.grid_columnconfigure(0, weight=1)
@@ -143,26 +143,6 @@ class FileUploadScreen(ctk.CTkFrame):
             text_color=muted_text_color,
             anchor="center",
         ).grid(row=1, column=1, sticky="w")
-
-        #small badge that shows this is Version 2.0.
-        version_badge = ctk.CTkFrame(
-            header,
-            fg_color=("#E8F1FF", "#111D33"),
-            border_width=1,
-            border_color=("#BFDBFE", "#2F4D7C"),
-            corner_radius=18,
-        )
-        version_badge.grid(row=0, column=2, sticky="ne", pady=(2, 0))
-
-        #text inside the version badge.
-        ctk.CTkLabel(
-            version_badge,
-            text="Version 2.0",
-            font=("Segoe UI", 11, "bold"),
-            text_color=ghost_text_color,
-            padx=10,
-            pady=4,
-        ).grid(row=0, column=0)
 
         #subtitle under the main title.
         ctk.CTkLabel(
@@ -374,7 +354,7 @@ class FileUploadScreen(ctk.CTkFrame):
         )
         preview_card.grid(row=2, column=0, sticky="nsew", padx=24, pady=(0, 16))
         preview_card.grid_columnconfigure(0, weight=1)
-        preview_card.grid_rowconfigure(2, weight=1, minsize=260)
+        preview_card.grid_rowconfigure(2, weight=0)
 
         #header row for the preview card.
         header = ctk.CTkFrame(preview_card, fg_color="transparent")
@@ -417,10 +397,10 @@ class FileUploadScreen(ctk.CTkFrame):
         self._build_preview_metric(metrics, 2, "periods", "Periods")
         self._build_preview_metric(metrics, 3, "ready", "Status")
 
-        #textbox shows the detailed preview of all uploaded data.
+        #textbox shows only the concise overview, not the raw uploaded rows.
         self.preview_textbox = ctk.CTkTextbox(
             preview_card,
-            height=300,
+            height=170,
             font=("Segoe UI", 13),
             wrap="word",
             fg_color=("#F8FAFC", "#101826"),
@@ -618,7 +598,7 @@ class FileUploadScreen(ctk.CTkFrame):
                 )
 
     def _refresh_preview(self) -> None:
-        """Reload parsed upload data and redraw the preview text."""
+        """Reload parsed upload data and redraw the concise overview text."""
         snapshot = self.data_presenter.refresh()
         preview = self._format_snapshot(snapshot)
 
@@ -631,7 +611,7 @@ class FileUploadScreen(ctk.CTkFrame):
         self.preview_textbox.configure(state="disabled")
 
     def _refresh_preview_metrics(self, snapshot: UploadedDataSnapshot) -> None:
-        """Refresh the visual summary cards above the raw preview details."""
+        """Refresh the visual summary cards above the overview."""
         #read the summary numbers from the presenter snapshot.
         metadata = snapshot.metadata
 
@@ -668,12 +648,11 @@ class FileUploadScreen(ctk.CTkFrame):
 
     @staticmethod
     def _format_snapshot(snapshot: UploadedDataSnapshot) -> str:
-        """Convert the display snapshot into a readable preview report."""
+        """Convert the display snapshot into a concise overview report."""
         #metadata contains the totals shown at the top of the preview.
         metadata = snapshot.metadata
         readiness = "Ready for scheduling" if metadata.is_complete else "Missing data"
 
-        #start the preview with a short overview section.
         lines: list[str] = [
             "Overview",
             f"Courses: {metadata.course_count} loaded, "
@@ -692,42 +671,5 @@ class FileUploadScreen(ctk.CTkFrame):
                 for name, count in sorted(metadata.evaluation_counts.items())
             )
             lines.append(f"Evaluation types: {evaluation_summary}")
-
-        # add course rows to the preview.
-        lines.extend(["", "Courses"])
-        if not snapshot.courses:
-            lines.append("No courses loaded.")
-        else:
-            for course in snapshot.courses:
-                # join all program numbers for this course.
-                programs = ", ".join(course.program_numbers) or "No programs"
-                lines.append(
-                    f"{course.course_number} - {course.name}\n"
-                    f"  Instructor: {course.instructor}\n"
-                    f"  Evaluation: {course.evaluation_type}\n"
-                    f"  Enrollments: {course.enrollment_count}\n"
-                    f"  Programs: {programs}"
-                )
-
-        # add selected program rows to the preview.
-        lines.extend(["", "Programs"])
-        if not snapshot.programs:
-            lines.append("No programs loaded.")
-        else:
-            for program in snapshot.programs:
-                lines.append(program)
-
-        # add exam period rows to the preview.
-        lines.extend(["", "Exam Periods"])
-        if not snapshot.exam_periods:
-            lines.append("No exam periods loaded.")
-        else:
-            for exam_period in snapshot.exam_periods:
-                lines.append(
-                    f"{exam_period.semester} {exam_period.moed}\n"
-                    f"  Dates: {exam_period.start_date} to {exam_period.end_date}\n"
-                    f"  Duration: {exam_period.day_count} day(s)\n"
-                    f"  Excluded dates: {exam_period.excluded_count}"
-                )
 
         return "\n".join(lines)

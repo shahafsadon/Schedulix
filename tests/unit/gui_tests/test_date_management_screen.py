@@ -88,6 +88,22 @@ class _FakeRunner:
         self.result = result
         self.accepted = accepted
 
+    def run(
+        self,
+        task,
+        on_started=None,
+        on_complete=None,
+        on_error=None,
+    ) -> bool:
+        if not self.accepted:
+            return False
+        if on_started is not None:
+            on_started()
+        result = self.result if self.result is not None else task()
+        if on_complete is not None:
+            on_complete(result)
+        return True
+
     def run_with_progress(
         self,
         task,
@@ -168,7 +184,7 @@ class TestDateManagementScreenHelpers(unittest.TestCase):
         screen._scheduling_presenter = type(
             "FakeSchedulingPresenter",
             (),
-            {"generate_progressive": lambda self, **_kwargs: result},
+            {"generate": lambda self: result},
         )()
         screen._runner = _FakeRunner(result)
         screen._on_generation_success = lambda: visited.append("results")
@@ -183,7 +199,14 @@ class TestDateManagementScreenHelpers(unittest.TestCase):
         screen._generate_button = _FakeWidget()
         screen._day_cells = {"2026-01-29": _FakeWidget()}
         screen._progress_queue = queue.Queue(maxsize=1)
-        screen.after = lambda delay, callback: callback() if delay != 50 else None
+        screen._after_calls = []
+
+        def after(delay, callback):
+            screen._after_calls.append(delay)
+            if delay != 50:
+                callback()
+
+        screen.after = after
         return screen
 
     def test_generation_success_locks_controls_and_navigates_to_results(self) -> None:
@@ -203,6 +226,8 @@ class TestDateManagementScreenHelpers(unittest.TestCase):
         self.assertEqual(screen._generate_button.options["state"], "disabled")
         self.assertEqual(screen._generate_button.options["text"], "Generating...")
         self.assertEqual(screen._day_cells["2026-01-29"].options["state"], "disabled")
+        self.assertIn(0, screen._after_calls)
+        self.assertNotIn(900, screen._after_calls)
 
     def test_generation_failure_restores_controls_and_stays_on_screen(self) -> None:
         visited: list[str] = []
@@ -215,6 +240,30 @@ class TestDateManagementScreenHelpers(unittest.TestCase):
 
         self.assertEqual(visited, [])
         self.assertEqual(screen._status_label.options["text"], "")
+        self.assertEqual(screen._generate_button.options["state"], "normal")
+        self.assertEqual(screen._generate_button.options["text"], "Generate Exam Schedules")
+        self.assertEqual(screen._day_cells["2026-01-29"].options["state"], "normal")
+
+    def test_fallback_generation_asks_before_opening_compromise_schedules(self) -> None:
+        visited: list[str] = []
+        result = GenerationResult(
+            True,
+            "Fallback schedule: showing the best available compromise.",
+            1,
+            is_fallback=True,
+        )
+        screen = self._generation_screen(result, visited)
+        confirmations: list[GenerationResult] = []
+        screen._show_compromise_confirmation = confirmations.append
+
+        DateManagementScreen._handle_generate(screen)
+
+        self.assertEqual(visited, [])
+        self.assertEqual(confirmations, [result])
+        self.assertEqual(
+            screen._status_label.options["text"],
+            "Fallback schedule: showing the best available compromise.",
+        )
         self.assertEqual(screen._generate_button.options["state"], "normal")
         self.assertEqual(screen._generate_button.options["text"], "Generate Exam Schedules")
         self.assertEqual(screen._day_cells["2026-01-29"].options["state"], "normal")
@@ -232,29 +281,27 @@ class TestDateManagementScreenHelpers(unittest.TestCase):
         self.assertEqual(visited, [])
         self.assertEqual(screen._status_label.options["text"], "")
 
-    def test_generation_uses_the_progressive_runner_path(self) -> None:
-        """The GUI must not call the old full-list generation method."""
+    def test_generation_uses_background_full_generation_path(self) -> None:
+        """The base GUI Generate action must not apply the Top-N preview."""
         visited: list[str] = []
         result = GenerationResult(True, "Generated.", 1, displayed_count=1)
         screen = self._generation_screen(result, visited)
         screen._runner = _FakeRunner(result=None)
-        calls: list[dict] = []
+        calls: list[str] = []
 
-        class ProgressivePresenter:
-            def generate(self):  # pragma: no cover - fails if the old path returns
-                raise AssertionError("The full generation path must not be used.")
-
-            def generate_progressive(self, **kwargs):
-                calls.append(kwargs)
+        class FullGenerationPresenter:
+            def generate(self):
+                calls.append("generate")
                 return result
 
-        screen._scheduling_presenter = ProgressivePresenter()
+            def generate_progressive(self, **kwargs):
+                raise AssertionError("Top-N progressive preview must not be used.")
+
+        screen._scheduling_presenter = FullGenerationPresenter()
 
         DateManagementScreen._handle_generate(screen)
 
-        self.assertEqual(len(calls), 1)
-        self.assertTrue(callable(calls[0]["on_snapshot"]))
-        self.assertEqual(calls[0]["options"].display_limit, 50)
+        self.assertEqual(calls, ["generate"])
 
 
 if __name__ == "__main__":

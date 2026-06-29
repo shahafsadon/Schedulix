@@ -103,7 +103,8 @@ DEFAULT_SETTINGS_PATH = (
     _PROJECT_ROOT
     / "data"
     / "examples"
-    / "SettingsExample.txt"
+    / "basic_course_example"
+    / "settings.txt"
 )
 
 

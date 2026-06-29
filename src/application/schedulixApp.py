@@ -64,21 +64,24 @@ DEFAULT_COURSES_PATH = (
     PROJECT_ROOT
     / "data"
     / "examples"
-    / "CourseExample.txt"
+    / "basic_course_example"
+    / "courses.txt"
 )
 
 DEFAULT_EXAM_PERIODS_PATH = (
     PROJECT_ROOT
     / "data"
     / "examples"
-    / "DatesExample.txt"
+    / "basic_course_example"
+    / "dates.txt"
 )
 
 DEFAULT_PROGRAMS_PATH = (
     PROJECT_ROOT
     / "data"
     / "examples"
-    / "ProgramsExample.txt"
+    / "basic_course_example"
+    / "programs.txt"
 )
 
 DEFAULT_APP_OUTPUT_PATH = (

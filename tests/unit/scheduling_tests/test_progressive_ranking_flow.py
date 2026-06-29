@@ -179,6 +179,24 @@ def _keys(snapshot) -> list[int]:
     return [ranked.key for ranked in snapshot.ranked_schedules]
 
 
+def test_normal_generation_stores_all_valid_schedules_without_top_limit(
+    isolated_cache: CacheManager,
+) -> None:
+    generator = _CountingGenerator(_systems(75))
+    service = SchedulingService(
+        schedule_generator=generator,
+        ranking_service=_DeterministicRankingService(),
+    )
+
+    outcome = service.run(isolated_cache, rank_results=False)
+
+    assert outcome.schedule_count == 75
+    assert len(outcome.schedules) == 75
+    assert len(isolated_cache.get_generated_schedules()) == 75
+    assert isolated_cache.get_ranked_schedules() == []
+    assert isolated_cache.get_result_mode() == "unranked_generated"
+
+
 def test_progressive_generation_requires_lazy_iterator(
     isolated_cache: CacheManager,
 ) -> None:
@@ -278,7 +296,7 @@ def test_progressive_empty_results_emit_clean_complete_snapshot_and_cache_empty_
     assert isolated_cache.get_ranked_schedules() == []
 
 
-def test_progressive_large_multi_batch_run_keeps_bounded_ranked_preview(
+def test_progressive_large_multi_batch_run_keeps_bounded_preview_and_full_final(
     isolated_cache: CacheManager,
 ) -> None:
     isolated_cache.set_ranking_settings(
@@ -306,14 +324,15 @@ def test_progressive_large_multi_batch_run_keeps_bounded_ranked_preview(
         if snapshot.state == ProgressiveResultState.PARTIAL
     ]
     assert len(partials) == 7
+    assert all(snapshot.counters.displayed_schedules <= 10 for snapshot in partials)
     assert final.state == ProgressiveResultState.COMPLETE
     assert final.counters.generated_schedules == 105
     assert final.counters.accepted_schedules == 105
     assert final.counters.processed_schedules == 105
-    assert final.counters.displayed_schedules == 10
-    assert _keys(final) == list(range(105, 95, -1))
+    assert final.counters.displayed_schedules == 105
+    assert _keys(final) == list(range(105, 0, -1))
     assert generator.yielded == 105
-    assert len(isolated_cache.get_ranked_schedules()) == 10
+    assert len(isolated_cache.get_ranked_schedules()) == 105
 
 
 def test_progressive_cancellation_after_first_preview_does_not_consume_extra_systems_or_save(

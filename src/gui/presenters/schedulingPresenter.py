@@ -47,6 +47,7 @@ class GenerationResult:
     pruned_candidates: int = 0
     displayed_count: int = 0
     partial: bool = False
+    is_fallback: bool = False
 
 
 class SchedulingPresenter:
@@ -82,9 +83,15 @@ class SchedulingPresenter:
         """
         try:
             # ``rank_results=False`` keeps this legacy path focused on raw
-            # generation. Ranking/progressive preview are handled by the newer
-            # method below.
-            outcome = self._service.run(self._cache, rank_results=False)
+            # generation. ``allow_fallback=True`` is separate from ranking: it
+            # only runs after strict generation returns zero schedules, so the
+            # normal GUI button can show compromise schedules without becoming
+            # a ranking/Top-N flow.
+            outcome = self._service.run(
+                self._cache,
+                rank_results=False,
+                allow_fallback=True,
+            )
         except ValueError as error:
             # Expected user/data errors are returned as friendly messages rather
             # than escaping into the GUI event handler.
@@ -195,6 +202,17 @@ class SchedulingPresenter:
                 pruned_candidates=outcome.pruned_candidates,
             )
 
+        if getattr(outcome, "is_fallback", False):
+            return GenerationResult(
+                success=True,
+                message=outcome.message or "Fallback schedule generated.",
+                schedule_count=outcome.schedule_count,
+                pruned_candidates=outcome.pruned_candidates,
+                displayed_count=len(outcome.ranked_schedules)
+                or outcome.schedule_count,
+                is_fallback=True,
+            )
+
         return GenerationResult(
             success=True,
             message=f"{outcome.schedule_count} exam system(s) generated.",
@@ -264,4 +282,5 @@ class SchedulingPresenter:
             schedule_count=snapshot.counters.systems_seen,
             pruned_candidates=snapshot.counters.pruned_candidates,
             displayed_count=snapshot.counters.displayed_count,
+            is_fallback=getattr(snapshot, "is_fallback", False),
         )
