@@ -146,6 +146,7 @@ class ScheduleNavigationScreen(ctk.CTkFrame):
         self._criterion_selector = None
         self._apply_ranking_button = None
         self._ranking_status_label = None
+        self._show_all_button = None
         self._theme_button: ctk.CTkButton | None = None
         self._snapshot_name_entry = None
         self._snapshot_first_selector = None
@@ -242,6 +243,20 @@ class ScheduleNavigationScreen(ctk.CTkFrame):
 
         self._save_button = None
         next_action_column = 3
+        if getattr(self.presenter, "has_hidden_generated_schedules", lambda: False)():
+            self._show_all_button = ctk.CTkButton(
+                actions,
+                text="Show All Schedules",
+                width=150,
+                fg_color="transparent",
+                border_width=1,
+                border_color=_BORDER,
+                text_color=(_PRIMARY, "#93C5FD"),
+                command=self._handle_show_all_schedules,
+            )
+            self._show_all_button.grid(row=0, column=3, padx=(0, 8))
+            next_action_column = 4
+
         if self._export_presenter is not None:
             self._save_button = ctk.CTkButton(
                 actions,
@@ -251,8 +266,8 @@ class ScheduleNavigationScreen(ctk.CTkFrame):
                 hover_color=_PRIMARY_HOVER,
                 command=self._handle_save,
             )
-            self._save_button.grid(row=0, column=3)
-            next_action_column = 4
+            self._save_button.grid(row=0, column=next_action_column)
+            next_action_column += 1
 
         if self._on_theme_toggle is not None:
             # Button text tells the user which mode the click will open.
@@ -959,6 +974,21 @@ class ScheduleNavigationScreen(ctk.CTkFrame):
         self.presenter.previous()
         self._refresh(
             skip_part4=getattr(self.presenter, "is_partial", False) is True,
+        )
+
+    def _handle_show_all_schedules(self) -> None:
+        """Replace the initial unranked preview with all generated schedules."""
+        if not self.presenter.show_all_generated_schedules():
+            return
+        self._reset_calendar_grid()
+        self._refresh()
+        if self._show_all_button is not None:
+            self._show_all_button.grid_forget()
+        self._status_label.configure(
+            text=(
+                f"Showing all {self.presenter.total():,} generated schedule(s)."
+            ),
+            text_color=_MUTED,
         )
 
     def _handle_save(self) -> None:

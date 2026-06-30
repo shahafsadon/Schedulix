@@ -328,6 +328,31 @@ class ScheduleNavigationPresenter:
         """Number of systems currently held in the presenter."""
         return self._displayed_count
 
+    def has_hidden_generated_schedules(self) -> bool:
+        """Return True when the screen shows a generated preview only."""
+        return (
+            self._result_mode == ResultMode.UNRANKED_GENERATED
+            and bool(self._generated_schedules)
+            and len(self._schedules) < len(self._generated_schedules)
+        )
+
+    def full_generated_count(self) -> int:
+        """Return the full generated schedule universe size when available."""
+        return len(self._generated_schedules) or len(self._schedules)
+
+    def show_all_generated_schedules(self) -> bool:
+        """Replace an unranked preview with the full generated schedule list."""
+        if not self.has_hidden_generated_schedules():
+            return False
+        current_system = self.current_system()
+        self._replace_schedules(self._generated_schedules)
+        self._result_mode = ResultMode.UNRANKED_GENERATED
+        self._is_partial = False
+        self._displayed_count = len(self._schedules)
+        self._systems_seen = len(self._schedules)
+        self._restore_or_reset_index(None, current_system)
+        return True
+
     def update_schedules(
         self,
         new_schedules: list[ExamSystem | RankedExamSystem],

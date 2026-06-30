@@ -288,30 +288,29 @@ class TestDateManagementScreenHelpers(unittest.TestCase):
         self.assertEqual(visited, [])
         self.assertEqual(screen._status_label.options["text"], "")
 
-    def test_generation_uses_background_progressive_generation_path(self) -> None:
-        """The GUI Generate action must stream progress instead of freezing."""
+    def test_generation_uses_background_normal_generation_path(self) -> None:
+        """The GUI Generate action must expose all valid schedules, not Top 50."""
         visited: list[str] = []
         result = GenerationResult(True, "Generated.", 1, displayed_count=1)
         screen = self._generation_screen(result, visited)
         screen._runner = _FakeRunner(result=None)
         calls: list[str] = []
 
-        class ProgressiveGenerationPresenter:
+        class NormalGenerationPresenter:
             def generate(self):
-                raise AssertionError("GUI Generate should use progressive generation.")
-
-            def generate_progressive(self, **kwargs):
-                calls.append("generate_progressive")
-                assert kwargs["on_snapshot"] is not None
-                assert kwargs["cancellation_token"] is not None
-                assert kwargs["options"].display_limit == 50
+                calls.append("generate")
                 return result
 
-        screen._scheduling_presenter = ProgressiveGenerationPresenter()
+            def generate_progressive(self, **kwargs):
+                raise AssertionError(
+                    "Normal GUI Generate should not use progressive Top-N ranking."
+                )
+
+        screen._scheduling_presenter = NormalGenerationPresenter()
 
         DateManagementScreen._handle_generate(screen)
 
-        self.assertEqual(calls, ["generate_progressive"])
+        self.assertEqual(calls, ["generate"])
 
 
 if __name__ == "__main__":

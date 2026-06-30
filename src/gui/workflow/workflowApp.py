@@ -307,7 +307,7 @@ class SchedulixWorkflow(ctk.CTkFrame):
         display_schedules = (
             ranked_schedules
             if has_final_ranked_results
-            else schedules
+            else schedules[:50]
         )
         navigation_presenter = ScheduleNavigationPresenter(
             display_schedules,
