@@ -18,7 +18,6 @@ from application.async_runner import AsyncScheduleRunner
 from gui.presenters.dateManagementPresenter import DateManagementPresenter
 from gui.presenters.schedulingPresenter import GenerationResult, SchedulingPresenter
 from scheduling.progressiveGeneration import (
-    ProgressiveGenerationOptions,
     ProgressiveRankedSnapshot,
     ProgressiveResultState,
 )
@@ -511,27 +510,21 @@ class DateManagementScreen(ctk.CTkFrame):
             on_next()
 
     def _handle_generate(self) -> None:
-        """Generate schedules in the background and stream progress snapshots."""
+        """Generate all valid schedules in the background.
+
+        The Date Management button is the normal/base generation flow. It must
+        expose every valid schedule that satisfies the active threshold
+        constraints. Ranking and Top-N previews are explicit actions on the
+        output screen, so this handler intentionally calls ``generate()`` rather
+        than ``generate_progressive()``.
+        """
         if self._scheduling_presenter is None:
             self._show_message("Schedule generator is not available.", ok=False)
             return
 
-        def task(token, on_progress):
-            """Run progressive generation without touching Tk from the worker."""
-            return self._scheduling_presenter.generate_progressive(
-                on_snapshot=on_progress,
-                cancellation_token=token,
-                options=ProgressiveGenerationOptions(
-                    batch_size=1000,
-                    display_limit=50,
-                    min_update_interval_seconds=0.25,
-                ),
-            )
-
-        accepted = self._runner.run_with_progress(
-            task=task,
-            on_started=self._show_generation_started_progressive,
-            on_progress=self._post_progress,
+        accepted = self._runner.run(
+            task=self._scheduling_presenter.generate,
+            on_started=self._show_generation_started,
             on_complete=lambda result: self.after(
                 0,
                 lambda: self._show_generation_result(result),

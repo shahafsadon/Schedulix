@@ -325,7 +325,8 @@ def test_output_navigation_passes_active_ranking_to_presenter() -> None:
     workflow = _workflow_shell(module)
     ranking_settings = RankingSettings([])
     workflow.cache = MagicMock()
-    workflow.cache.get_generated_schedules.return_value = ["generated"]
+    generated = [f"generated-{index}" for index in range(60)]
+    workflow.cache.get_generated_schedules.return_value = generated
     workflow.cache.get_ranked_schedules.return_value = ["ranked"]
     workflow.cache.get_result_mode.return_value = "final_ranked"
     workflow.cache.get_ranking_settings.return_value = ranking_settings
@@ -378,7 +379,8 @@ def test_output_navigation_uses_generated_schedules_until_ranking_is_final() -> 
     module, _ = _load_workflow_module()
     workflow = _workflow_shell(module)
     workflow.cache = MagicMock()
-    workflow.cache.get_generated_schedules.return_value = ["generated"]
+    generated = [f"generated-{index}" for index in range(60)]
+    workflow.cache.get_generated_schedules.return_value = generated
     workflow.cache.get_ranked_schedules.return_value = ["preview"]
     workflow.cache.get_result_mode.return_value = "unranked_generated"
     workflow.cache.get_ranking_settings.return_value = RankingSettings([])
@@ -412,7 +414,7 @@ def test_output_navigation_uses_generated_schedules_until_ranking_is_final() -> 
     module.SchedulixWorkflow.show_output_navigation(workflow)
 
     presenter = FakeNavigationPresenter.instances[0]
-    assert presenter.schedules == ["generated"]
+    assert presenter.schedules == generated[:50]
     assert presenter.result_mode == "unranked_generated"
 
 

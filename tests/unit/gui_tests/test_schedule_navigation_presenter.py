@@ -144,6 +144,27 @@ class ScheduleNavigationPresenterTests(unittest.TestCase):
         self.assertEqual(presenter.total(), 75)
         self.assertEqual(view.total, 75)
 
+    def test_unranked_preview_can_expand_to_full_generated_list(self) -> None:
+        """The first-50 generated preview can be replaced with all schedules."""
+        systems = [make_system() for _ in range(60)]
+        cache = MagicMock()
+        cache.get_generated_schedules.return_value = systems
+
+        presenter = ScheduleNavigationPresenter(
+            systems[:50],
+            cache_manager=cache,
+            result_mode="unranked_generated",
+        )
+
+        self.assertEqual(presenter.total(), 50)
+        self.assertTrue(presenter.has_hidden_generated_schedules())
+        self.assertEqual(presenter.full_generated_count(), 60)
+
+        self.assertTrue(presenter.show_all_generated_schedules())
+
+        self.assertEqual(presenter.total(), 60)
+        self.assertFalse(presenter.has_hidden_generated_schedules())
+
     def test_next_and_previous_navigation(self) -> None:
         """Next advances and previous goes back within bounds."""
         presenter = ScheduleNavigationPresenter(
