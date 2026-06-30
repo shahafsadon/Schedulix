@@ -1224,9 +1224,45 @@ class ScheduleNavigationScreen(ctk.CTkFrame):
         self._completed_ranking_update = update
         if getattr(self, "_displayed_ranking_update", None) is None:
             self._apply_ranking_update_to_view(update)
-        self._set_ranking_status(update.message, ok=True)
+            status_message = update.message
+        else:
+            # The user is still looking at the first Top 50 preview. Keep that
+            # list stable, but make the status text explain that the full
+            # ranked order is ready in the background.
+            status_message = self._completed_ranking_preview_message(update)
+            self._show_completed_ranking_preview_banner(status_message)
+        self._set_ranking_status(status_message, ok=True)
         if getattr(self, "_apply_ranking_button", None) is not None:
             self._apply_ranking_button.configure(text="Show Full Ranking")
+
+    def _completed_ranking_preview_message(
+        self,
+        update: ProgressiveRankingUpdate,
+    ) -> str:
+        """Explain completed ranking when the screen still shows Top 50."""
+        displayed_update = getattr(self, "_displayed_ranking_update", None)
+        if displayed_update is not None:
+            shown_count = displayed_update.displayed_count or len(
+                displayed_update.ranked_schedules
+            )
+        else:
+            shown_count = min(update.displayed_count, update.total_count)
+        total_count = update.total_count or len(update.ranked_schedules)
+        return (
+            f"Ranking complete, Top {shown_count:,} is shown. "
+            f"Full {total_count:,} ranked schedule(s) are ready."
+        )
+
+    def _show_completed_ranking_preview_banner(self, message: str) -> None:
+        """Update the top banner without replacing the visible Top 50 list."""
+        banner = getattr(self, "_status_banner", None)
+        label = getattr(self, "_status_seen_label", None)
+        if banner is None or label is None:
+            return
+        banner.configure(fg_color=_BANNER_FINAL_BG)
+        label.configure(text=message, text_color=_BANNER_FINAL_TEXT)
+        if not banner.winfo_ismapped():
+            banner.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(6, 2))
 
     def _refresh_current_ranking_preview(self) -> None:
         """Repaint the latest already-emitted Top-50 preview without restarting."""
@@ -1395,7 +1431,7 @@ class ScheduleNavigationScreen(ctk.CTkFrame):
 
     @staticmethod
     def _fallback_banner_text(view) -> str:
-        """Build a compact explanation for best-effort fallback results."""
+        """Build a short explanation for best-effort fallback results."""
         penalty_score = (
             f"{view.penalty_score:g}"
             if view.penalty_score is not None
@@ -1403,27 +1439,10 @@ class ScheduleNavigationScreen(ctk.CTkFrame):
         )
         details = tuple(view.penalty_details or ())
         violation_count = len(details)
-        text = (
-            "Compromise schedule: hard constraints are respected, but one or "
-            "more soft threshold constraints were relaxed.\n"
-            f"Constraint penalty: {penalty_score} | "
-            f"Violations: {violation_count}"
-        )
-        if not details:
-            return text
-
-        visible_details = [
-            ScheduleNavigationScreen._clean_fallback_detail(detail)
-            for detail in details[:3]
-        ]
-        suffix = ""
-        if len(details) > len(visible_details):
-            suffix = f"\n... and {len(details) - len(visible_details)} more."
-
         return (
-            f"{text}\nViolation details:\n"
-            + "\n".join(f"- {detail}" for detail in visible_details)
-            + suffix
+            "Compromise schedule: hard constraints are respected. "
+            f"Penalty: {penalty_score} | Violations: {violation_count}. "
+            "Soft preferences were relaxed."
         )
 
     @staticmethod
